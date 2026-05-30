@@ -31,3 +31,10 @@ CLAUDE.md
 
 # Debug logs
 npm-debug.log*
+
+# from 10x-astro-starter
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.env.production
+.dev.vars
