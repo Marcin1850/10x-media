@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Astro
+.astro/
+
+# Wrangler (Cloudflare)
+.wrangler/
+
+# Claude Code
+.claude/
+CLAUDE.md
+
+# Debug logs
+npm-debug.log*
