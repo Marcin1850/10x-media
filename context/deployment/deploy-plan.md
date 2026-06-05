@@ -113,3 +113,4 @@ Dockerfile, multi-region/HA/DR architecture. workerd runtime risks (YouTube bloc
 
 ## Execution log
 - 2026-06-04 — Plan approved via Plan Mode. Step A1 (Worker rename) and A2 (build) executed by agent. Steps A3+ blocked on manual gates 1–3 (Supabase project, Cloudflare account, `wrangler login`).
+- 2026-06-05 — Manual gates 1–5 completed by user (subdomain: `nightshiftlab`). Step A3 deploy succeeded → live at **https://10x-media.nightshiftlab.workers.dev** (HTTP 200 on `/` and `/auth/signin`; Cloudflare auto-provisioned a `SESSION` KV namespace). Step B1 (CI `deploy` job in `ci.yml`) added by agent. Step A4 (Workers Secrets) is user-run — agent does not handle secret values. Auth is non-functional until A4 is done.
