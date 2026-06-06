@@ -88,7 +88,7 @@ The team picked Cloudflare because the starter defaulted to it. Week one, deploy
 
 | Risk | Source | Likelihood | Impact | Mitigation |
 |---|---|---|---|---|
-| YouTube rate-limits/blocks transcript fetches from Cloudflare datacenter IPs | Unknown unknowns | M | H | Spike the transcript-fetch path on a deployed Worker in week 1 (not just locally). If blocked, route via a third-party transcript API or proxy. Build the FR-005 "no transcription" fallback the PRD already flags. |
+| YouTube rate-limits/blocks transcript fetches from Cloudflare datacenter IPs | Unknown unknowns | M | H | Spike the transcript-fetch path on a deployed Worker (not just locally). If blocked, route via a third-party transcript API or proxy. Build the FR-005 "no transcription" fallback the PRD already flags. **⏳ Probe deferred (status 2026-06-06): blocked on FR-005 — the transcript-fetch path is not implemented yet. The trigger is "when FR-005 lands", not a calendar week; run it on the deployed Worker the moment that feature exists.** |
 | A transcript/LLM dependency uses unsupported `node:` APIs and fails on workerd at runtime | Devil's advocate / Pre-mortem | M | H | Validate the exact libraries on a deployed Worker early. Keep Railway (`@astrojs/node`) as the documented escape hatch — the swap is adapter-level only. |
 | Long-transcript processing blows the free 10ms CPU budget | Devil's advocate | M | M | Move to the $5/mo Workers Paid plan and raise CPU limit (up to 5 min); keep heavy parsing minimal — push token-heavy work to the LLM, not the Worker. |
 | Subrequest / per-host fetch concurrency limits hit under retries | Devil's advocate | L | M | Bound retries; sequence YouTube-fetch → LLM-call rather than fanning out; monitor via `wrangler tail`. |
@@ -107,7 +107,7 @@ Validated against the starter's pinned versions (Astro 6, `@astrojs/cloudflare`,
 3. **Authenticate Wrangler once**: `npx wrangler login` (or set a scoped `CLOUDFLARE_API_TOKEN` env var in CI — Workers scope, this project only).
 4. **Set production secrets** (not `.env`): `npx wrangler secret put SUPABASE_URL` then `npx wrangler secret put SUPABASE_KEY`. Add the AI provider key the same way when the AI SDK lands.
 5. **Build and deploy**: `npm run build` then `npx wrangler deploy`. Verify with `npx wrangler tail` and a live request, then confirm rollback works with `npx wrangler deployments list`.
-6. **Week-1 must-do**: deploy a thin end-to-end slice (sign-in + one real summary) to flush the YouTube-IP and `nodejs_compat` risks while schedule slack still exists.
+6. **End-to-end probe (gated on feature work, not a calendar week)**: the auth slice (sign-in/sign-up) is already deployed and verified. The transcript/summary half — which is what actually flushes the YouTube-IP and `nodejs_compat` risks — depends on FR-005, which is not implemented yet. Run that probe on the deployed Worker **as soon as FR-005 lands**, while schedule slack still exists. (Originally framed as "week 1"; corrected 2026-06-06 — the trigger is the feature existing, not the date.)
 
 ## Out of Scope
 
