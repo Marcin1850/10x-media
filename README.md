@@ -47,6 +47,8 @@ cp .env.example .dev.vars
 npm run dev
 ```
 
+The app is served at **http://localhost:4321**.
+
 ## Available Scripts
 
 - `npm run dev` - Start development server (Cloudflare workerd runtime)
@@ -129,7 +131,19 @@ SUPABASE_KEY=<anon-key>
 
 ### Email confirmation in local development
 
-By default Supabase requires email confirmation before a user can sign in. To skip this during local development:
+By default Supabase requires email confirmation before a user can sign in. You have two equally valid paths locally — pick one:
+
+**Option A — keep confirmation on (mirrors production).** Sign-up sends a real confirmation email whose link returns to the in-app `/auth/callback` route (which exchanges the code for a session). For this to work locally, the local callback URL must be allow-listed:
+
+1. Supabase dashboard → **Authentication → URL Configuration**
+2. Under **Redirect URLs**, add:
+   ```
+   http://localhost:4321/auth/callback
+   ```
+
+Without this entry Supabase ignores the app's `emailRedirectTo` and falls back to the Site URL, so the link won't return to your local app. If you run a local Supabase stack (see below), confirmation emails land in Inbucket at **http://localhost:54324**, not a real inbox.
+
+**Option B — skip confirmation (fastest for iterating).** Disable it entirely:
 
 1. Open the Supabase dashboard for your project
 2. Go to **Authentication → Email → Confirm email**
@@ -144,6 +158,7 @@ Users can then sign in immediately after sign-up without clicking a confirmation
 | `/auth/signin`        | Email/password sign-in form                                             |
 | `/auth/signup`        | Email/password sign-up form                                             |
 | `/auth/confirm-email` | Post-signup "check your inbox" page                                     |
+| `/auth/callback`      | Exchanges the email-confirmation code for a session (Option A above)    |
 | `/dashboard`          | Example protected page (redirects to `/auth/signin` if unauthenticated) |
 
 Route protection is handled in `src/middleware.ts`. Add paths to the `PROTECTED_ROUTES` array there to require authentication.
