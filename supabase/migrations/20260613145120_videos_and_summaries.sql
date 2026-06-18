@@ -15,15 +15,19 @@ create table if not exists public.videos (
 
 alter table public.videos enable row level security;
 
+drop policy if exists "videos_select_authenticated" on public.videos;
 create policy "videos_select_authenticated" on public.videos
   for select to authenticated using (auth.uid() = user_id);
 
+drop policy if exists "videos_insert_authenticated" on public.videos;
 create policy "videos_insert_authenticated" on public.videos
   for insert to authenticated with check (auth.uid() = user_id);
 
+drop policy if exists "videos_update_authenticated" on public.videos;
 create policy "videos_update_authenticated" on public.videos
   for update to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
+drop policy if exists "videos_delete_authenticated" on public.videos;
 create policy "videos_delete_authenticated" on public.videos
   for delete to authenticated using (auth.uid() = user_id);
 
@@ -37,19 +41,23 @@ create table if not exists public.summaries (
   foreign key (video_id, user_id) references public.videos (id, user_id) on delete cascade
 );
 
-create index summaries_user_id_idx on public.summaries (user_id);
-create index summaries_video_id_idx on public.summaries (video_id);
+create index if not exists summaries_user_id_idx on public.summaries (user_id);
+create index if not exists summaries_video_id_idx on public.summaries (video_id);
 
 alter table public.summaries enable row level security;
 
+drop policy if exists "summaries_select_authenticated" on public.summaries;
 create policy "summaries_select_authenticated" on public.summaries
   for select to authenticated using (auth.uid() = user_id);
 
+drop policy if exists "summaries_insert_authenticated" on public.summaries;
 create policy "summaries_insert_authenticated" on public.summaries
   for insert to authenticated with check (auth.uid() = user_id);
 
+drop policy if exists "summaries_update_authenticated" on public.summaries;
 create policy "summaries_update_authenticated" on public.summaries
   for update to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
+drop policy if exists "summaries_delete_authenticated" on public.summaries;
 create policy "summaries_delete_authenticated" on public.summaries
   for delete to authenticated using (auth.uid() = user_id);
