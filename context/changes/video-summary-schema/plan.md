@@ -213,10 +213,10 @@ First migration in the repo — creates `supabase/migrations/`. Applied locally 
 
 #### Automated
 
-- [ ] 2.1 Typecheck passes: `npm run build` / `npx tsc --noEmit`
-- [ ] 2.2 Lint passes: `npm run lint`
+- [x] 2.1 Typecheck passes: `npm run build` / `npx tsc --noEmit`
+- [x] 2.2 Lint passes: `npm run lint`
 
 #### Manual
 
-- [ ] 2.3 `ChannelCharacter` union matches the CHECK values exactly
-- [ ] 2.4 Each interface's fields match the table columns (names + nullability)
+- [x] 2.3 `ChannelCharacter` union matches the CHECK values exactly
+- [x] 2.4 Each interface's fields match the table columns (names + nullability)
