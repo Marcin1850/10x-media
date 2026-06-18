@@ -195,19 +195,19 @@ First migration in the repo — creates `supabase/migrations/`. Applied locally 
 
 #### Automated
 
-- [ ] 1.1 Migration applies cleanly on a fresh local stack: `npx supabase db reset`
-- [ ] 1.2 Tables exist with RLS enabled (`pg_class.relrowsecurity` is `t` for both)
-- [ ] 1.3 Indexes `summaries_user_id_idx` and `summaries_video_id_idx` exist
-- [ ] 1.4 Lint passes: `npm run lint`
-- [ ] 1.5 Build passes: `npm run build`
+- [x] 1.1 Migration applies cleanly on a fresh local stack: `npx supabase db reset`
+- [x] 1.2 Tables exist with RLS enabled (`pg_class.relrowsecurity` is `t` for both)
+- [x] 1.3 Indexes `summaries_user_id_idx` and `summaries_video_id_idx` exist
+- [x] 1.4 Lint passes: `npm run lint`
+- [x] 1.5 Build passes: `npm run build`
 
 #### Manual
 
-- [ ] 1.6 Both tables show RLS enabled with four policies each in Studio
-- [ ] 1.7 User-A rows are invisible to user B (isolation holds)
-- [ ] 1.8 Invalid `character` value rejected by CHECK constraint
-- [ ] 1.9 Summary insert with mismatched `video_id` (user A) + `user_id` (user B) rejected by composite FK
-- [ ] 1.10 Deleting a video cascades to its summaries
+- [x] 1.6 Both tables show RLS enabled with four policies each in Studio
+- [x] 1.7 User-A rows are invisible to user B (isolation holds)
+- [x] 1.8 Invalid `character` value rejected by CHECK constraint
+- [x] 1.9 Summary insert with mismatched `video_id` (user A) + `user_id` (user B) rejected by composite FK
+- [x] 1.10 Deleting a video cascades to its summaries
 
 ### Phase 2: TypeScript entity types
 

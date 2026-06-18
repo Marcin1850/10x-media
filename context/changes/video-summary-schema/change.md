@@ -1,9 +1,9 @@
 ---
 change_id: video-summary-schema
 title: Data schema for videos and summaries + per-user RLS
-status: planned
+status: implementing
 created: 2026-06-13
-updated: 2026-06-13
+updated: 2026-06-18
 archived_at: null
 ---
 
