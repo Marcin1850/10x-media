@@ -15,3 +15,10 @@
 - **Problem**: The Linear board drifts from reality — issues sit in Todo/Backlog while work is actually planned or in progress — so the board can't be trusted to show what's live or done.
 - **Rule**: At each lifecycle step (plan written, phase implemented, change archived), move the Linear issue to the matching status and log a one-paragraph comment summarizing the step before moving on.
 - **Applies to**: new, plan, implement, impl-review, archive
+
+## Sync roadmap.md and Linear on every status transition
+
+- **Context**: Roadmap-tracked work — any change that corresponds to a roadmap item (F-/S-) in `context/foundation/roadmap.md` and is mirrored as a Linear issue.
+- **Problem**: Without it, `roadmap.md` status and Linear issue state drift out of sync with the actual work — items stay `ready`/`Todo` long after work started or finished, and the board becomes unreliable.
+- **Rule**: When starting AND when finishing a change, update both `context/foundation/roadmap.md` (the item's Status) and the matching Linear issue (its state) in the same session — don't defer.
+- **Applies to**: all
