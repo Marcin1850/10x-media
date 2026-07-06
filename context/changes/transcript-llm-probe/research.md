@@ -5,6 +5,9 @@ researched_at: 2026-07-05
 method: web_search_exa
 prd_refs: [FR-005, NFR]
 roadmap_ref: F-02
+last_updated: 2026-07-06
+last_updated_by: Marcin Drobiecki
+last_updated_note: "Added codebase-compatibility verdict for docs/ libraries (F-02)"
 ---
 
 # Research: YouTube transcript → LLM summary on the deployed Worker
@@ -147,3 +150,69 @@ Extra notes for MVP scale:
 - Cloudflare docs — AI Gateway Unified Billing (5% credit fee, BYOK zero-markup), Logging (plan-based storage limit)
 - Google AI / Gemini API docs + Exa (2026-07-05) — current Gemini lineup: `gemini-3.5-flash` GA, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`
 - OpenAI API docs + Exa (2026-07-05) — current lineup: `gpt-5.5` / `gpt-5.5-pro`, `gpt-5.4` / `gpt-5.4-mini` / `gpt-5.4-nano`
+
+## Follow-up Research 2026-07-06 — codebase compatibility of `docs/` libraries
+
+> Task: research the **live codebase** (not the web) and decide whether the libraries captured in `docs/` are compatible with it, as the basis for implementing F-02. Method: direct read of runtime/adapter config, env-secret pattern, and API-route conventions. Git commit `2cb1938`, branch `master`.
+
+### Verdict: ✅ all seven `docs/` libraries are compatible — the runtime is already provisioned for them
+
+The project is **Astro 6 SSR (`output: "server"`) on the Cloudflare Workers (`workerd`) runtime** via `@astrojs/cloudflare` v13.5.0 ([`astro.config.mjs:6,16`](../../../astro.config.mjs)). The two things edge-native SDKs need on workerd are already in place:
+
+- `compatibility_flags: ["nodejs_compat"]` and a recent `compatibility_date: "2026-05-08"` ([`wrangler.jsonc:5-6`](../../../wrangler.jsonc)) — well past the `nodejs_compat` v2 threshold; covers any residual `node:*` shims the SDKs touch.
+- Node **v22.14.0** for dev/build ([`.nvmrc`](../../../.nvmrc)); `wrangler ^4.90.0` for deploy/`tail` ([`package.json:55`](../../../package.json)).
+
+All seven target packages are **net-new** — none of `ai`, `@ai-sdk/*`, `@supadata/js`, `@openrouter/ai-sdk-provider`, `ai-gateway-provider` appear in `package.json` (a clean add, no version conflicts to reconcile).
+
+| `docs/` library | Runtime fit on this codebase | Net-new? | Integration action needed |
+| --- | --- | --- | --- |
+| `@supadata/js` | ✅ REST-over-`fetch` client; no `node:` surface | yes | install; `SUPADATA_API_KEY` secret; **pass key explicitly (see gotcha)** |
+| `ai` (v5) | ✅ edge-native (Web `fetch`+Streams); needs `zod` peer | yes | install `ai zod` |
+| `@ai-sdk/anthropic` | ✅ `fetch`-based; workerd-safe | yes | install; `ANTHROPIC_API_KEY` secret |
+| `@ai-sdk/google` | ✅ `fetch`-based | yes | install only if used as plan-B |
+| `@ai-sdk/openai` | ✅ `fetch`-based | yes | install only if used as plan-B / OpenRouter base |
+| `@openrouter/ai-sdk-provider` | ✅ AI-SDK provider over REST | yes | install only if A/B testing |
+| Cloudflare AI Gateway | ✅ works on free Workers plan | (binding, not npm) | add `"ai": { "binding": "AI" }` to `wrangler.jsonc` + `Env` typing — **defer past the probe** |
+
+Do **not** add the root `@anthropic-ai/sdk` (pulls Node built-ins; bloats/breaks the bundle) — matches the external research; the `@ai-sdk/*` providers are the workerd-safe path.
+
+### The one codebase-specific gotcha: secret access, not `process.env`
+
+Every `docs/` example reads its key from `process.env.*` (e.g. `new Supadata({ apiKey: process.env.SUPADATA_API_KEY })`, and the AI-SDK providers **default** to reading `process.env.ANTHROPIC_API_KEY` when no `apiKey` is passed). **On this codebase that pattern will not find the secret.** The project's hard convention — enforced in `CLAUDE.md` and used everywhere — is that server secrets come from **`astro:env/server`**, declared in the `astro.config.mjs` `env.schema`, never from `import.meta.env`/`process.env`:
+
+- `src/lib/supabase.ts:3` — `import { SUPABASE_URL, SUPABASE_KEY } from "astro:env/server";`
+- `src/lib/config-status.ts:1` — same import; `configStatuses` surfaces "not configured" state in the UI.
+- `astro.config.mjs:17-22` — schema pattern: `envField.string({ context: "server", access: "secret", optional: true })`.
+
+**So the compatibility contract is:** read each key from `astro:env/server` and **pass it explicitly** into the SDK constructor — `createAnthropic({ apiKey })`, `createOpenRouter({ apiKey })`, `new Supadata({ apiKey })` — rather than relying on the SDKs' `process.env` auto-discovery. (Workers secrets are not auto-mirrored onto `process.env` under the Astro adapter.) This is the single change that turns the copy-paste `docs/` snippets into codebase-correct code.
+
+### `zod`: present but only transitively — declare it
+
+`CLAUDE.md` mandates zod input validation on new API routes, and the AI SDK's `generateObject` structured-output path needs it. `zod@4.4.3` is already resolved in `node_modules` (transitive — [`package-lock.json`](../../../package-lock.json)), and **AI SDK v5 supports zod v4**, so it works today. But it is **not** a declared dependency in `package.json` — add it explicitly (`npm install zod`) so the contract doesn't rest on a transitive that could vanish. (Note: the probe itself can use plain `generateText` returning a Polish string; zod is for the endpoint's URL-input validation and any structured output.)
+
+### API-route convention the endpoint must follow
+
+The probe's POST endpoint should mirror the existing auth-endpoint shape ([`src/pages/api/auth/signin.ts`](../../../src/pages/api/auth/signin.ts)) plus the CLAUDE.md rules:
+
+- `export const prerender = false;` (mandatory for SSR endpoints — omission breaks them) and an uppercase `POST` handler typed `APIRoute`.
+- Validate the `{ url }` input with **zod** (signin.ts predates the rule and uses raw `formData()`; new routes must use zod per CLAUDE.md).
+- Business logic goes in a service under `src/lib/services/` — e.g. `src/lib/services/llm.ts` exposing `getSummaryModel()` (isolates the one-line provider swap) and a transcript service; the endpoint stays thin. Shared DTOs in `src/types.ts`.
+
+### Config/secret plumbing checklist (what "make it compatible" concretely means)
+
+1. **`astro.config.mjs`** — add secret fields to `env.schema`: `SUPADATA_API_KEY`, `ANTHROPIC_API_KEY` (+ any plan-B key), same `context: "server", access: "secret"` shape as `SUPABASE_*`. Mark `optional: true` to match the existing graceful-degradation pattern.
+2. **Production secrets** — `wrangler secret put SUPADATA_API_KEY` / `ANTHROPIC_API_KEY` (per `infrastructure.md` the AI key "follows the same path" as the Supabase secrets).
+3. **Local dev** — add the same keys to `.env` and `.dev.vars`, and **update `.env.example`** (currently only `SUPABASE_URL`/`SUPABASE_KEY`, 34 bytes — stale for this change).
+4. **Optional** — extend `configStatuses` in `src/lib/config-status.ts` to report missing transcript/LLM keys, reusing the existing idiom.
+5. **AI Gateway only** — add `"ai": { "binding": "AI" }` to `wrangler.jsonc` and type it on `Env`. Not needed for the probe; defer.
+
+### Compatibility risks / watch items
+
+- **`process.env` reliance in the `docs/` snippets** — the main adaptation (see gotcha). Verify on the *deployed* Worker via `wrangler tail`, not just local dev where `process.env` may behave differently.
+- **CPU limit** — both calls are I/O-bound (external `fetch`), so they don't count against the Workers CPU budget; the only on-Worker CPU is trivial JSON/zod parsing of one summary object. Consistent with the register in `infrastructure.md`; free-plan concern stays largely mitigated. Confirm empirically on the deployed probe.
+- **Model IDs go stale fast** — `docs/README.md` flags this; re-confirm `claude-opus-4-8`/`claude-sonnet-4-6` (and any plan-B IDs) at `/10x-plan` time. Package names, install commands, and the `astro:env/server` contract are stable.
+- **`zod` transitive-only** — declare it (above).
+
+### Bottom line for `/10x-plan`
+
+No blocking incompatibility. The runtime (`workerd` + `nodejs_compat` + recent compat date) already satisfies every `docs/` library; adopting them is `npm install` + the standard `astro:env/server` secret plumbing + one thin zod-validated `prerender = false` POST route delegating to `src/lib/services/`. The **only** codebase-specific correction to the `docs/` copy-paste is: source keys from `astro:env/server` and pass them explicitly to each SDK constructor instead of trusting `process.env` auto-discovery.
