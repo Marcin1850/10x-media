@@ -20,7 +20,7 @@ checkpoint:
     - topic: "target scale"
       decision: "small (single-digit users)"
     - topic: "timeline"
-      decision: "hard deadline 2026-07-05; internal target ~2026-06-21; after-hours; 3 weeks MVP"
+      decision: "hard deadline 2026-07-31; internal target ~2026-06-21; after-hours; 3 weeks MVP"
   frs_drafted: 7
   quality_check_status: accepted
 ---

@@ -84,7 +84,7 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
 - **Unknowns:**
   - Can the YouTube transcript be fetched from Cloudflare datacenter IPs (not just the dev machine)? — Owner: user/team. Block: no (this spike is what resolves it).
   - Will the free Cloudflare plan (~10ms CPU limit) handle transcript parsing, or is a paid plan / Railway escape-hatch required? — Owner: user. Block: no.
-- **Risk:** The riskiest element of the whole roadmap (top risk = external). Sequenced as the first de-risk: with the hard deadline of 2026-07-05 and after-hours work, any blocker on the live Worker must be discovered while schedule slack still exists. `infrastructure.md` names Railway (`@astrojs/node`) as the documented workaround if workerd / IP-blocking fail.
+- **Risk:** The riskiest element of the whole roadmap (top risk = external). Sequenced as the first de-risk: with the hard deadline of 2026-07-31 and after-hours work, any blocker on the live Worker must be discovered while schedule slack still exists. `infrastructure.md` names Railway (`@astrojs/node`) as the documented workaround if workerd / IP-blocking fail.
 - **Status:** in progress (change folder created 2026-07-04; planning next). Linear MAR-6.
 
 ## Slices
@@ -124,7 +124,7 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
 - **Parallel with:** S-02
 - **Blockers:** —
 - **Unknowns:** —
-- **Risk:** Lowest priority (FR-007 = nice-to-have). With the "speed" goal it's the first candidate to defer if the 2026-07-05 deadline presses; kept as a small slice (not in Parked) because it's cheap and closes the CRUD on summaries.
+- **Risk:** Lowest priority (FR-007 = nice-to-have). With the "speed" goal it's the first candidate to defer if the 2026-07-31 deadline presses; kept as a small slice (not in Parked) because it's cheap and closes the CRUD on summaries.
 - **Status:** proposed
 
 ## Backlog Handoff
@@ -151,7 +151,7 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
 - **Automatic channel character selection** — Why parked: PRD §Non-Goals.
 - **Editing channel character definitions** — Why parked: PRD §Non-Goals.
 - **Mobile applications** — Why parked: PRD §Non-Goals (MVP is web only).
-- **S-03: deleting a summary (FR-007)** — Why parked-as-first-to-cut: nice-to-have; with the "speed" goal and the hard 2026-07-05 deadline, it's the first slice to defer if time runs short (remains in `## Slices` as proposed, but is deliberately ranked lowest).
+- **S-03: deleting a summary (FR-007)** — Why parked-as-first-to-cut: nice-to-have; with the "speed" goal and the hard 2026-07-31 deadline, it's the first slice to defer if time runs short (remains in `## Slices` as proposed, but is deliberately ranked lowest).
 
 ## Done
 
