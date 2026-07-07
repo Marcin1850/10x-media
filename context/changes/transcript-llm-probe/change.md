@@ -1,9 +1,9 @@
 ---
 change_id: transcript-llm-probe
 title: Transcript llm probe
-status: preparing
+status: plan_reviewed
 created: 2026-07-04
-updated: 2026-07-06
+updated: 2026-07-07
 archived_at: null
 ---
 
