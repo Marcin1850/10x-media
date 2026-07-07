@@ -312,14 +312,14 @@ Single additive, idempotent migration (`add column if not exists model text`) on
 
 #### Automated
 
-- [x] 1.1 Dependencies install cleanly: `npm install`
-- [x] 1.2 Type checking passes: `npm run lint`
-- [x] 1.3 Build succeeds on the Cloudflare adapter: `npm run build`
+- [x] 1.1 Dependencies install cleanly: `npm install` — cdc3a14
+- [x] 1.2 Type checking passes: `npm run lint` — cdc3a14
+- [x] 1.3 Build succeeds on the Cloudflare adapter: `npm run build` — cdc3a14
 
 #### Manual
 
-- [x] 1.4 `astro:env/server` exposes both new keys locally
-- [x] 1.5 `.env.example` documents the two new keys
+- [x] 1.4 `astro:env/server` exposes both new keys locally — cdc3a14
+- [x] 1.5 `.env.example` documents the two new keys — cdc3a14
 
 ### Phase 2: Schema — add `model` to `summaries`
 
