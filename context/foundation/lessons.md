@@ -22,3 +22,10 @@
 - **Problem**: Without it, `roadmap.md` status and Linear issue state drift out of sync with the actual work — items stay `ready`/`Todo` long after work started or finished, and the board becomes unreliable.
 - **Rule**: When starting AND when finishing a change, update both `context/foundation/roadmap.md` (the item's Status) and the matching Linear issue (its state) in the same session — don't defer.
 - **Applies to**: all
+
+## Multi-phase changes: one Linear comment per phase completion; status stays In Progress until the last phase
+
+- **Context**: A change with a multi-phase plan (`plan.md` split into Phase 1..N) mirrored to a Linear issue — e.g. `transcript-llm-probe` (MAR-6), 4 phases. Each phase is implemented and impl-reviewed on its own.
+- **Problem**: The generic "comment at each lifecycle step" rule got satisfied by a single comment at phase **start** ("Phase 1 … in progress"). Phase 1's **completion** and its impl-review (commits `cdc3a14`, `33857a8`, status `implementing → impl_reviewed`) then landed with no Linear trace — the board froze at "started" while work moved on. Separately, the issue **description** kept a stale `Next: /10x-plan …` pointer long after planning was done.
+- **Rule**: For a multi-phase change, treat **completion of each phase** (not just the overall implement step) as its own lifecycle event: post a Linear comment summarizing what that phase landed + its impl-review verdict, in the same session the phase closes. Keep the issue **In Progress / implementing until the final phase is done** — do NOT flip to Done/Reviewed on an intermediate phase (`change.md` per-phase `impl_reviewed` is fine locally, but the Linear issue state reflects the whole change). Also keep the issue **description** current: update or remove stale `Next:` / `Roadmap status:` pointers when the phase they name is complete.
+- **Applies to**: implement, impl-review
