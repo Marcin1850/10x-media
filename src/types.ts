@@ -16,5 +16,6 @@ export interface Summary {
   video_id: string;
   character: ChannelCharacter;
   content: string;
+  model: string | null;
   created_at: string;
 }

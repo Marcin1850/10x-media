@@ -325,13 +325,13 @@ Single additive, idempotent migration (`add column if not exists model text`) on
 
 #### Automated
 
-- [ ] 2.1 Migration applies cleanly against local Supabase
-- [ ] 2.2 Type checking passes: `npm run lint`
+- [x] 2.1 Migration applies cleanly against local Supabase
+- [x] 2.2 Type checking passes: `npm run lint`
 
 #### Manual
 
-- [ ] 2.3 `summaries` shows the new `model` column in local Studio
-- [ ] 2.4 Re-running the migration is a no-op (idempotent)
+- [x] 2.3 `summaries` shows the new `model` column in local Studio
+- [x] 2.4 Re-running the migration is a no-op (idempotent)
 
 ### Phase 3: Services (transcript, LLM, persistence)
 
