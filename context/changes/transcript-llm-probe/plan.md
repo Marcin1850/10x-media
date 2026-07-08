@@ -337,13 +337,13 @@ Single additive, idempotent migration (`add column if not exists model text`) on
 
 #### Automated
 
-- [ ] 3.1 Type checking passes: `npm run lint`
-- [ ] 3.2 Build succeeds: `npm run build`
+- [x] 3.1 Type checking passes: `npm run lint`
+- [x] 3.2 Build succeeds: `npm run build`
 
 #### Manual
 
-- [ ] 3.3 `summarize()` returns Polish text + non-empty served `model` slug
-- [ ] 3.4 Transcript service returns `{ ok: false, reason: "unavailable" }` (no throw) for a caption-less video
+- [x] 3.3 `summarize()` returns Polish text + non-empty served `model` slug
+- [x] 3.4 Transcript service returns `{ ok: false, reason: "unavailable" }` (no throw) for a caption-less video
 
 ### Phase 4: API route + deploy & verify on the Worker
 
