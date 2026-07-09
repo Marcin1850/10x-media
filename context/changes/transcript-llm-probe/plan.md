@@ -23,7 +23,7 @@ The probe also produces the **reusable seam** `S-01` keeps: a transcript service
 Hitting `POST https://10x-media.nightshiftlab.workers.dev/api/summaries/probe` with a valid session cookie and body `{ "url": "<youtube-url>", "character": "informational" | "educational" }` returns `200` with a Polish summary, and:
 
 - A `videos` row exists for `(user_id, youtube_id)` (created once, reused on repeat).
-- A **new** `summaries` row is appended on every successful call — carrying `content`, `character`, and the **actual served model slug** (from the `generateText` result's `response.modelId`) in a new `model` column. Re-running the same video appends another row (all summaries retained for later manual comparison).
+- A **new** `summaries` row is appended on every successful call — carrying `content`, `character`, and the **actual served model slug** (from the `generateText` result's `finalStep.response.modelId`) in a new `model` column. Re-running the same video appends another row (all summaries retained for later manual comparison).
 - `wrangler tail` shows the transcript API and OpenRouter both reachable from Cloudflare egress, the call succeeding, with no bundle / `nodejs_compat` errors, acceptable latency, and no CPU-limit failures on the free plan.
 - The residual "transcript truly unavailable" case (Supadata `206`) returns a clear, non-500 error and writes no rows.
 
@@ -34,6 +34,9 @@ Hitting `POST https://10x-media.nightshiftlab.workers.dev/api/summaries/probe` w
 - **Do NOT import root `@anthropic-ai/sdk`** — pulls Node built-ins, breaks the Worker bundle. Not needed anyway: OpenRouter is reached via `@openrouter/ai-sdk-provider`. (`research.md` → Problem 2)
 - **OpenRouter model IDs are slugs** (`anthropic/claude-sonnet-5`), not native Claude IDs; the `generateText` result's `response.modelId` returns the served slug. (`docs/openrouter.md`)
 - **Both network calls are I/O-bound** → they don't count against the Workers CPU budget; the free-plan 10ms concern is largely mitigated. Confirm empirically. (`research.md` → CPU)
+- **`supadata.transcript({ mode: "auto" })` genuinely returns an async job, not just a theoretical SDK type.** Videos longer than 20 minutes — and any AI-generation call that would otherwise take longer than ~60s — always come back as `{ jobId }` (HTTP 202) rather than an inline transcript. Supadata publishes no completion-time SLA for the job ("AI transcription time is correlated with video duration"); their own guidance is to poll `getJobStatus` every 1s, and status checks are free (no credits charged). (Phase 3 impl review `F1`; Supadata docs)
+- **Cloudflare Workers HTTP-triggered requests have no hard wall-clock duration limit.** As long as the client stays connected, the Worker can keep making subrequests indefinitely. The actual cap on a polling loop is the **free-plan subrequest budget (50/invocation)**, not elapsed time — size poll attempts against that budget, not against a timeout. (Phase 3 impl review `F1`; Cloudflare docs)
+- **AI SDK v7 deprecates `GenerateTextResult.response`** in favor of `finalStep.response` — the served model slug is `result.finalStep.response.modelId`, not `result.response.modelId` (the latter still works but is marked `@deprecated` in the shipped types). (Phase 3 impl review `F4`)
 
 ## What We're NOT Doing
 
@@ -59,7 +62,8 @@ Build bottom-up so each layer is independently verifiable, then deploy and obser
 - **Secret access is the one universal correction.** Every `docs/` example uses `process.env.*`; on this codebase that finds nothing at runtime under the Cloudflare adapter. Import each key from `astro:env/server` and pass it explicitly into `new Supadata({ apiKey })` / `createOpenRouter({ apiKey })`. Verify on the **deployed** Worker (`wrangler tail`), not only local dev where `process.env` may behave differently.
 - **Auth for an API route is a JSON 401, not a redirect.** `PROTECTED_ROUTES` in middleware redirects browsers to `/auth/signin` — correct for pages, wrong for a POST API. The endpoint must itself check `context.locals.user` and return `401` JSON. Do **not** rely solely on adding the path to `PROTECTED_ROUTES` (that yields a 302 to an HTML page for an API caller). Optionally still list it there as defense-in-depth, but the in-handler guard is authoritative.
 - **Persistence is append-only for summaries, get-or-create for videos.** Insert the `videos` row with conflict handling on `(user_id, youtube_id)` to reuse an existing one; always `INSERT` the `summaries` row. Never upsert/replace a summary — retaining every generation is an explicit requirement (manual quality comparison).
-- **Store the served model, not the requested one.** Persist `response.modelId` from the `generateText` result (the slug that actually served the call), so later comparison reflects reality even if `openrouter/auto`-style routing or fallback ever changes what ran.
+- **Store the served model, not the requested one.** Persist `finalStep.response.modelId` from the `generateText` result (the slug that actually served the call — `result.response.modelId` is the same value but deprecated in AI SDK v7), so later comparison reflects reality even if `openrouter/auto`-style routing or fallback ever changes what ran.
+- **Async transcript jobs need bounded, backing-off polling, not a flat retry or a hard timeout.** `supadata.transcript()` can return `{ jobId }` instead of a transcript inline; treating that shape as `{ ok: false, reason: "unavailable" }` (the naive read of the SDK's return type) silently drops the exact case the Whisper fallback exists for — see Phase 3 impl review `F1`. Poll `supadata.transcript.getJobStatus(jobId)` with exponential backoff (1s initial, ×2 factor, capped at 30s, 12 attempts ⇒ ~4 minutes of coverage at only 12 subrequests) — few subrequests, long real-time coverage — since Supadata publishes no completion-time SLA and summarization isn't a real-time interaction.
 
 ## Phase 1: Config, dependencies & secret plumbing
 
@@ -174,6 +178,10 @@ Build the reusable, workerd-safe seam the endpoint (and later `S-01`) delegate t
 
 **Contract**: Export an async function taking `{ url, lang?: "pl" }` and the API key, returning a discriminated result — e.g. `{ ok: true; content: string; lang: string }` or `{ ok: false; reason: "unavailable" }`. Internally: `new Supadata({ apiKey })` then `supadata.transcript({ url, lang: "pl", text: true, mode: "auto" })`; map Supadata's `206`/unavailable response to `{ ok: false }`. **Key is passed in explicitly** (from `astro:env/server` at the call site), never read from `process.env`.
 
+**Revised (Phase 3 impl review `F1`)**: `supadata.transcript()` can return `{ jobId }` instead of a transcript inline (async processing — always the case for videos >20 min). When it does, poll `supadata.transcript.getJobStatus(jobId)` with exponential backoff — `1000ms` initial interval, `×2` factor, capped at `30000ms`, `12` max attempts (sequence: 1s/2s/4s/8s/16s/30s×7, ~4 minutes total coverage using 12 subrequests) — until the job's `status` is `"completed"` (map its `result.content` to `{ ok: true }`) or `"failed"`/attempts exhausted (map to `{ ok: false, reason: "unavailable" }`). Backoff, not a flat interval or hard timeout: Cloudflare Workers HTTP requests have no wall-clock duration limit, so the loop is bounded by attempt count (subrequest budget) rather than elapsed time; movie-length videos with very long Whisper jobs remain a known residual risk since Supadata publishes no completion-time SLA to size against — validate empirically in Phase 4's live `wrangler tail` run against real long-form content.
+
+**Extended (post-review addendum)**: the `{ ok: true }` result also carries `resolvedVia: "inline" | "job"` — which branch actually produced the transcript. This names the **observed fetch mechanism only**; it is not a claim about whether Supadata served native YouTube captions or a Whisper-generated transcript. Supadata's response schema (`Transcript`/`JobResult` in its OpenAPI spec) exposes no such origin field, so `"native"`/`"generated"` would be an unverifiable inference — a fast Whisper job resolving within the sync window before ever needing a `jobId` would be indistinguishable from a native hit. `resolvedVia` is threaded through to persistence (see #3 below) to support later summary-quality comparison, with this caveat intact.
+
 #### 2. LLM service + model selection
 
 **File**: `src/lib/services/llm.ts`
@@ -182,7 +190,7 @@ Build the reusable, workerd-safe seam the endpoint (and later `S-01`) delegate t
 
 **Contract**:
 - `getSummaryModel(apiKey)` → `createOpenRouter({ apiKey })("anthropic/claude-sonnet-5")` (slug, not native ID; confirm the exact slug on OpenRouter's models page at code time).
-- `summarize({ transcript, character }, apiKey)` → calls `generateText({ model: getSummaryModel(apiKey), system, prompt })` and returns `{ text, model }` where `model` is `response.modelId` (the **served** slug). System/prompt are in **Polish**, tailored to `informational` vs `educational` (FR-004/FR-005). No `thinking`/reasoning params; no streaming.
+- `summarize({ transcript, character }, apiKey)` → calls `generateText({ model: getSummaryModel(apiKey), system, prompt })` and returns `{ text, model }` where `model` is `finalStep.response.modelId` (the **served** slug; `result.response.modelId` returns the same value but is deprecated in AI SDK v7 — Phase 3 impl review `F4`). System/prompt are in **Polish**, tailored to `informational` vs `educational` (FR-004/FR-005). No `thinking`/reasoning params; no streaming.
 
 #### 3. Summary persistence service
 
@@ -191,6 +199,8 @@ Build the reusable, workerd-safe seam the endpoint (and later `S-01`) delegate t
 **Intent**: Get-or-create the `videos` row, then **append** a `summaries` row carrying the served model. Never replace an existing summary.
 
 **Contract**: A function taking the authenticated Supabase client, `user_id`, extracted `youtube_id`, `url`, `character`, `content`, and `model`. Upsert `videos` on the `(user_id, youtube_id)` unique constraint (reuse if present, returning its `id`); then `INSERT` into `summaries` with `{ user_id, video_id, character, content, model }`. Relies on the authenticated client so RLS `auth.uid() = user_id` passes. Extract `youtube_id` from the URL (small helper; reject non-YouTube URLs upstream in the endpoint's zod validation).
+
+**Extended (post-review addendum)**: also accepts `resolvedVia: "inline" | "job" | null` and inserts it into `summaries.resolved_via` (new additive column — see Migration Notes). Recorded per summary generation, not per video, since transcripts are re-fetched fresh on every call rather than cached.
 
 ### Success Criteria:
 
@@ -291,9 +301,13 @@ Wire the thin endpoint over the services, push secrets to the live Worker, deplo
 
 Both external calls are I/O-bound, so on-Worker CPU is limited to JSON/zod parsing — expected to stay within the free-plan budget. The live `wrangler tail` run is what confirms this empirically (an explicit F-02 unknown). If it fails, `infrastructure.md` documents the Railway (`@astrojs/node`) escape hatch.
 
+The transcript service's async-job polling path (`mode: "auto"` jobs that don't resolve inline) is bounded by **subrequest count, not CPU time or wall-clock duration** — Workers HTTP requests have no hard duration limit, but the free plan caps at 50 subrequests/invocation. The exponential-backoff poll (12 attempts) uses at most 12 of those, leaving headroom for the request's other calls (auth, initial transcript call, LLM call, 2 DB writes) plus anything added later.
+
 ## Migration Notes
 
 Single additive, idempotent migration (`add column if not exists model text`) on `summaries`. No backfill required (existing rows get `NULL` model). No RLS change. Reversible by dropping the column if ever needed.
+
+**Second additive migration (post-review addendum)**: `supabase/migrations/20260709120000_add_resolved_via_to_summaries.sql` adds `resolved_via text check (resolved_via in ('inline', 'job'))` to `summaries`, same idempotent `if not exists` pattern, no RLS change, no backfill (existing rows get `NULL`). Added to support later summary-quality comparison — see Phase 3 `#3` for the naming rationale.
 
 ## References
 

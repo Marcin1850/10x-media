@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { ChannelCharacter } from "@/types";
+import type { ChannelCharacter, TranscriptResolvedVia } from "@/types";
 
 interface VideoRow {
   id: string;
@@ -24,6 +24,7 @@ interface SummaryRow {
   character: ChannelCharacter;
   content: string;
   model: string | null;
+  resolved_via: TranscriptResolvedVia | null;
   created_at: string;
 }
 
@@ -33,6 +34,7 @@ interface SummaryInsert {
   character: ChannelCharacter;
   content: string;
   model: string | null;
+  resolved_via: TranscriptResolvedVia | null;
 }
 
 /** Minimal local schema shape for the two tables this service touches — this codebase has no generated Database types yet. */
@@ -91,6 +93,7 @@ export interface AppendSummaryParams {
   character: ChannelCharacter;
   content: string;
   model: string | null;
+  resolvedVia: TranscriptResolvedVia | null;
 }
 
 export interface AppendSummaryResult {
@@ -101,7 +104,7 @@ export interface AppendSummaryResult {
 /** Gets-or-creates the `videos` row for (user_id, youtube_id), then appends a new `summaries` row. Never replaces an existing summary. */
 export async function upsertVideoAndAppendSummary(
   supabase: AppSupabaseClient,
-  { userId, url, youtubeId, character, content, model }: AppendSummaryParams,
+  { userId, url, youtubeId, character, content, model, resolvedVia }: AppendSummaryParams,
 ): Promise<AppendSummaryResult> {
   const { data: video, error: videoError } = await supabase
     .from("videos")
@@ -118,7 +121,7 @@ export async function upsertVideoAndAppendSummary(
 
   const { data: summary, error: summaryError } = await supabase
     .from("summaries")
-    .insert({ user_id: userId, video_id: video.id, character, content, model })
+    .insert({ user_id: userId, video_id: video.id, character, content, model, resolved_via: resolvedVia })
     .select("id")
     .single();
 
