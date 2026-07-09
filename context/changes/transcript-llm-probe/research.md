@@ -216,3 +216,16 @@ The probe's POST endpoint should mirror the existing auth-endpoint shape ([`src/
 ### Bottom line for `/10x-plan`
 
 No blocking incompatibility. The runtime (`workerd` + `nodejs_compat` + recent compat date) already satisfies every `docs/` library; adopting them is `npm install` + the standard `astro:env/server` secret plumbing + one thin zod-validated `prerender = false` POST route delegating to `src/lib/services/`. The **only** codebase-specific correction to the `docs/` copy-paste is: source keys from `astro:env/server` and pass them explicitly to each SDK constructor instead of trusting `process.env` auto-discovery.
+
+## F-02 Live-Worker Verdict (2026-07-09)
+
+Probe exercised end-to-end against the deployed Worker `https://10x-media.nightshiftlab.workers.dev/api/summaries/probe` under `wrangler tail`. All calls logged **Ok** (no `nodejs_compat`/bundle exceptions):
+
+- **CPU / free-plan sufficiency:** ✅ **Free Cloudflare plan is sufficient — the Railway (`@astrojs/node`) escape hatch is NOT needed.** Both external calls (Supadata transcript, OpenRouter LLM) are I/O-bound and did not trip the free-plan CPU limit. This resolves the top F-02 unknown.
+- **Egress:** ✅ Supadata and OpenRouter both reachable from Cloudflare datacenter egress (the managed-transcript-API mitigation for YouTube CF-IP blocking holds in production).
+- **Bundle:** ✅ No `nodejs_compat` / missing-Node-builtin errors on the deployed bundle. `@supadata/js`, `ai` v7, and `@openrouter/ai-sdk-provider` all run on `workerd`.
+- **Auth / validation:** ✅ Unauthenticated POST → `401` JSON (not a redirect); invalid body → `400`; happy path → `200` with a Polish summary.
+- **Persistence:** ✅ `videos` get-or-created once and reused; each successful call appends a new `summaries` row carrying the served `model` slug + `resolved_via`.
+- **Secret plumbing:** ✅ `SUPADATA_API_KEY` / `OPENROUTER_API_KEY` already present as Workers Secrets; keys read from `astro:env/server` and passed explicitly to each SDK constructor (the one codebase-specific correction) work on the deployed Worker.
+
+**Follow-up for S-01 (not a probe blocker):** the LLM system/user prompts in `src/lib/services/llm.ts` are intentionally brief for the probe and need real prompt-engineering work (per-character tailoring, transcript framing) when the north-star slice builds the real summarization UX.

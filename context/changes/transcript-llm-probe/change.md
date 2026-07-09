@@ -1,9 +1,9 @@
 ---
 change_id: transcript-llm-probe
 title: Transcript llm probe
-status: impl_reviewed
+status: implemented
 created: 2026-07-04
-updated: 2026-07-08
+updated: 2026-07-09
 archived_at: null
 ---
 
@@ -17,3 +17,4 @@ archived_at: null
   - Both calls are I/O-bound → CPU-limit + `nodejs_compat` risks largely mitigated; Railway escape hatch likely unnecessary.
   - Probe must run on the **deployed** Worker (`10x-media.nightshiftlab.workers.dev`), watched via `wrangler tail`.
 - **2026-07-06 — Codebase-compatibility verdict added to [`research.md`](./research.md)** (Follow-up section). Verdict: ✅ all 7 `docs/` libraries compatible; runtime already has `nodejs_compat` + recent `compatibility_date`. One codebase-specific correction to the `docs/` snippets: read keys from `astro:env/server` and pass them **explicitly** to each SDK constructor (Workers secrets are not on `process.env`). Also: declare `zod` as a direct dep (currently transitive), update stale `.env.example`, AI-Gateway `ai` binding deferred past the probe. Status new→preparing.
+- **2026-07-09 — Phase 4 live-Worker verdict recorded in [`research.md`](./research.md)** (F-02 deliverable). Probe deployed and exercised end-to-end against `10x-media.nightshiftlab.workers.dev` under `wrangler tail`; all calls **Ok**. ✅ **Free Cloudflare plan sufficient — Railway escape hatch not needed.** Supadata + OpenRouter reachable from CF egress, no `nodejs_compat`/bundle errors, no CPU-limit failures; `401`/`400`/`422`/`200` paths all behave. Persistence appends per call, `videos` reused. F-02 de-risk complete. Follow-up (S-01, not a blocker): LLM prompts in `llm.ts` are deliberately brief and need real prompt-engineering work.

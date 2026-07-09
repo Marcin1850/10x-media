@@ -363,14 +363,14 @@ Single additive, idempotent migration (`add column if not exists model text`) on
 
 #### Automated
 
-- [ ] 4.1 Type checking passes: `npm run lint`
-- [ ] 4.2 Build succeeds on the Cloudflare adapter: `npm run build`
-- [ ] 4.3 Endpoint file exists with `export const prerender = false;` and a `POST` handler
+- [x] 4.1 Type checking passes: `npm run lint`
+- [x] 4.2 Build succeeds on the Cloudflare adapter: `npm run build`
+- [x] 4.3 Endpoint file exists with `export const prerender = false;` and a `POST` handler
 
 #### Manual
 
-- [ ] 4.4 Authenticated `POST` to the live Worker returns `200` + Polish summary
-- [ ] 4.5 `wrangler tail`: Supadata + OpenRouter reachable, no bundle/`nodejs_compat` errors, latency acceptable, no free-plan CPU failure
-- [ ] 4.6 `videos` created-once/reused; every call appends a `summaries` row with the served `model` slug
-- [ ] 4.7 Unauthenticated → `401` JSON; invalid body → `400`; transcript-less video → clear non-500 error, no rows
-- [ ] 4.8 Verdict recorded: free plan sufficient (or Railway escape hatch needed)
+- [x] 4.4 Authenticated `POST` to the live Worker returns `200` + Polish summary
+- [x] 4.5 `wrangler tail`: Supadata + OpenRouter reachable, no bundle/`nodejs_compat` errors, latency acceptable, no free-plan CPU failure
+- [x] 4.6 `videos` created-once/reused; every call appends a `summaries` row with the served `model` slug
+- [x] 4.7 Unauthenticated → `401` JSON; invalid body → `400`; transcript-less video → clear non-500 error, no rows
+- [x] 4.8 Verdict recorded: free plan sufficient (or Railway escape hatch needed)
