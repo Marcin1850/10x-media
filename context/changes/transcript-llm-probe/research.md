@@ -229,3 +229,16 @@ Probe exercised end-to-end against the deployed Worker `https://10x-media.nights
 - **Secret plumbing:** ✅ `SUPADATA_API_KEY` / `OPENROUTER_API_KEY` already present as Workers Secrets; keys read from `astro:env/server` and passed explicitly to each SDK constructor (the one codebase-specific correction) work on the deployed Worker.
 
 **Follow-up for S-01 (not a probe blocker):** the LLM system/user prompts in `src/lib/services/llm.ts` are intentionally brief for the probe and need real prompt-engineering work (per-character tailoring, transcript framing) when the north-star slice builds the real summarization UX.
+
+### Long-form / async-job validation (2026-07-09, impl-review Phase 4)
+
+The initial 2026-07-09 verdict covered only a short inline happy path. A follow-up live run under `wrangler tail` exercised **both** transcript branches on the deployed Worker with two long videos:
+
+- **Inline branch — long-form spoken** (`youtube.com/watch?v=1zKTCcdVcGQ`, ~1 h Polish commentary, `informational`): `200` in **33 s** with a high-quality structured Polish summary. Persisted row carries `resolved_via = 'inline'` and served model `anthropic/claude-sonnet-5-20260630`.
+  - **Plan-assumption correction:** the plan (Key Discoveries + Phase 3 `#1`) assumed videos >20 min "always come back as `{ jobId }` (HTTP 202)." Not observed — Supadata served this ~1 h video's transcript **inline**. The 20-min → job threshold is not a hard rule; inline can cover long videos too.
+  - **Served-vs-requested model validated:** requested slug was `anthropic/claude-sonnet-5`; the **served** slug persisted was the dated pin `anthropic/claude-sonnet-5-20260630`. Confirms the plan's "store `finalStep.response.modelId`, not the requested slug" decision — the two genuinely differ.
+- **Async-job branch — no transcribable speech** (`youtube.com/watch?v=1ZYbU82GVz4`, instrumental relaxation music, `informational`): Supadata returned a `{ jobId }`; `pollTranscriptJob` ran to its **full 12-attempt ceiling** (~**254 s**, matching 1+2+4+8+16+30×7 + round-trips) without the job ever completing, then returned `422` "Transcript unavailable." **No Worker exception, no CPU-limit failure, no subrequest-budget kill** (all four requests logged `Ok` in `wrangler tail`), and **no rows written** (row absent from `summaries` — satisfies the "transcript-less → non-500, no rows" requirement 4.7).
+
+**Net:** the riskiest transcript path (async-job poll to exhaustion) is now empirically proven on the live free-plan Worker, and the inline path handles long spoken content in ~30 s. F-02's long-form unknown is closed. **Residual (unchanged, now characterized):** the ~4-min / 12-attempt poll ceiling means a *legitimately* long Whisper job that needs >4 min would also hit the ceiling and surface as `422` — acceptable for the probe, revisit `JOB_POLL_MAX_ATTEMPTS` if S-01 sees real long transcription jobs.
+
+**Auth/validation reconfirmed:** unauthenticated `POST` → `401` JSON; malformed body → `400` JSON (`z.prettifyError` message).

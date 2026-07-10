@@ -35,6 +35,7 @@ Hitting `POST https://10x-media.nightshiftlab.workers.dev/api/summaries/probe` w
 - **OpenRouter model IDs are slugs** (`anthropic/claude-sonnet-5`), not native Claude IDs; the `generateText` result's `response.modelId` returns the served slug. (`docs/openrouter.md`)
 - **Both network calls are I/O-bound** → they don't count against the Workers CPU budget; the free-plan 10ms concern is largely mitigated. Confirm empirically. (`research.md` → CPU)
 - **`supadata.transcript({ mode: "auto" })` genuinely returns an async job, not just a theoretical SDK type.** Videos longer than 20 minutes — and any AI-generation call that would otherwise take longer than ~60s — always come back as `{ jobId }` (HTTP 202) rather than an inline transcript. Supadata publishes no completion-time SLA for the job ("AI transcription time is correlated with video duration"); their own guidance is to poll `getJobStatus` every 1s, and status checks are free (no credits charged). (Phase 3 impl review `F1`; Supadata docs)
+  - **Corrected empirically (Phase 4 live run, impl-review):** ">20 min ⇒ always `{ jobId }`" is **not** a hard rule. A ~1 h spoken video (`youtube.com/watch?v=1zKTCcdVcGQ`) resolved **inline** (`resolved_via='inline'`, `200` in 33 s) — Supadata served its transcript synchronously. Treat >20 min as *may* return a job, not *always*. The async-job path was still exercised: a no-speech music video (`…?v=1ZYbU82GVz4`) did return a `{ jobId }` and polled to full 12-attempt exhaustion (~254 s) → `422`, no rows. See `research.md` → "Long-form / async-job validation".
 - **Cloudflare Workers HTTP-triggered requests have no hard wall-clock duration limit.** As long as the client stays connected, the Worker can keep making subrequests indefinitely. The actual cap on a polling loop is the **free-plan subrequest budget (50/invocation)**, not elapsed time — size poll attempts against that budget, not against a timeout. (Phase 3 impl review `F1`; Cloudflare docs)
 - **AI SDK v7 deprecates `GenerateTextResult.response`** in favor of `finalStep.response` — the served model slug is `result.finalStep.response.modelId`, not `result.response.modelId` (the latter still works but is marked `@deprecated` in the shipped types). (Phase 3 impl review `F4`)
 
@@ -178,7 +179,7 @@ Build the reusable, workerd-safe seam the endpoint (and later `S-01`) delegate t
 
 **Contract**: Export an async function taking `{ url, lang?: "pl" }` and the API key, returning a discriminated result — e.g. `{ ok: true; content: string; lang: string }` or `{ ok: false; reason: "unavailable" }`. Internally: `new Supadata({ apiKey })` then `supadata.transcript({ url, lang: "pl", text: true, mode: "auto" })`; map Supadata's `206`/unavailable response to `{ ok: false }`. **Key is passed in explicitly** (from `astro:env/server` at the call site), never read from `process.env`.
 
-**Revised (Phase 3 impl review `F1`)**: `supadata.transcript()` can return `{ jobId }` instead of a transcript inline (async processing — always the case for videos >20 min). When it does, poll `supadata.transcript.getJobStatus(jobId)` with exponential backoff — `1000ms` initial interval, `×2` factor, capped at `30000ms`, `12` max attempts (sequence: 1s/2s/4s/8s/16s/30s×7, ~4 minutes total coverage using 12 subrequests) — until the job's `status` is `"completed"` (map its `result.content` to `{ ok: true }`) or `"failed"`/attempts exhausted (map to `{ ok: false, reason: "unavailable" }`). Backoff, not a flat interval or hard timeout: Cloudflare Workers HTTP requests have no wall-clock duration limit, so the loop is bounded by attempt count (subrequest budget) rather than elapsed time; movie-length videos with very long Whisper jobs remain a known residual risk since Supadata publishes no completion-time SLA to size against — validate empirically in Phase 4's live `wrangler tail` run against real long-form content.
+**Revised (Phase 3 impl review `F1`)**: `supadata.transcript()` can return `{ jobId }` instead of a transcript inline (async processing — ~~always the case for videos >20 min~~ **corrected in Phase 4 live run: not always — a ~1 h video resolved inline; treat as *may* return a job**). When it does, poll `supadata.transcript.getJobStatus(jobId)` with exponential backoff — `1000ms` initial interval, `×2` factor, capped at `30000ms`, `12` max attempts (sequence: 1s/2s/4s/8s/16s/30s×7, ~4 minutes total coverage using 12 subrequests) — until the job's `status` is `"completed"` (map its `result.content` to `{ ok: true }`) or `"failed"`/attempts exhausted (map to `{ ok: false, reason: "unavailable" }`). Backoff, not a flat interval or hard timeout: Cloudflare Workers HTTP requests have no wall-clock duration limit, so the loop is bounded by attempt count (subrequest budget) rather than elapsed time; movie-length videos with very long Whisper jobs remain a known residual risk since Supadata publishes no completion-time SLA to size against — validate empirically in Phase 4's live `wrangler tail` run against real long-form content.
 
 **Extended (post-review addendum)**: the `{ ok: true }` result also carries `resolvedVia: "inline" | "job"` — which branch actually produced the transcript. This names the **observed fetch mechanism only**; it is not a claim about whether Supadata served native YouTube captions or a Whisper-generated transcript. Supadata's response schema (`Transcript`/`JobResult` in its OpenAPI spec) exposes no such origin field, so `"native"`/`"generated"` would be an unverifiable inference — a fast Whisper job resolving within the sync window before ever needing a `jobId` would be indistinguishable from a native hit. `resolvedVia` is threaded through to persistence (see #3 below) to support later summary-quality comparison, with this caveat intact.
 
@@ -363,14 +364,14 @@ Single additive, idempotent migration (`add column if not exists model text`) on
 
 #### Automated
 
-- [x] 4.1 Type checking passes: `npm run lint`
-- [x] 4.2 Build succeeds on the Cloudflare adapter: `npm run build`
-- [x] 4.3 Endpoint file exists with `export const prerender = false;` and a `POST` handler
+- [x] 4.1 Type checking passes: `npm run lint` — bea0b0e
+- [x] 4.2 Build succeeds on the Cloudflare adapter: `npm run build` — bea0b0e
+- [x] 4.3 Endpoint file exists with `export const prerender = false;` and a `POST` handler — bea0b0e
 
 #### Manual
 
-- [x] 4.4 Authenticated `POST` to the live Worker returns `200` + Polish summary
-- [x] 4.5 `wrangler tail`: Supadata + OpenRouter reachable, no bundle/`nodejs_compat` errors, latency acceptable, no free-plan CPU failure
-- [x] 4.6 `videos` created-once/reused; every call appends a `summaries` row with the served `model` slug
-- [x] 4.7 Unauthenticated → `401` JSON; invalid body → `400`; transcript-less video → clear non-500 error, no rows
-- [x] 4.8 Verdict recorded: free plan sufficient (or Railway escape hatch needed)
+- [x] 4.4 Authenticated `POST` to the live Worker returns `200` + Polish summary — bea0b0e
+- [x] 4.5 `wrangler tail`: Supadata + OpenRouter reachable, no bundle/`nodejs_compat` errors, latency acceptable, no free-plan CPU failure — bea0b0e
+- [x] 4.6 `videos` created-once/reused; every call appends a `summaries` row with the served `model` slug — bea0b0e
+- [x] 4.7 Unauthenticated → `401` JSON; invalid body → `400`; transcript-less video → clear non-500 error, no rows — bea0b0e
+- [x] 4.8 Verdict recorded: free plan sufficient (or Railway escape hatch needed) — bea0b0e

@@ -29,6 +29,43 @@ const { text } = await generateText({
 
 > Model slugs are `provider/model` (e.g. `anthropic/claude-sonnet-4.6`, `google/gemini-3.5-flash`, `openai/gpt-5.5`) and differ from each provider's native ID — check the OpenRouter models page for exact slugs. `openrouter/auto` lets OpenRouter pick the model; the chosen one comes back in `response.model`.
 
+## Usage accounting — cost & tokens via the AI SDK
+
+The raw REST response exposes `usage.cost`, but so does the **AI SDK path** — no need to drop to `fetch`. Opt in with `usage: { include: true }` on the model, then read `providerMetadata.openrouter.usage`:
+
+```ts
+const model = openrouter("anthropic/claude-sonnet-5", {
+  usage: { include: true }, // opt in — off by default
+});
+
+const result = await generateText({ model, prompt: "..." });
+
+// AI SDK v7 standard token details:
+result.usage.inputTokens;
+result.usage.outputTokens;
+
+// OpenRouter-specific accounting (only present when include: true):
+const u = result.providerMetadata?.openrouter?.usage;
+u?.cost;         // actual $/credits for THIS call
+u?.totalTokens;  // prompt + completion
+```
+
+`OpenRouterUsageAccounting` shape:
+
+```ts
+type OpenRouterUsageAccounting = {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  cost?: number; // undefined unless usage.include was set — persist null-safely
+  promptTokensDetails?: { cachedTokens: number };
+  completionTokensDetails?: { reasoningTokens: number };
+  costDetails?: { upstreamInferenceCost: number };
+};
+```
+
+> This is how S-01 should capture per-summary cost (impl-review Phase 4, F5). The F-02 probe's `getSummaryModel` omits `usage: { include: true }`, so it captures the served `model` slug (`finalStep.response.modelId`) but **not** cost — add the option when cost tracking lands.
+
 ## Provider routing & fallback (OpenRouter-native, via the AI SDK settings)
 
 ```ts
@@ -59,4 +96,4 @@ Response includes `usage.cost` (actual $ for the call) and `model` (which model 
 
 OpenRouter passes through provider pricing (small routing margin baked into per-model rates). No separate platform subscription; pay per token via credits.
 
-**Source:** OpenRouter docs (`openrouter.ai/docs`) + `@openrouter/ai-sdk-provider` via Context7, 2026-07-05.
+**Source:** OpenRouter docs (`openrouter.ai/docs`) + `@openrouter/ai-sdk-provider` via Context7, 2026-07-05; usage-accounting section added 2026-07-10 (Context7 `/openrouterteam/ai-sdk-provider`, impl-review Phase 4).
