@@ -3,7 +3,7 @@ project: "10xMedia"
 version: 1
 status: draft
 created: 2026-06-11
-updated: 2026-07-04
+updated: 2026-07-11
 prd_version: 1
 main_goal: speed
 top_blocker: external
@@ -30,7 +30,7 @@ Watching YouTube videos is time-consuming — when regularly following informati
 | ID   | Change ID                 | Outcome (user can …)                                         | Prerequisites | PRD refs                      | Status   |
 | ---- | ------------------------- | ------------------------------------------------------------ | ------------- | ----------------------------- | -------- |
 | F-01 | video-summary-schema      | (foundation) video/summary tables with per-user RLS          | —             | Access Control, NFR, FR-006   | done        |
-| F-02 | transcript-llm-probe      | (foundation) transcript→LLM path verified on the Worker      | —             | FR-005, NFR                   | in progress |
+| F-02 | transcript-llm-probe      | (foundation) transcript→LLM path verified on the Worker      | —             | FR-005, NFR                   | done        |
 | S-01 | generate-and-save-summary | paste URL + pick character → get and save a Polish summary   | F-01, F-02    | US-01, FR-003, FR-004, FR-005 | proposed |
 | S-02 | browse-summary-list       | browse the list of saved summaries                           | S-01          | FR-006                        | proposed |
 | S-03 | delete-summary            | delete a summary                                             | S-01          | FR-007                        | proposed |
@@ -87,7 +87,7 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
   - Can the YouTube transcript be fetched from Cloudflare datacenter IPs (not just the dev machine)? — Owner: user/team. Block: no (this spike is what resolves it).
   - Will the free Cloudflare plan (~10ms CPU limit) handle transcript parsing, or is a paid plan / Railway escape-hatch required? — Owner: user. Block: no.
 - **Risk:** The riskiest element of the whole roadmap (top risk = external). Sequenced as the first de-risk: with the hard deadline of 2026-07-31 and after-hours work, any blocker on the live Worker must be discovered while schedule slack still exists. `infrastructure.md` names Railway (`@astrojs/node`) as the documented workaround if workerd / IP-blocking fail.
-- **Status:** in progress (change folder created 2026-07-04; planning next). Linear MAR-6.
+- **Status:** done (implemented + impl-reviewed; change `transcript-llm-probe`, Linear MAR-6 Done 2026-07-10). De-risk verdict: free Cloudflare plan sufficient — Railway escape hatch not needed. Not yet archived. Follow-ups carried to S-01: LLM prompt-engineering, transcript-length guard, upstream-error handling.
 
 ## Slices
 
