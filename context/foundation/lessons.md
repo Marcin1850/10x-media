@@ -29,3 +29,10 @@
 - **Problem**: The generic "comment at each lifecycle step" rule got satisfied by a single comment at phase **start** ("Phase 1 … in progress"). Phase 1's **completion** and its impl-review (commits `cdc3a14`, `33857a8`, status `implementing → impl_reviewed`) then landed with no Linear trace — the board froze at "started" while work moved on. Separately, the issue **description** kept a stale `Next: /10x-plan …` pointer long after planning was done.
 - **Rule**: For a multi-phase change, treat **completion of each phase** (not just the overall implement step) as its own lifecycle event: post a Linear comment summarizing what that phase landed + its impl-review verdict, in the same session the phase closes. Keep the issue **In Progress / implementing until the final phase is done** — do NOT flip to Done/Reviewed on an intermediate phase (`change.md` per-phase `impl_reviewed` is fine locally, but the Linear issue state reflects the whole change). Also keep the issue **description** current: update or remove stale `Next:` / `Roadmap status:` pointers when the phase they name is complete.
 - **Applies to**: implement, impl-review
+
+## Sync Backlog Handoff when a slice's status changes
+
+- **Context**: Any edit to `context/foundation/roadmap.md` that changes a slice's Status (or completes/unblocks a prerequisite) — the At a glance table, slice status lines, and Backlog Handoff must stay in sync.
+- **Problem**: The Backlog Handoff drifted out of sync: F-01/F-02 were `impl_reviewed` but the table still said "ready to plan", and it missed that S-01/S-04 had become unblocked — so it would misroute the next pick.
+- **Rule**: Whenever a slice's status changes (or a prerequisite completes), update the Backlog Handoff section in the same edit — re-derive each row's "Ready for `/10x-plan`" and Notes, including any newly-unblocked downstream slices. Keep it consistent with the At a glance table and slice status lines.
+- **Applies to**: implement, impl-review, plan
