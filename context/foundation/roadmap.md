@@ -34,7 +34,7 @@ Watching YouTube videos is time-consuming — when regularly following informati
 | S-01 | generate-and-save-summary | paste URL + pick character → get and save a Polish summary   | F-01, F-02    | US-01, FR-003, FR-004, FR-005 | proposed |
 | S-02 | browse-summary-list       | browse the list of saved summaries                           | S-01          | FR-006                        | proposed |
 | S-03 | delete-summary            | delete a summary                                             | S-01          | FR-007                        | proposed |
-| S-04 | delete-account            | delete their account and all associated data (GDPR)          | F-01          | Access Control, NFR (privacy) | planned  |
+| S-04 | delete-account            | delete their account and all associated data (GDPR)          | F-01          | Access Control, NFR (privacy) | plan_reviewed |
 | S-05 | summary-credits           | start with 5 credits; each generation spends one             | F-01          | NFR (cost guardrail)          | planned  |
 
 ## Streams
@@ -137,11 +137,11 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
 - **Prerequisites:** F-01
 - **Parallel with:** —
 - **Blockers:** —
-- **Unknowns:**
-  - Hard delete vs. soft-delete + purge window? — Owner: user. Block: no.
-  - How to remove the Supabase `auth.users` record from an SSR endpoint (service-role key vs. client)? — Owner: implementation. Block: no.
+- **Unknowns:** resolved during planning —
+  - ~~Hard delete vs. soft-delete + purge window?~~ → **hard delete** (immediate, irreversible; no scheduler).
+  - ~~How to remove the Supabase `auth.users` record from an SSR endpoint (service-role key vs. client)?~~ → **service-role admin client** calling `auth.admin.deleteUser`; domain rows purge via existing cascade FKs.
 - **Risk:** Low-to-medium risk. Depends on F-01 so the domain tables exist to cascade from; the auth account itself already exists in the baseline. Sequenced independently of the summary CRUD — it's a compliance guardrail, not part of the core loop. The main care point is completeness (no orphaned rows) rather than complexity.
-- **Status:** planned
+- **Status:** plan_reviewed (plan written + reviewed **SOUND**, 2026-07-11; change `delete-account`, Linear MAR-10 → Todo). Ready for `/10x-implement delete-account phase 1`.
 
 ### S-05: New users start with a credit budget
 
@@ -167,7 +167,7 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
 | S-01       | generate-and-save-summary | Generate and save a video summary              | yes                   | Unblocked — F-01 + F-02 both done. `/10x-plan generate-and-save-summary`. Carry F-02 follow-ups: LLM prompt-engineering, transcript-length guard (F2), upstream-error handling (F3). |
 | S-02       | browse-summary-list       | List of saved summaries                        | no                    | Waiting on S-01                              |
 | S-03       | delete-summary            | Delete a summary                               | no                    | Waiting on S-01; FR-007 nice-to-have         |
-| S-04       | delete-account            | Delete account + all data (GDPR)               | yes                   | Unblocked — needs only F-01 (done). Compliance guardrail. |
+| S-04       | delete-account            | Delete account + all data (GDPR)               | planned               | Plan written + reviewed (**SOUND**, 2026-07-11). Ready for `/10x-implement delete-account phase 1`. |
 | S-05       | summary-credits           | Credit budget for summary generation           | yes                   | Needs F-01 (done); enforcement wires into S-01. Land before/with S-01 to cap OpenRouter cost. |
 
 ## Open Roadmap Questions
