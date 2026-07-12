@@ -37,15 +37,34 @@ interface SummaryInsert {
   resolved_via: TranscriptResolvedVia | null;
 }
 
-/** Minimal local schema shape for the two tables this service touches — this codebase has no generated Database types yet. */
+interface UserCreditsRow {
+  user_id: string;
+  balance: number;
+  updated_at: string;
+}
+
+interface UserCreditsInsert {
+  user_id: string;
+  balance?: number;
+}
+
+/** Minimal local schema shape for the tables/functions this service touches — this codebase has no generated Database types yet. */
 export interface AppDatabase {
   public: {
     Tables: {
       videos: { Row: VideoRow; Insert: VideoInsert; Update: Partial<VideoInsert>; Relationships: [] };
       summaries: { Row: SummaryRow; Insert: SummaryInsert; Update: Partial<SummaryInsert>; Relationships: [] };
+      user_credits: {
+        Row: UserCreditsRow;
+        Insert: UserCreditsInsert;
+        Update: Partial<UserCreditsInsert>;
+        Relationships: [];
+      };
     };
     Views: Record<never, never>;
-    Functions: Record<never, never>;
+    Functions: {
+      spend_credit: { Args: Record<string, never>; Returns: number };
+    };
   };
 }
 
