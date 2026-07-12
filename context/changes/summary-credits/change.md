@@ -1,9 +1,9 @@
 ---
 change_id: summary-credits
 title: Summary credits
-status: plan_reviewed
+status: implementing
 created: 2026-07-11
-updated: 2026-07-11
+updated: 2026-07-12
 archived_at: null
 ---
 

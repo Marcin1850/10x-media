@@ -278,9 +278,9 @@ Single additive migration — new table, policy, function, trigger, and a one-ti
 
 #### Automated
 
-- [ ] 1.1 Migration applies cleanly: `npx supabase migration up`
-- [ ] 1.2 Type checking / lint passes: `npm run lint`
-- [ ] 1.3 Build passes: `npm run build`
+- [x] 1.1 Migration applies cleanly: `npx supabase migration up`
+- [x] 1.2 Type checking / lint passes: `npm run lint`
+- [x] 1.3 Build passes: `npm run build`
 
 #### Manual
 
