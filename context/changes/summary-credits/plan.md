@@ -284,10 +284,10 @@ Single additive migration — new table, policy, function, trigger, and a one-ti
 
 #### Manual
 
-- [x] 1.4 New signup has a `user_credits` row with `balance = 5`
-- [x] 1.5 Pre-existing user has a backfilled row
-- [x] 1.6 `spend_credit()` decrements to 0 and then returns the insufficient sentinel without going negative
-- [x] 1.7 Direct client `UPDATE`/cross-user `SELECT` on `user_credits` is rejected by RLS
+- [x] 1.4 New signup has a `user_credits` row with `balance = 5` — b760320
+- [x] 1.5 Pre-existing user has a backfilled row — b760320
+- [x] 1.6 `spend_credit()` decrements to 0 and then returns the insufficient sentinel without going negative — b760320
+- [x] 1.7 Direct client `UPDATE`/cross-user `SELECT` on `user_credits` is rejected by RLS — b760320
 
 ### Phase 2: Credits service + enforcement in the generation path
 
@@ -327,6 +327,6 @@ Single additive migration — new table, policy, function, trigger, and a one-ti
 
 #### Manual
 
-- [x] 4.3 `npm run grant-credits -- <email> <n>` raises the balance and prints the new value
-- [x] 4.4 Bad email / non-positive amount fails cleanly and changes nothing
-- [x] 4.5 Missing `SUPABASE_SERVICE_ROLE_KEY` fails fast with an actionable message
+- [x] 4.3 `npm run grant-credits -- <email> <n>` raises the balance and prints the new value — b760320
+- [x] 4.4 Bad email / non-positive amount fails cleanly and changes nothing — b760320
+- [x] 4.5 Missing `SUPABASE_SERVICE_ROLE_KEY` fails fast with an actionable message — b760320
