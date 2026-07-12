@@ -47,19 +47,15 @@ function run(cmd, cmdArgs, opts = {}) {
 
 // Find the running local Supabase Postgres container (project-agnostic).
 function findLocalDbContainer() {
-  const res = spawnSync(
-    "docker",
-    ["ps", "--filter", "name=supabase_db_", "--format", "{{.Names}}"],
-    { encoding: "utf8" },
-  );
+  const res = spawnSync("docker", ["ps", "--filter", "name=supabase_db_", "--format", "{{.Names}}"], {
+    encoding: "utf8",
+  });
   if (res.error) {
     throw new Error("Could not run `docker` — is Docker Desktop running?");
   }
   const name = (res.stdout || "").trim().split(/\r?\n/).filter(Boolean)[0];
   if (!name) {
-    throw new Error(
-      "No running `supabase_db_*` container found. Start the local stack first: `npx supabase start`",
-    );
+    throw new Error("No running `supabase_db_*` container found. Start the local stack first: `npx supabase start`");
   }
   return name;
 }
@@ -98,9 +94,7 @@ function restore(container) {
       { stdio: ["pipe", "inherit", "inherit"] },
     );
     child.on("error", reject);
-    child.on("close", (code) =>
-      code === 0 ? resolve() : reject(new Error(`psql restore exited with code ${code}`)),
-    );
+    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`psql restore exited with code ${code}`))));
     createReadStream(dumpFile).pipe(child.stdin);
   });
 }

@@ -6,6 +6,7 @@ import eslintPluginAstro from "eslint-plugin-astro";
 import pluginReact from "eslint-plugin-react";
 import reactCompiler from "eslint-plugin-react-compiler";
 import eslintPluginReactHooks from "eslint-plugin-react-hooks";
+import globals from "globals";
 import path from "node:path";
 import tseslint from "typescript-eslint";
 
@@ -68,6 +69,20 @@ const astroConfig = tseslint.config({
   },
 });
 
+// Operator / dev tooling run directly under Node (`node --env-file=... scripts/*.mjs`),
+// not part of the Astro/Cloudflare app bundle. They legitimately use Node globals and
+// print to the console, and aren't covered by the app's tsconfig type-checking.
+const scriptsConfig = tseslint.config({
+  files: ["scripts/**/*.{js,mjs,cjs}"],
+  extends: [tseslint.configs.disableTypeChecked],
+  languageOptions: {
+    globals: { ...globals.node },
+  },
+  rules: {
+    "no-console": "off",
+  },
+});
+
 export default tseslint.config(
   includeIgnoreFile(gitignorePath),
   baseConfig,
@@ -75,5 +90,6 @@ export default tseslint.config(
   eslintPluginAstro.configs["flat/recommended"],
   ...eslintPluginAstro.configs["flat/jsx-a11y-recommended"],
   astroConfig,
+  scriptsConfig,
   eslintPluginPrettier,
 );
