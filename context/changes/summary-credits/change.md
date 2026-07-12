@@ -38,15 +38,16 @@ migration covering all three app tables: `authenticated` = CRUD on videos/summar
 `user_credits` (balance stays unforgeable); `service_role` = full access. Harmless where prod already
 grants. This also unblocked the pre-existing F-02 flow locally.
 
-### Manual verification — already done vs. still open
+### Manual verification — P1/P4 confirmed, P2/P3 still open
 
-Verified directly over the real DB/PostgREST path (balances restored to 5 afterward), but NOT ticked
-in `plan.md` Progress because those rows are reserved for user confirmation:
+Re-verified live over the real DB/PostgREST path on 2026-07-12 (balances restored to 5 afterward) and
+**user-confirmed** — `plan.md` Progress rows now ticked:
 
-- P1: 1.4 seed trigger (new `auth.users` insert → row at 5), 1.5 backfill, 1.6 spend 5→0→−1 sentinel
-  (never negative), 1.7 RLS own-row-only read (200) + direct UPDATE blocked (403).
-- P4: 4.3 grant-credits happy path (4→7), 4.4 bad amount/unknown email fail cleanly, 4.5 missing
-  `SUPABASE_SERVICE_ROLE_KEY` fails fast.
+- P1: 1.4 seed trigger (new `auth.users` insert → row at 5), 1.5 backfill (2 users, 0 missing), 1.6
+  spend 5→4→3→2→1→0→−1 sentinel (never negative), 1.7 RLS own-row-only read (1 visible row) + direct
+  UPDATE rejected (permission denied — `authenticated` has no UPDATE grant). ✅ confirmed
+- P4: 4.3 grant-credits happy path (5→7, then restored), 4.4 non-positive amount + unknown email fail
+  cleanly (exit 1), 4.5 missing `SUPABASE_SERVICE_ROLE_KEY` fails fast (exit 1). ✅ confirmed
 
 Still open — need a browser and/or paid API keys (Supadata/OpenRouter), so left for the user:
 
