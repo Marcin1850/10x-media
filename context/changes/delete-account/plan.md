@@ -248,9 +248,9 @@ No schema migration required — the cascade FKs already exist. The only new inf
 
 #### Automated
 
-- [x] 2.1 Type checking passes: `npm run lint`
-- [x] 2.2 Build passes: `npm run build`
-- [x] 2.3 Prettier clean: `npm run format`
+- [x] 2.1 Type checking passes: `npm run lint` — 2b0c78e
+- [x] 2.2 Build passes: `npm run build` — 2b0c78e
+- [x] 2.3 Prettier clean: `npm run format` — 2b0c78e
 
 #### Manual
 
