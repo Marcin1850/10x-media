@@ -322,8 +322,8 @@ Single additive migration — new table, policy, function, trigger, and a one-ti
 
 #### Automated
 
-- [x] 4.1 Lint/build unaffected: `npm run lint` && `npm run build`
-- [x] 4.2 Prettier clean: `npm run format`
+- [x] 4.1 Lint/build unaffected: `npm run lint` && `npm run build` — 49250e6
+- [x] 4.2 Prettier clean: `npm run format` — 49250e6
 
 #### Manual
 
