@@ -56,6 +56,20 @@ Still open — need a browser and/or paid API keys (Supadata/OpenRouter), so lef
   balance unchanged; 2.7 signed-out → 401.
 - P3: 3.4 dashboard shows current balance; 3.5 decrements after a generation; 3.6 no theme regression.
 
+### Blocker found + fixed during P2/P3 verification: cross-fetch CJS in workerd dev (`ea9ce1c`)
+
+First live `POST /api/summaries/probe` in `astro dev` returned 500 `exports is not defined` at
+route-module load — a **pre-existing F-02** bug: `@supadata/js` pulls in `cross-fetch` (CommonJS),
+which the `@astrojs/cloudflare` workerd dev module runner can't evaluate. `npm run build` masked it
+(the prod bundler handles CJS interop). Not caused by summary-credits — `dashboard.astro` (uses the
+new `credits.ts`) loads fine; the fault is isolated to the transcript chain, identical on `master`.
+
+Fixed in `ea9ce1c` (committed as `fix(dev):` F-02 scope, per user): alias `cross-fetch` → a
+native-fetch ESM shim (`src/lib/shims/cross-fetch.mjs`) + `ssr.optimizeDeps.exclude` `@supadata/js`
+in `astro.config.mjs`. Behaviour-preserving (workerd has global `fetch`; supadata only used it as a
+fallback); lint/build/prettier green. **2.7 (signed-out → 401) verified via curl** post-fix; 2.4–2.6
++ P3 still need the user's live/browser run (restart the dev server first to load the config change).
+
 ### Deploy / config TODO (not done here)
 
 - Both new migrations (`20260712175240_user_credits.sql`, `20260712182527_grant_table_privileges.sql`)
