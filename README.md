@@ -163,6 +163,19 @@ Users can then sign in immediately after sign-up without clicking a confirmation
 
 Route protection is handled in `src/middleware.ts`. Add paths to the `PROTECTED_ROUTES` array there to require authentication.
 
+## Summary credits
+
+Each user has a small credit budget that guards the paid transcript/LLM pipeline. Every account starts with **5 credits**, a successful summary spends **1 credit**, and generation is blocked server-side at **0 credits** before any paid call is made. Refills are **manual-only** — there is no self-serve top-up.
+
+To grant credits to a user by email (operator-only, offline):
+
+```bash
+npm run grant-credits -- <email> <amount>
+# e.g. npm run grant-credits -- user@example.com 5
+```
+
+This uses the Supabase **service-role** key (which bypasses RLS) and must never be wired into the Worker runtime. Set `SUPABASE_SERVICE_ROLE_KEY` in your `.env` — the `service_role` key from `npx supabase status` (local) or the dashboard → **Settings → API**.
+
 ## Deployment
 
 This project deploys to [Cloudflare Workers](https://workers.cloudflare.com/).

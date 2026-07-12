@@ -308,9 +308,9 @@ Single additive migration — new table, policy, function, trigger, and a one-ti
 
 #### Automated
 
-- [x] 3.1 Type checking / lint passes: `npm run lint`
-- [x] 3.2 Build passes: `npm run build`
-- [x] 3.3 Prettier clean: `npm run format`
+- [x] 3.1 Type checking / lint passes: `npm run lint` — a61d781
+- [x] 3.2 Build passes: `npm run build` — a61d781
+- [x] 3.3 Prettier clean: `npm run format` — a61d781
 
 #### Manual
 
@@ -322,8 +322,8 @@ Single additive migration — new table, policy, function, trigger, and a one-ti
 
 #### Automated
 
-- [ ] 4.1 Lint/build unaffected: `npm run lint` && `npm run build`
-- [ ] 4.2 Prettier clean: `npm run format`
+- [x] 4.1 Lint/build unaffected: `npm run lint` && `npm run build`
+- [x] 4.2 Prettier clean: `npm run format`
 
 #### Manual
 

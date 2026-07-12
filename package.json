@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "db:sync-from-prod": "node scripts/sync-prod-to-local.mjs"
+    "db:sync-from-prod": "node scripts/sync-prod-to-local.mjs",
+    "grant-credits": "node --env-file=.env scripts/grant-credits.mjs"
   },
   "dependencies": {
     "@astrojs/check": "^0.9.8",
