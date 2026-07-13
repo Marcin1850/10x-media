@@ -1,8 +1,19 @@
 ---
 import Welcome from "@/components/Welcome.astro";
 import Layout from "@/layouts/Layout.astro";
+
+const deleted = Astro.url.searchParams.get("deleted") === "1";
 ---
 
 <Layout>
+  {
+    deleted ? (
+      <div role="status" class="fixed inset-x-0 top-0 z-50 flex justify-center px-4 py-3 text-sm text-emerald-100">
+        <div class="rounded-full border border-emerald-400/30 bg-emerald-900/60 px-4 py-2 backdrop-blur-xl">
+          Your account and all data were deleted.
+        </div>
+      </div>
+    ) : null
+  }
   <Welcome />
 </Layout>

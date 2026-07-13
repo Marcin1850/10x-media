@@ -233,29 +233,29 @@ No schema migration required — the cascade FKs already exist. The only new inf
 
 #### Automated
 
-- [ ] 1.1 Type checking passes: `npm run lint`
-- [ ] 1.2 Build passes: `npm run build`
-- [ ] 1.3 Prettier clean: `npm run format`
+- [x] 1.1 Type checking passes: `npm run lint` — 2ebeaaf
+- [x] 1.2 Build passes: `npm run build` — 2ebeaaf
+- [x] 1.3 Prettier clean: `npm run format` — 2ebeaaf
 
 #### Manual
 
-- [ ] 1.4 Authenticated `POST /api/account/delete` returns 200 and old credentials no longer sign in
-- [ ] 1.5 `videos`/`summaries` rows for the deleted `user_id` are zero in Supabase Studio
-- [ ] 1.6 Service-role key unset → endpoint returns 503, account still exists (fail-safe)
-- [ ] 1.7 Signed-out request returns 401
+- [x] 1.4 Authenticated `POST /api/account/delete` returns 200 and old credentials no longer sign in
+- [x] 1.5 `videos`/`summaries` rows for the deleted `user_id` are zero in Supabase Studio
+- [x] 1.6 Service-role key unset → endpoint returns 503, account still exists (fail-safe)
+- [x] 1.7 Signed-out request returns 401
 
 ### Phase 2: Frontend — `/account` page + confirm island + post-delete UX
 
 #### Automated
 
-- [ ] 2.1 Type checking passes: `npm run lint`
-- [ ] 2.2 Build passes: `npm run build`
-- [ ] 2.3 Prettier clean: `npm run format`
+- [x] 2.1 Type checking passes: `npm run lint` — 2b0c78e
+- [x] 2.2 Build passes: `npm run build` — 2b0c78e
+- [x] 2.3 Prettier clean: `npm run format` — 2b0c78e
 
 #### Manual
 
-- [ ] 2.4 `/account` while signed out redirects to `/auth/signin`
-- [ ] 2.5 Confirm button disabled until typed value exactly matches the account email
-- [ ] 2.6 End-to-end delete: redirect to `/?deleted=1` + notice, old login fails, zero orphaned rows
-- [ ] 2.7 Failed delete (503) shows inline error, user stays signed in and account intact
-- [ ] 2.8 No visual regressions on `/dashboard` and home; cosmic theme preserved
+- [x] 2.4 `/account` while signed out redirects to `/auth/signin`
+- [x] 2.5 Confirm button disabled until typed value exactly matches the account email
+- [x] 2.6 End-to-end delete: redirect to `/?deleted=1` + notice, old login fails, zero orphaned rows
+- [x] 2.7 Failed delete (503) shows inline error, user stays signed in and account intact
+- [x] 2.8 No visual regressions on `/dashboard` and home; cosmic theme preserved

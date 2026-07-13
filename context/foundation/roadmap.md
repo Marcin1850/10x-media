@@ -3,7 +3,7 @@ project: "10xMedia"
 version: 1
 status: draft
 created: 2026-06-11
-updated: 2026-07-11
+updated: 2026-07-13
 prd_version: 1
 main_goal: speed
 top_blocker: external
@@ -34,7 +34,7 @@ Watching YouTube videos is time-consuming — when regularly following informati
 | S-01 | generate-and-save-summary | paste URL + pick character → get and save a Polish summary   | F-01, F-02    | US-01, FR-003, FR-004, FR-005 | proposed |
 | S-02 | browse-summary-list       | browse the list of saved summaries                           | S-01          | FR-006                        | proposed |
 | S-03 | delete-summary            | delete a summary                                             | S-01          | FR-007                        | proposed |
-| S-04 | delete-account            | delete their account and all associated data (GDPR)          | F-01          | Access Control, NFR (privacy) | plan_reviewed |
+| S-04 | delete-account            | delete their account and all associated data (GDPR)          | F-01          | Access Control, NFR (privacy) | impl_reviewed |
 | S-05 | summary-credits           | start with 5 credits; each generation spends one             | F-01          | — (cost guardrail)            | plan_reviewed |
 
 ## Streams
@@ -141,7 +141,7 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
   - ~~Hard delete vs. soft-delete + purge window?~~ → **hard delete** (immediate, irreversible; no scheduler).
   - ~~How to remove the Supabase `auth.users` record from an SSR endpoint (service-role key vs. client)?~~ → **service-role admin client** calling `auth.admin.deleteUser`; domain rows purge via existing cascade FKs.
 - **Risk:** Low-to-medium risk. Depends on F-01 so the domain tables exist to cascade from; the auth account itself already exists in the baseline. Sequenced independently of the summary CRUD — it's a compliance guardrail, not part of the core loop. The main care point is completeness (no orphaned rows) rather than complexity.
-- **Status:** plan_reviewed (plan written + reviewed **SOUND**, 2026-07-11; change `delete-account`, Linear MAR-10 → Todo). Ready for `/10x-implement delete-account phase 1`.
+- **Status:** impl_reviewed (both phases implemented + committed 2026-07-12 — Phase 1 `2ebeaaf`, Phase 2 `2b0c78e`, epilogue `2710a3c`; `SUPABASE_SERVICE_ROLE_KEY` set as a Cloudflare Workers Secret; change `delete-account` → `impl_reviewed`, Linear MAR-10 → In Progress). Manual E2E verification **passed** (commit `546e8f0`). Impl-review ran 2026-07-12 — verdict **NEEDS ATTENTION** (0 critical, 2 warnings, 3 observations). Triage complete 2026-07-13: F1/F3/F4 fixed (server-side delete confirmation, masked error contract, shadcn Dialog a11y), F2 skipped (pre-existing baseline lint drift owned by a parallel branch), F5 = this tracker sync; lint + build green on the feature files.
 
 ### S-05: New users start with a credit budget
 
@@ -168,7 +168,7 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
 | S-01       | generate-and-save-summary | Generate and save a video summary              | yes                   | Unblocked — F-01 + F-02 both done. `/10x-plan generate-and-save-summary`. Carry F-02 follow-ups: LLM prompt-engineering, transcript-length guard (F2), upstream-error handling (F3). |
 | S-02       | browse-summary-list       | List of saved summaries                        | no                    | Waiting on S-01                              |
 | S-03       | delete-summary            | Delete a summary                               | no                    | Waiting on S-01; FR-007 nice-to-have         |
-| S-04       | delete-account            | Delete account + all data (GDPR)               | planned               | Plan written + reviewed (**SOUND**, 2026-07-11). Ready for `/10x-implement delete-account phase 1`. |
+| S-04       | delete-account            | Delete account + all data (GDPR)               | impl_reviewed         | Both phases implemented + committed (2026-07-12); Workers Secret set. Manual E2E passed; impl-review ran — NEEDS ATTENTION (2 warnings, 3 observations). Triage complete 2026-07-13: F1/F3/F4 fixed, F2 skipped (baseline drift), F5 tracker sync; lint + build green. Ready for `/10x-archive`. |
 | S-05       | summary-credits           | Credit budget for summary generation           | plan_reviewed         | Plan written + brief, reviewed **SOUND** after triage (all 4 findings fixed, 2026-07-11), 4 phases. Enforcement wires into the F-02 probe endpoint now; S-01 reuses the `credits` service. Ready for `/10x-implement summary-credits phase 1`. |
 
 ## Open Roadmap Questions
