@@ -32,7 +32,7 @@
   - Tradeoff: Changes the endpoint contract and UI request; it does not defend against fully compromised same-origin JavaScript that can read the email.
   - Confidence: HIGH — both the authenticated user email and the repository's zod API pattern already exist.
   - Blind spot: No recent-auth/password requirement is in product scope, so this remains an accidental-deletion guard rather than identity re-verification.
-- **Decision**: PENDING
+- **Decision**: FIXED — endpoint now zod-validates `confirmation` and compares it to `context.locals.user.email` before creating the admin client; UI sends the typed value in the JSON body.
 
 ### F2 — Checked-off repository verification does not reproduce
 
@@ -46,7 +46,7 @@
   - Tradeoff: Touches files outside this change and may require bringing in the existing script-lint fix from the parallel work.
   - Confidence: HIGH — the failing commands and focused passing commands were rerun on the reviewed HEAD.
   - Blind spot: The broad Prettier list includes line-ending/documentation drift that may be branch-specific.
-- **Decision**: PENDING
+- **Decision**: SKIPPED — root cause is the pre-existing `scripts/sync-prod-to-local.mjs`, already fixed on a parallel branch; it is the sole ESLint failure and the only *code* Prettier hit. The remaining 37 Prettier warnings are non-code (context/**.md docs, .mcp.json, generated supabase/.temp/linked-project.json) and are not gated by CI (`npm run lint` + build). Feature code passes focused lint/format. Resolves on branch merge; no action in this change.
 
 ### F3 — Admin deletion failures have an unstable error contract
 
@@ -56,7 +56,7 @@
 - **Location**: src/pages/api/account/delete.ts:26
 - **Detail**: A rejected `deleteUser` promise bypasses the endpoint's structured JSON response, while a resolved Supabase error returns its raw provider message to the browser. Deletion remains fail-safe because session teardown happens later, and the UI tolerates non-JSON, but this differs from the stable, masked upstream-error pattern in `src/pages/api/summaries/probe.ts`.
 - **Fix**: Wrap `deleteUser` in `try/catch`, keep diagnostic details server-side, and return a stable generic 500 JSON message on every pre-delete failure.
-- **Decision**: PENDING
+- **Decision**: FIXED — `deleteUser` now wrapped in try/catch so a resolved Supabase error and a rejected promise both return the same masked generic 500 JSON. Dropped the proposed server-side `console.error` to match the repo (no src file logs to console; `no-console` is enforced; `probe.ts` masks without logging).
 
 ### F4 — Custom modal omits expected keyboard and focus behavior
 
@@ -70,7 +70,7 @@
   - Tradeoff: Adds a UI component dependency and requires checking that dismiss actions remain disabled while deletion is in flight.
   - Confidence: HIGH — the missing behaviors are directly observable in the component.
   - Blind spot: No browser-based keyboard test was run during this review.
-- **Decision**: PENDING
+- **Decision**: FIXED — added shadcn Dialog primitive (`npx shadcn add dialog`, radix-ui ^1.6.2) and rebuilt the modal on it, gaining focus placement/trap, Escape handling, and focus restore. Preserved the dark styling, typed-email confirm, and in-flight dismiss guard (`onOpenChange`/`onEscapeKeyDown`/`onInteractOutside` no-op while submitting; close button hidden via `showCloseButton={!submitting}`). Formatted the generated dialog.tsx to the repo Prettier config; lint + build pass.
 
 ### F5 — Lifecycle status is not synchronized across project trackers
 
@@ -80,7 +80,7 @@
 - **Location**: context/foundation/roadmap.md:37
 - **Detail**: This review stamps the change `impl_reviewed`, but the roadmap's at-a-glance row, S-04 detail, and Backlog Handoff still say `implementing` / impl-review pending (`roadmap.md:37,144,171`). That violates the accepted lessons requiring roadmap and Linear synchronization at every status transition. Linear MAR-10 was documented as In Progress; its live state was not independently checked because no Linear connector is available in this review context.
 - **Fix**: Update all three roadmap surfaces to the reviewed state and synchronize MAR-10's status/comment before treating the lifecycle transition as complete.
-- **Decision**: PENDING
+- **Decision**: FIXED — roadmap status fields were already `impl_reviewed` (commit `1eee53a`); refreshed the stale "triage pending" narrative on both the S-04 detail and Backlog Handoff to record the triage outcome. Linear MAR-10 synced: description status line updated and a triage-outcome comment added; kept In Progress (no In-Review lane; branch not yet merged) — moves to Done after PR merge + `/10x-archive`.
 
 ## Verification Evidence
 
