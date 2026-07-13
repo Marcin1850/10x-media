@@ -36,3 +36,10 @@
 - **Problem**: The Backlog Handoff drifted out of sync: F-01/F-02 were `impl_reviewed` but the table still said "ready to plan", and it missed that S-01/S-04 had become unblocked — so it would misroute the next pick.
 - **Rule**: Whenever a slice's status changes (or a prerequisite completes), update the Backlog Handoff section in the same edit — re-derive each row's "Ready for `/10x-plan`" and Notes, including any newly-unblocked downstream slices. Keep it consistent with the At a glance table and slice status lines.
 - **Applies to**: implement, impl-review, plan
+
+## Prefer curl.exe with PowerShell-friendly syntax
+
+- **Context**: Any shell command suggested to the user during conversation on a Windows/PowerShell host.
+- **Problem**: I'm not able to simply copy/paste multiline command to PowerShell terminal.
+- **Rule**: When giving shell commands on Windows/PowerShell, use curl.exe with PowerShell-friendly quoting instead of the Invoke-WebRequest alias.
+- **Applies to**: implement, impl-review
