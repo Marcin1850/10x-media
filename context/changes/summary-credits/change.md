@@ -1,9 +1,9 @@
 ---
 change_id: summary-credits
 title: Summary credits
-status: implementing
+status: implemented
 created: 2026-07-11
-updated: 2026-07-12
+updated: 2026-07-13
 archived_at: null
 ---
 
@@ -49,12 +49,16 @@ Re-verified live over the real DB/PostgREST path on 2026-07-12 (balances restore
 - P4: 4.3 grant-credits happy path (5→7, then restored), 4.4 non-positive amount + unknown email fail
   cleanly (exit 1), 4.5 missing `SUPABASE_SERVICE_ROLE_KEY` fails fast (exit 1). ✅ confirmed
 
-Still open — need a browser and/or paid API keys (Supadata/OpenRouter), so left for the user:
+**P2/P3 now confirmed (2026-07-13)** — user-run over the live dev server; `plan.md` rows ticked and
+SHA-stamped `dfa2e7f`:
 
 - P2: 2.4 live `POST /api/summaries/probe` → 402 at zero credits with **no** paid call; 2.5 success
-  returns `creditsRemaining` and decrements by exactly 1; 2.6 transcript-422 / LLM error leaves
-  balance unchanged; 2.7 signed-out → 401.
-- P3: 3.4 dashboard shows current balance; 3.5 decrements after a generation; 3.6 no theme regression.
+  returns `creditsRemaining` and decrements by exactly 1; 2.6 transcript-422 leaves balance unchanged;
+  2.7 signed-out → 401 (verified live via curl.exe). ✅ confirmed
+- P3: 3.4 dashboard shows current balance; 3.5 decrements after a generation; 3.6 no theme
+  regression. ✅ confirmed
+
+All 4 phases now fully verified (automated + manual). `status: implemented`.
 
 ### Blocker found + fixed during P2/P3 verification: cross-fetch CJS in workerd dev (`ea9ce1c`)
 

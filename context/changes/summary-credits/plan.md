@@ -299,10 +299,10 @@ Single additive migration — new table, policy, function, trigger, and a one-ti
 
 #### Manual
 
-- [x] 2.4 Balance 0 → `402` with no Supadata/OpenRouter call
-- [x] 2.5 Successful call returns `creditsRemaining` and decrements the row by exactly 1
-- [x] 2.6 Transcript-422 / LLM error leaves the balance unchanged
-- [x] 2.7 Signed-out request still returns `401`
+- [x] 2.4 Balance 0 → `402` with no Supadata/OpenRouter call — dfa2e7f
+- [x] 2.5 Successful call returns `creditsRemaining` and decrements the row by exactly 1 — dfa2e7f
+- [x] 2.6 Transcript-422 / LLM error leaves the balance unchanged — dfa2e7f
+- [x] 2.7 Signed-out request still returns `401` — dfa2e7f
 
 ### Phase 3: Balance display on the dashboard
 
@@ -314,9 +314,9 @@ Single additive migration — new table, policy, function, trigger, and a one-ti
 
 #### Manual
 
-- [x] 3.4 Dashboard shows the correct current balance
-- [x] 3.5 Balance display decrements after a successful generation
-- [x] 3.6 No visual regression to the dashboard / cosmic theme
+- [x] 3.4 Dashboard shows the correct current balance — dfa2e7f
+- [x] 3.5 Balance display decrements after a successful generation — dfa2e7f
+- [x] 3.6 No visual regression to the dashboard / cosmic theme — dfa2e7f
 
 ### Phase 4: Manual refill operator script
 
