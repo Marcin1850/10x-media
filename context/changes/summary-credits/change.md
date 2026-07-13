@@ -1,7 +1,7 @@
 ---
 change_id: summary-credits
 title: Summary credits
-status: implemented
+status: impl_reviewed
 created: 2026-07-11
 updated: 2026-07-13
 archived_at: null
