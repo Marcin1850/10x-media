@@ -3,7 +3,7 @@ project: "10xMedia"
 version: 1
 status: draft
 created: 2026-06-11
-updated: 2026-07-11
+updated: 2026-07-13
 prd_version: 1
 main_goal: speed
 top_blocker: external
@@ -35,7 +35,7 @@ Watching YouTube videos is time-consuming — when regularly following informati
 | S-02 | browse-summary-list       | browse the list of saved summaries                           | S-01          | FR-006                        | proposed |
 | S-03 | delete-summary            | delete a summary                                             | S-01          | FR-007                        | proposed |
 | S-04 | delete-account            | delete their account and all associated data (GDPR)          | F-01          | Access Control, NFR (privacy) | plan_reviewed |
-| S-05 | summary-credits           | start with 5 credits; each generation spends one             | F-01          | — (cost guardrail)            | plan_reviewed |
+| S-05 | summary-credits           | start with 5 credits; each generation spends one             | F-01          | — (cost guardrail)            | implemented |
 
 ## Streams
 
@@ -157,7 +157,7 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
   - ~~What is the manual refill mechanism (direct SQL, Studio, admin script)?~~ → **offline `grant-credits.mjs` service-role script** (`npm run grant-credits -- <email> <n>`).
   - Enforcement model: **spend-on-success + up-front read gate** (no refund, no client-reachable increment, no service-role in the request path); atomic `SECURITY DEFINER spend_credit()`; seed via trigger on `auth.users` insert + backfill.
 - **Risk:** Low-to-medium risk. Guards the OpenRouter budget against runaway generation. The storage/seeding/refill half depends only on F-01 and can be built independently; only the spend-and-block enforcement needs a call site, which lives in S-01's generation endpoint (and must be server-side so it can't be bypassed from the client). Because an un-credited S-01 exposes the budget, this slice should land **before or together with** S-01, not after it. Manual-only refill keeps scope small for the MVP.
-- **Status:** plan_reviewed (plan written + brief, then reviewed **SOUND** after triage — all 4 findings fixed, 2026-07-11; change `summary-credits`, 4 phases). Enforcement wires into the F-02 probe endpoint now; S-01 reuses the same `credits` service. Ready for `/10x-implement summary-credits phase 1`.
+- **Status:** implemented (all 4 phases implemented + verified — automated + user-confirmed manual E2E — on branch `chore/summary-credits`, 2026-07-13; change `summary-credits`, Linear MAR-11). DB migrations (`user_credits` + grants) pushed to the cloud project. Formal `/10x-impl-review` skipped by choice. Remaining before shipped: PR/merge `chore/summary-credits` → `master` (CI auto-deploys the Worker) and `/10x-archive`. Enforcement wires into the F-02 probe endpoint now; S-01 reuses the same `credits` service.
 
 ## Backlog Handoff
 
@@ -169,7 +169,7 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
 | S-02       | browse-summary-list       | List of saved summaries                        | no                    | Waiting on S-01                              |
 | S-03       | delete-summary            | Delete a summary                               | no                    | Waiting on S-01; FR-007 nice-to-have         |
 | S-04       | delete-account            | Delete account + all data (GDPR)               | planned               | Plan written + reviewed (**SOUND**, 2026-07-11). Ready for `/10x-implement delete-account phase 1`. |
-| S-05       | summary-credits           | Credit budget for summary generation           | plan_reviewed         | Plan written + brief, reviewed **SOUND** after triage (all 4 findings fixed, 2026-07-11), 4 phases. Enforcement wires into the F-02 probe endpoint now; S-01 reuses the `credits` service. Ready for `/10x-implement summary-credits phase 1`. |
+| S-05       | summary-credits           | Credit budget for summary generation           | implemented           | All 4 phases implemented + verified (automated + manual E2E) on branch `chore/summary-credits`, 2026-07-13 (Linear MAR-11). DB migrations pushed to cloud. Remaining: PR/merge → `master` (CI deploy) + `/10x-archive`. |
 
 ## Open Roadmap Questions
 
