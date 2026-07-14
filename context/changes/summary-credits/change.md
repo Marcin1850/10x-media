@@ -74,19 +74,42 @@ in `astro.config.mjs`. Behaviour-preserving (workerd has global `fetch`; supadat
 fallback); lint/build/prettier green. **2.7 (signed-out → 401) verified via curl** post-fix; 2.4–2.6
 + P3 still need the user's live/browser run (restart the dev server first to load the config change).
 
-### Deploy / config TODO (not done here)
+### Deploy / config status — corrected 2026-07-14 against the live cloud project
 
-- All five new migrations are applied **locally only** — run `npx supabase db push` to apply them to
-  the cloud project:
-  - `20260712175240_user_credits.sql` — table, RLS, `spend_credit()`, signup trigger, backfill
-  - `20260712182527_grant_table_privileges.sql` — table grants
-  - `20260714094500_grant_credits_rpc.sql` — atomic operator `grant_credits()` RPC (impl-review F1)
-  - `20260714101500_assert_least_privilege.sql` — revoke-then-grant least privilege (impl-review F2)
-  - `20260714113000_rename_credits_signup_trigger.sql` — feature-specific signup trigger/function
-    names (impl-review F8)
-- Until `db push` runs, prod has no `user_credits` table. This is also why `npm run db:sync-from-prod`
-  does not yet hit the trigger/PK collision described in impl-review F3 — that breakage is latent and
-  activates on the first push.
+**Verified via `npx supabase migration list` + `npx supabase db dump` against project
+`ukbptccdffiigkdekzcn`.** The first two migrations were pushed on 2026-07-12; three remain pending:
+
+| Migration                                        | Origin                                      | Cloud state    |
+| ------------------------------------------------ | ------------------------------------------- | -------------- |
+| `20260712175240_user_credits.sql`                | table, RLS, `spend_credit()`, trigger, backfill | **pushed** 2026-07-12 |
+| `20260712182527_grant_table_privileges.sql`      | table grants                                | **pushed** 2026-07-12 |
+| `20260714094500_grant_credits_rpc.sql`           | atomic operator `grant_credits()` RPC (F1)  | pending        |
+| `20260714101500_assert_least_privilege.sql`      | revoke-then-grant least privilege (F2)      | pending        |
+| `20260714113000_rename_credits_signup_trigger.sql` | feature-specific trigger/function names (F8) | pending      |
+
+**Correction to an error chain that ran through F3 → F5 → the 2026-07-14 roadmap/Linear sync.** This
+file, `roadmap.md`, and Linear MAR-11 all previously claimed the migrations were local-only and that
+prod had no `user_credits` table. That was **false**, and the original roadmap line ("DB migrations
+pushed to the cloud project") was right all along. The error originated in impl-review **F3's**
+evidence correction, which asserted prod had no table **without querying prod**; **F5** then
+"reconciled" the documents to that false state, and the sync commit `27e93d9` propagated it further.
+Root cause: an assertion about a remote system was accepted from local evidence alone.
+
+Consequences of the correction:
+
+- **F3's collision is live, not latent.** Prod has `user_credits`, so a prod dump includes it and
+  `npm run db:sync-from-prod` has been broken since 2026-07-12. The `session_replication_role` fix in
+  `10f91f4` handles it; only the "latent, activates on first push" framing was wrong.
+- **F2's evidence correction was local-only and does not hold on prod.** Cloud default privileges
+  granted `ALL` on all three app tables to **both** `anon` and `authenticated`, plus
+  `GRANT ALL ON FUNCTION public.spend_credit() TO anon` — so the "function half does not hold; no
+  surviving `anon` grant" conclusion is true locally and false on prod. Not exploitable (RLS has no
+  UPDATE policy; `spend_credit()` as `anon` resolves `auth.uid()` to null and touches no row), but the
+  defense-in-depth case is stronger on prod than the review believed. `assert_least_privilege` is
+  revoke-then-grant, so it asserts the correct end state regardless of the differing start.
+- **F8's clobber blind spot is closed.** Prod's `public.handle_new_user()` body is ours (it seeds
+  `user_credits`), so migration `20260712175240` did not overwrite unrelated automation on push.
+
 - Add `SUPABASE_SERVICE_ROLE_KEY` to the local `.env` (the `service_role` key from
   `npx supabase status` / dashboard → Settings → API) before running `npm run grant-credits`.
 
@@ -97,12 +120,12 @@ All 8 findings (5 warnings, 3 observations; 0 critical) triaged and fixed in `10
 Three of the fixes added migrations (F1 `grant_credits()` RPC, F2 least-privilege assertion, F8
 signup-trigger rename), taking the change's migration count to 5.
 
-### Roadmap / Linear sync (done 2026-07-14)
+### Roadmap / Linear sync (done 2026-07-14, corrected same day)
 
-- `context/foundation/roadmap.md`: S-05 Status + Backlog Handoff synced to triage-complete /
-  5 migrations / local-only. Note `roadmap.md:160` had survived the F5 documentation pass still
-  claiming migrations were "pushed to the cloud project" — F5 corrected only the Backlog Handoff row
-  at `:172`. Both now state local-only.
+- `context/foundation/roadmap.md`: S-05 Status + Backlog Handoff synced to triage-complete.
+  The first pass (`27e93d9`) wrongly rewrote both lines to "local-only" on the strength of F5's
+  reconciliation; corrected against the live project to 2 pushed / 3 pending — see the Deploy /
+  config status section above.
 - Linear **MAR-11**: description synced (same false "pushed to cloud" line removed) + completion
   comment posted. Status left **In Progress** deliberately — the slice is not done until `db push`
   and the merge to `master` land.

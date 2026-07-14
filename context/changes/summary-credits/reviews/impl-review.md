@@ -142,6 +142,40 @@ Left column is the verdict as reviewed on 2026-07-13; right column is the state 
 - **Decision**: FIXED — added `supabase/migrations/20260714113000_rename_credits_signup_trigger.sql` (fix-forward, user-selected over editing the never-pushed original in place; keeps the local test users the F1–F3 verifications depend on and stays consistent with how F1/F2 were handled). Installs `handle_new_user_credits()` / `on_auth_user_credits_created`, then drops the generic pair with **RESTRICT semantics deliberately** (`drop function if exists public.handle_new_user()` without `cascade`) so that if anything unexpected still depends on the generic function the migration fails loudly instead of silently deleting another feature's automation — the exact failure mode this finding is about. Verified locally: migration applied; end state is exactly `handle_new_user_credits` + `on_auth_user_credits_created` with both generic names gone; and the rename is behaviour-preserving — a throwaway `auth.users` insert still seeds `balance = 5`, with the transaction rolled back (DB back to 2 users, balances untouched). Triggers fire in name order, so a future `on_auth_user_profiles_created` can now coexist rather than collide.
   - **Residual blind spot**: the full migration chain has not been replayed from scratch — `npx supabase db reset` would prove it but wipes the local test users, so it was not run unilaterally. The first `db push` will be the first end-to-end replay. Reasoning holds (the rename only depends on `public.user_credits` from `20260712175240` and on `auth.users`, both ordered correctly), but it is reasoning, not observation. Hosted out-of-band functions/triggers also remain un-inventoried; if prod *did* carry an unrelated `handle_new_user`, migration `20260712175240` would clobber it on push before this one drops it. Low risk for a project whose roadmap records auth-only cloud state, but unverified.
 
+## Post-triage correction (2026-07-14) — F3/F5 evidence was wrong about prod
+
+Discovered while running `npx supabase db push`. **Two of the five migrations were already live on the
+cloud project** (`20260712175240_user_credits`, `20260712182527_grant_table_privileges`, pushed
+2026-07-12). Verified with `npx supabase migration list` and `npx supabase db dump` against project
+`ukbptccdffiigkdekzcn`: prod has `user_credits`, `spend_credit()`, and `handle_new_user()`.
+
+**The error chain**: F3's evidence correction asserted "prod has no `user_credits` table yet" from
+local evidence alone, never querying prod. F5 then treated that as ground truth and "reconciled"
+`roadmap.md:172` — which had correctly said the migrations were pushed — into the false claim. The
+2026-07-14 sync commit `27e93d9` spread it to `roadmap.md:160`, `change.md`, and Linear MAR-11. The
+review's own habit of demanding observed evidence was applied to every local claim and skipped for the
+one remote claim.
+
+Corrections to the findings above (the fixes all stand; only the evidence changes):
+
+- **F3** — the collision is **live, not latent**. Prod has `user_credits`, so its dump includes the
+  table and `npm run db:sync-from-prod` has been broken since 2026-07-12. The
+  `session_replication_role` fix handles it; the "activates on the first push" framing was wrong.
+- **F2** — the "function half does not hold" conclusion is **local-only and false on prod**. Cloud
+  default privileges granted `ALL` on all three app tables to **both** `anon` and `authenticated`,
+  plus `GRANT ALL ON FUNCTION public.spend_credit() TO anon`. Still not exploitable — RLS exposes no
+  UPDATE policy, and `spend_credit()` as `anon` resolves `auth.uid()` to null and updates no row — but
+  the prod privilege surface is wider than reviewed, which strengthens rather than weakens the fix.
+  Revoke-then-grant asserts the end state, so the migration is correct against the differing start.
+- **F8** — the "hosted out-of-band triggers un-inventoried" blind spot is **closed**: prod's
+  `public.handle_new_user()` body is ours (seeds `user_credits`), so the 2026-07-12 push clobbered
+  nothing.
+- **F5** — the "one consistent state" it established was the wrong state. Documents re-reconciled to
+  2 pushed / 3 pending.
+
+Rule worth carrying: a claim about a remote system requires remote evidence. `migration list` costs
+seconds and would have caught this at F3.
+
 ## Accepted residual risk
 
 The read-gate/post-save-debit concurrency window and fail-open response after a persisted summary match the reviewed plan. The plan explicitly accepts that risk for the closed-registration, single-user MVP and requires revisiting it before registration opens or S-01 broadens generation; it is not counted again as implementation drift.
