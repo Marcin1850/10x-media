@@ -15,8 +15,9 @@ archived_at: null
 
 All 4 phases implemented; each phase committed separately on branch `chore/summary-credits`.
 Automated gates green (`npm run lint`, `npm run build`, `npx supabase migration up`, Prettier).
-`status` is kept `implementing` (not `implemented`) because the user-confirmable manual
-Progress rows in `plan.md` are still open — see breakdown below.
+`status` was kept `implementing` (not `implemented`) **at this date** because the user-confirmable
+manual Progress rows in `plan.md` were still open — see breakdown below. It has since advanced to
+`impl_reviewed` (frontmatter is authoritative).
 
 Commits:
 
@@ -77,7 +78,8 @@ fallback); lint/build/prettier green. **2.7 (signed-out → 401) verified via cu
 ### Deploy / config status — corrected 2026-07-14 against the live cloud project
 
 **Verified via `npx supabase migration list` + `npx supabase db dump` against project
-`ukbptccdffiigkdekzcn`.** The first two migrations were pushed on 2026-07-12; three remain pending:
+`ukbptccdffiigkdekzcn`.** The first two migrations were pushed on 2026-07-12, the remaining four on
+2026-07-14 — nothing is pending:
 
 | Migration                                          | Origin                                          | Cloud state           |
 | -------------------------------------------------- | ----------------------------------------------- | --------------------- |
@@ -129,14 +131,17 @@ Consequences of the correction:
 All 8 findings (5 warnings, 3 observations; 0 critical) triaged and fixed in `10f91f4` — see
 `reviews/impl-review.md` for per-finding decisions and evidence. Every review dimension is now PASS.
 Three of the fixes added migrations (F1 `grant_credits()` RPC, F2 least-privilege assertion, F8
-signup-trigger rename), taking the change's migration count to 5.
+signup-trigger rename), taking the change's migration count to 5 at that point. A sixth
+(`20260714140000_assert_least_privilege_functions.sql`) followed in `b2f3900` to close the F2
+function-grant gap, for **6 in total** — see the Deploy / config status section above.
 
 ### Roadmap / Linear sync (done 2026-07-14, corrected same day)
 
 - `context/foundation/roadmap.md`: S-05 Status + Backlog Handoff synced to triage-complete.
   The first pass (`27e93d9`) wrongly rewrote both lines to "local-only" on the strength of F5's
-  reconciliation; corrected against the live project to 2 pushed / 3 pending — see the Deploy /
-  config status section above.
-- Linear **MAR-11**: description synced (same false "pushed to cloud" line removed) + completion
-  comment posted. Status left **In Progress** deliberately — the slice is not done until `db push`
-  and the merge to `master` land.
+  reconciliation; corrected against the live project — all 6 migrations are pushed, see the
+  Deploy / config status section above.
+- Linear **MAR-11**: description synced + completion comment posted. The first pass also removed the
+  description's "pushed to cloud" line as false — but that line was **correct**, and it has since been
+  restored. Status was left **In Progress** pending `db push` and the merge to `master`; both landed
+  2026-07-14 (`482b686`), and MAR-11 is now **Done**.

@@ -21,6 +21,8 @@ Left column is the verdict as reviewed on 2026-07-13; right column is the state 
 | Pattern Consistency | WARNING   | PASS — F7 `globals` declared explicitly                             |
 | Success Criteria    | FAIL      | PASS — F4 makes `prettier --check .` a real, passing gate           |
 
+> ⚠️ **Superseded — see [Post-triage correction](#post-triage-correction-2026-07-14--f3f5-evidence-was-wrong-about-prod) below.** The "local-only" premise in the paragraph that follows is **false**: two migrations were already live on prod when this was written, and all six are live as of 2026-07-14. The findings and fixes stand; only the evidence changed. The original text is kept as written because the error chain it belongs to is the point.
+
 **Open items are deployment, not code**: all five migrations remain local-only, so `npx supabase db push` is the gate before merge. The push is also the first end-to-end replay of the migration chain and the point at which F3's latent sync collision activates (already fixed in `sync-prod-to-local.mjs`, not yet exercised against a real dump).
 
 ## Verification
@@ -171,7 +173,8 @@ Corrections to the findings above (the fixes all stand; only the evidence change
   `public.handle_new_user()` body is ours (seeds `user_credits`), so the 2026-07-12 push clobbered
   nothing.
 - **F5** — the "one consistent state" it established was the wrong state. Documents re-reconciled to
-  2 pushed / 3 pending.
+  2 pushed / 3 pending, which was accurate that morning; the remaining four were pushed later the same
+  day, so the end state is **all 6 live**.
 
 Rule worth carrying: a claim about a remote system requires remote evidence. `migration list` costs
 seconds and would have caught this at F3.
