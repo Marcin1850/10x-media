@@ -176,6 +176,28 @@ Corrections to the findings above (the fixes all stand; only the evidence change
 Rule worth carrying: a claim about a remote system requires remote evidence. `migration list` costs
 seconds and would have caught this at F3.
 
+### The false evidence had already cost a real fix (found 2026-07-14, post-push)
+
+F2's stated fix was to revoke `spend_credit()` execution from `public`/`anon` **and** tighten the table
+grants. Only the table half shipped — the function half was dropped during implementation *because*
+the local ACL check showed no `anon` grant to revoke. Post-push verification against prod found
+`GRANT ALL ON FUNCTION public.spend_credit() TO anon` still standing after `assert_least_privilege`
+had supposedly asserted least privilege. Not exploitable (`auth.uid()` is null for `anon`, so the call
+decrements nothing), but it is the exact defense-in-depth gap F2 was raised to close, left open by
+reasoning from the wrong environment.
+
+Closed by `20260714140000_assert_least_privilege_functions.sql`: `spend_credit()` is now
+`authenticated`-only, `handle_new_user_credits()` is trigger-only, and the cloud
+`ALTER DEFAULT PRIVILEGES ... GRANT ALL ... TO anon` entries that produced the grant in the first
+place are revoked, so the assertion no longer decays as the schema grows. Verified locally before the
+push (trigger still seeds 5; `authenticated` still spends 5→4; `anon` gets `permission denied for
+function spend_credit`) and on prod after it (`db dump` shows no `anon` grant on any app object and no
+`TO anon` default-privilege line remaining).
+
+Second-order lesson: when evidence turns out to be wrong, re-check what was **decided** on it, not just
+what was **written** about it. The F3/F5 correction fixed the documents; the scoped-down F2 fix was the
+thing that actually mattered.
+
 ## Accepted residual risk
 
 The read-gate/post-save-debit concurrency window and fail-open response after a persisted summary match the reviewed plan. The plan explicitly accepts that risk for the closed-registration, single-user MVP and requires revisiting it before registration opens or S-01 broadens generation; it is not counted again as implementation drift.

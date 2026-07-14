@@ -79,13 +79,20 @@ fallback); lint/build/prettier green. **2.7 (signed-out → 401) verified via cu
 **Verified via `npx supabase migration list` + `npx supabase db dump` against project
 `ukbptccdffiigkdekzcn`.** The first two migrations were pushed on 2026-07-12; three remain pending:
 
-| Migration                                        | Origin                                      | Cloud state    |
-| ------------------------------------------------ | ------------------------------------------- | -------------- |
-| `20260712175240_user_credits.sql`                | table, RLS, `spend_credit()`, trigger, backfill | **pushed** 2026-07-12 |
-| `20260712182527_grant_table_privileges.sql`      | table grants                                | **pushed** 2026-07-12 |
-| `20260714094500_grant_credits_rpc.sql`           | atomic operator `grant_credits()` RPC (F1)  | pending        |
-| `20260714101500_assert_least_privilege.sql`      | revoke-then-grant least privilege (F2)      | pending        |
-| `20260714113000_rename_credits_signup_trigger.sql` | feature-specific trigger/function names (F8) | pending      |
+| Migration                                          | Origin                                          | Cloud state           |
+| -------------------------------------------------- | ----------------------------------------------- | --------------------- |
+| `20260712175240_user_credits.sql`                  | table, RLS, `spend_credit()`, trigger, backfill | **pushed** 2026-07-12 |
+| `20260712182527_grant_table_privileges.sql`        | table grants                                    | **pushed** 2026-07-12 |
+| `20260714094500_grant_credits_rpc.sql`             | atomic operator `grant_credits()` RPC (F1)      | **pushed** 2026-07-14 |
+| `20260714101500_assert_least_privilege.sql`        | revoke-then-grant least privilege, tables (F2)  | **pushed** 2026-07-14 |
+| `20260714113000_rename_credits_signup_trigger.sql` | feature-specific trigger/function names (F8)    | **pushed** 2026-07-14 |
+| `20260714140000_assert_least_privilege_functions.sql` | function grants + default privileges (F2 gap) | **pushed** 2026-07-14 |
+
+**All 6 migrations are live on cloud as of 2026-07-14** — local and remote histories match
+(`npx supabase migration list`). Post-push state verified by `db dump`: `anon` holds nothing on the
+app tables or their functions; `authenticated` is SELECT-only on `user_credits` and CRUD on
+`videos`/`summaries`; `grant_credits()` is `service_role`-only; `handle_new_user_credits` /
+`on_auth_user_credits_created` are the only signup objects.
 
 **Correction to an error chain that ran through F3 → F5 → the 2026-07-14 roadmap/Linear sync.** This
 file, `roadmap.md`, and Linear MAR-11 all previously claimed the migrations were local-only and that
@@ -106,7 +113,11 @@ Consequences of the correction:
   surviving `anon` grant" conclusion is true locally and false on prod. Not exploitable (RLS has no
   UPDATE policy; `spend_credit()` as `anon` resolves `auth.uid()` to null and touches no row), but the
   defense-in-depth case is stronger on prod than the review believed. `assert_least_privilege` is
-  revoke-then-grant, so it asserts the correct end state regardless of the differing start.
+  revoke-then-grant, so it asserted the correct **table** end state regardless of the differing start.
+  Its **function** half had been dropped during implementation *because of* the false local evidence,
+  so `anon` kept EXECUTE on `spend_credit()` on prod even after that migration —
+  caught by post-push verification and closed by `20260714140000` (which also revokes the cloud
+  default privileges that granted it, so future tables/functions no longer re-grant `anon`).
 - **F8's clobber blind spot is closed.** Prod's `public.handle_new_user()` body is ours (it seeds
   `user_credits`), so migration `20260712175240` did not overwrite unrelated automation on push.
 
