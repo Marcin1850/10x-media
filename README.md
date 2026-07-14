@@ -1,8 +1,8 @@
-# 10x Astro Starter
+# 10xMedia
 
-![](./public/template.png)
+![10xMedia](./public/banner.png)
 
-A modern, opinionated starter template for building fast, accessible web applications.
+Turn a list of YouTube videos into summaries you can skim, so you can decide what's actually worth watching. Summaries are generated in Polish and adapted to the character of the channel (informational vs. educational).
 
 ## Tech Stack
 
@@ -11,6 +11,8 @@ A modern, opinionated starter template for building fast, accessible web applica
 - [TypeScript](https://www.typescriptlang.org/) v5 - Type-safe JavaScript
 - [Tailwind CSS](https://tailwindcss.com/) v4 - Utility-first CSS framework
 - [Supabase](https://supabase.com/) - Authentication and backend-as-a-service
+- [Supadata](https://supadata.ai/) - YouTube transcript fetching
+- [OpenRouter](https://openrouter.ai/) - LLM gateway used for summarization
 - [Cloudflare Workers](https://workers.cloudflare.com/) - Edge deployment runtime
 
 ## Prerequisites
@@ -18,13 +20,24 @@ A modern, opinionated starter template for building fast, accessible web applica
 - Node.js v22.14.0 (as specified in `.nvmrc`)
 - npm (comes with Node.js)
 
+### Accounts and API keys
+
+| Service                               | Required for               | Account needed?                                                     |
+| ------------------------------------- | -------------------------- | ------------------------------------------------------------------- |
+| [Supabase](https://supabase.com/)     | Auth, database             | Only for a hosted project — the local Docker stack needs no account |
+| [Supadata](https://supadata.ai/)      | Fetching video transcripts | **Yes** — free tier available                                       |
+| [OpenRouter](https://openrouter.ai/)  | Generating summaries       | **Yes** — pay-as-you-go, requires credit                            |
+| [Cloudflare](https://cloudflare.com/) | Deployment only            | Only to deploy; not needed for local dev                            |
+
+Auth works without Supadata and OpenRouter keys, but summary generation stays disabled — the app detects missing keys at runtime (`src/lib/config-status.ts`) and surfaces a notice instead of failing on a paid call.
+
 ## Getting Started
 
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/przeprogramowani/10x-astro-starter.git
-cd 10x-astro-starter
+git clone https://github.com/Marcin1850/10x-media.git
+cd 10x-media
 ```
 
 2. Install dependencies:
@@ -35,19 +48,23 @@ npm install
 
 3. Set up Supabase and configure environment variables — see [Supabase Configuration](#supabase-configuration) below.
 
-4. Create a `.dev.vars` file for local Cloudflare dev secrets:
+4. Add your Supadata and OpenRouter keys — see [Supadata Configuration](#supadata-configuration) and [OpenRouter Configuration](#openrouter-configuration).
+
+5. Create a `.dev.vars` file for local Cloudflare dev secrets:
 
 ```bash
 cp .env.example .dev.vars
 ```
 
-5. Run the development server:
+6. Run the development server:
 
 ```bash
 npm run dev
 ```
 
 The app is served at **http://localhost:4321**.
+
+> Secrets live in **two** files: `.env` (Node scripts) and `.dev.vars` (Cloudflare local dev). Keep them in sync — the dev server reads `.dev.vars`, so a key added only to `.env` will look "missing" in the app.
 
 ## Available Scripts
 
@@ -57,6 +74,8 @@ The app is served at **http://localhost:4321**.
 - `npm run lint` - Run ESLint with type-checked rules
 - `npm run lint:fix` - Auto-fix ESLint issues
 - `npm run format` - Run Prettier
+- `npm run grant-credits` - Grant summary credits to a user (operator-only, see [Summary credits](#summary-credits))
+- `npm run db:sync-from-prod` - Copy production data into the local Supabase stack
 
 ## Project Structure
 
@@ -67,14 +86,40 @@ The app is served at **http://localhost:4321**.
 │ ├── pages/ # Astro pages
 │ │ └── api/ # API endpoints
 │ ├── components/ # UI components (Astro & React)
-│ └── assets/ # Static assets
+│ ├── lib/ # Services and business logic
+│ │ └── services/ # Transcript (Supadata) and LLM (OpenRouter) clients
+│ ├── styles/ # Global styles
+│ └── middleware.ts # Auth resolution and route protection
+├── supabase/migrations/ # Database migrations
+├── scripts/ # Offline operator scripts
 ├── public/ # Public assets
 ├── wrangler.jsonc # Cloudflare Workers config
 ```
 
+## Environment variables
+
+All variables are declared via Astro's `astro:env` schema (`astro.config.mjs`) and are treated as **server-only secrets** — they are never exposed to the client.
+
+| Variable                    | Purpose                                                          |
+| --------------------------- | ---------------------------------------------------------------- |
+| `SUPABASE_URL`              | Supabase project URL                                             |
+| `SUPABASE_KEY`              | Supabase `anon` public key                                       |
+| `SUPADATA_API_KEY`          | Supadata API key (transcripts)                                   |
+| `OPENROUTER_API_KEY`        | OpenRouter API key (summarization)                               |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service-role key — account deletion and offline operator scripts |
+
+Copy `.env.example` to both `.env` and `.dev.vars` and fill in the values.
+
+`SUPABASE_SERVICE_ROLE_KEY` bypasses RLS, so it is only ever read from `astro:env/server` inside server code (`src/lib/supabase-admin.ts`) and never reaches an island or the browser. It has two consumers:
+
+- **`POST /api/account/delete`** (Worker runtime) — deleting an `auth.users` record requires the service-role key; the anon SSR client cannot do it. Without this secret the endpoint returns `503` and account deletion is unavailable.
+- **`npm run grant-credits`** (offline, your machine) — reads it from `.env`.
+
+Both need it, so it must be set locally **and** as a Worker secret in production.
+
 ## Supabase Configuration
 
-This project uses [Supabase](https://supabase.com/) for authentication. Environment variables are declared via Astro's `astro:env` schema and are treated as **server-only secrets** — they are never exposed to the client.
+This project uses [Supabase](https://supabase.com/) for authentication and data storage.
 
 ### First-time setup (local, no cloud project needed)
 
@@ -169,6 +214,37 @@ Users can then sign in immediately after sign-up without clicking a confirmation
 
 Route protection is handled in `src/middleware.ts`. Add paths to the `PROTECTED_ROUTES` array there to require authentication.
 
+## Supadata Configuration
+
+[Supadata](https://supadata.ai/) fetches YouTube transcripts, which are the input to summarization. There is no local substitute — you need an account and a key even for local development.
+
+1. Sign up at [supadata.ai](https://supadata.ai/).
+2. Create an API key in the dashboard.
+3. Add it to both `.env` and `.dev.vars`:
+
+```
+SUPADATA_API_KEY=<your-key>
+```
+
+Supadata offers a free tier that is sufficient for development. Transcripts are requested in Polish (`lang: "pl"`) with `mode: "auto"`; when a video needs Whisper transcription the API returns a job, which `src/lib/services/transcript.ts` polls with exponential backoff. Videos with no obtainable transcript are reported as unavailable rather than failing the request.
+
+## OpenRouter Configuration
+
+[OpenRouter](https://openrouter.ai/) is the LLM gateway used to generate summaries. It is a **paid** service — calls consume real credit.
+
+1. Sign up at [openrouter.ai](https://openrouter.ai/).
+2. Add credit to your account (summarization will not run on a zero balance).
+3. Create a key under **Keys**.
+4. Add it to both `.env` and `.dev.vars`:
+
+```
+OPENROUTER_API_KEY=<your-key>
+```
+
+The model is pinned in `src/lib/services/llm.ts` (`anthropic/claude-sonnet-5`). Because each summary costs money, the app guards generation behind the credit system described below — the server refuses to call OpenRouter when a user is out of credits.
+
+> Consider setting a spend limit on your OpenRouter key while developing.
+
 ## Summary credits
 
 Each user has a small credit budget that guards the paid transcript/LLM pipeline. Every account starts with **5 credits**, a successful summary spends **1 credit**, and generation is blocked server-side at **0 credits** before any paid call is made. Refills are **manual-only** — there is no self-serve top-up.
@@ -180,11 +256,11 @@ npm run grant-credits -- <email> <amount>
 # e.g. npm run grant-credits -- user@example.com 5
 ```
 
-This uses the Supabase **service-role** key (which bypasses RLS) and must never be wired into the Worker runtime. Set `SUPABASE_SERVICE_ROLE_KEY` in your `.env` — the `service_role` key from `npx supabase status` (local) or the dashboard → **Settings → API**.
+This script runs offline on your machine and reads the Supabase **service-role** key (which bypasses RLS) from `.env`. Set `SUPABASE_SERVICE_ROLE_KEY` there — the `service_role` key from `npx supabase status` (local) or the dashboard → **Settings → API**. See [Environment variables](#environment-variables) for the key's other consumer.
 
 ## Deployment
 
-This project deploys to [Cloudflare Workers](https://workers.cloudflare.com/).
+This project deploys to [Cloudflare Workers](https://workers.cloudflare.com/). Pushes to `master` deploy automatically via GitHub Actions (see [CI](#ci)); the steps below are for deploying manually.
 
 1. Build the project:
 
@@ -198,11 +274,34 @@ npm run build
 npx wrangler deploy
 ```
 
-Set `SUPABASE_URL` and `SUPABASE_KEY` as secrets in your Cloudflare dashboard or via `npx wrangler secret put`.
+Set all four runtime secrets in your Cloudflare dashboard or via `npx wrangler secret put`:
+
+```bash
+npx wrangler secret put SUPABASE_URL
+npx wrangler secret put SUPABASE_KEY
+npx wrangler secret put SUPADATA_API_KEY
+npx wrangler secret put OPENROUTER_API_KEY
+npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+```
+
+`SUPABASE_SERVICE_ROLE_KEY` is required in production: `POST /api/account/delete` needs it to remove the `auth.users` record. Skip it and account deletion returns `503` — the rest of the app keeps working, so the gap is easy to miss.
+
+Worker secrets are configured on Cloudflare, not injected by the deploy pipeline — adding a key to GitHub alone will not make it available at runtime.
 
 ## CI
 
-GitHub Actions runs lint + build on every push and PR to `master`. Configure `SUPABASE_URL` and `SUPABASE_KEY` as repository secrets in GitHub for the build step.
+GitHub Actions (`.github/workflows/ci.yml`) runs lint + build on every push and PR to `master`, then deploys to Cloudflare Workers on pushes to `master`.
+
+Required repository secrets:
+
+| Secret                  | Used by     |
+| ----------------------- | ----------- |
+| `SUPABASE_URL`          | Build step  |
+| `SUPABASE_KEY`          | Build step  |
+| `CLOUDFLARE_API_TOKEN`  | Deploy step |
+| `CLOUDFLARE_ACCOUNT_ID` | Deploy step |
+
+The build does not need the Supadata or OpenRouter keys — every variable in the `astro:env` schema is declared `optional`, so the build succeeds without them.
 
 ## License
 
