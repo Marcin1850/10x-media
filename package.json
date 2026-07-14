@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "db:sync-from-prod": "node scripts/sync-prod-to-local.mjs"
+    "db:sync-from-prod": "node scripts/sync-prod-to-local.mjs",
+    "grant-credits": "node --env-file=.env scripts/grant-credits.mjs"
   },
   "dependencies": {
     "@astrojs/check": "^0.9.8",
@@ -50,6 +51,7 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-compiler": "^19.1.0-rc.2",
     "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^16.5.0",
     "husky": "9.1.7",
     "lint-staged": "^16.3.3",
     "prettier": "^3.8.3",

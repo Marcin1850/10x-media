@@ -1,4 +1,5 @@
 // @ts-check
+import { fileURLToPath } from "node:url";
 import { defineConfig, envField } from "astro/config";
 
 import react from "@astrojs/react";
@@ -12,6 +13,22 @@ export default defineConfig({
   integrations: [react(), sitemap()],
   vite: {
     plugins: [tailwindcss()],
+    resolve: {
+      alias: {
+        // `@supadata/js` depends on `cross-fetch` (CommonJS), which the workerd dev module runner
+        // can't evaluate (`exports is not defined`). workerd provides a global `fetch`, so alias it
+        // to a native-fetch ESM shim — behaviour-preserving in dev and prod. See the shim for why.
+        "cross-fetch": fileURLToPath(new URL("./src/lib/shims/cross-fetch.mjs", import.meta.url)),
+      },
+    },
+    ssr: {
+      // Exclude `@supadata/js` from the dev dep-optimizer (it's incompatible — the optimizer can't
+      // pre-bundle it for the workerd env) so Vite serves its source and the `cross-fetch` alias
+      // above resolves inside it.
+      optimizeDeps: {
+        exclude: ["@supadata/js"],
+      },
+    },
   },
   adapter: cloudflare(),
   env: {

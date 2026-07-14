@@ -47,19 +47,15 @@ function run(cmd, cmdArgs, opts = {}) {
 
 // Find the running local Supabase Postgres container (project-agnostic).
 function findLocalDbContainer() {
-  const res = spawnSync(
-    "docker",
-    ["ps", "--filter", "name=supabase_db_", "--format", "{{.Names}}"],
-    { encoding: "utf8" },
-  );
+  const res = spawnSync("docker", ["ps", "--filter", "name=supabase_db_", "--format", "{{.Names}}"], {
+    encoding: "utf8",
+  });
   if (res.error) {
     throw new Error("Could not run `docker` — is Docker Desktop running?");
   }
   const name = (res.stdout || "").trim().split(/\r?\n/).filter(Boolean)[0];
   if (!name) {
-    throw new Error(
-      "No running `supabase_db_*` container found. Start the local stack first: `npx supabase start`",
-    );
+    throw new Error("No running `supabase_db_*` container found. Start the local stack first: `npx supabase start`");
   }
   return name;
 }
@@ -98,10 +94,28 @@ function restore(container) {
       { stdio: ["pipe", "inherit", "inherit"] },
     );
     child.on("error", reject);
-    child.on("close", (code) =>
-      code === 0 ? resolve() : reject(new Error(`psql restore exited with code ${code}`)),
-    );
-    createReadStream(dumpFile).pipe(child.stdin);
+    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`psql restore exited with code ${code}`))));
+
+    // The dump carries auth.users AND public.user_credits. Restoring auth.users fires
+    // on_auth_user_created, which seeds a credits row, and the dumped user_credits rows then
+    // collide on the primary key — failing the whole restore. Suppress triggers for the restore
+    // session so prod balances land verbatim instead of being reseeded to the default.
+    //
+    // Disabling just on_auth_user_created is not possible here: auth.users is owned by
+    // supabase_auth_admin, so `alter table auth.users disable trigger` fails as postgres. Blanket
+    // suppression is what pg_restore --disable-triggers does for data-only restores anyway.
+    //
+    // Caveat: this also suspends FK constraint triggers, so the restore trusts the dump's integrity
+    // (it is a self-consistent snapshot of prod). Scope is this psql session only, and the restore
+    // is a single transaction, so a failure rolls back to normal trigger behaviour.
+    const dump = createReadStream(dumpFile);
+    dump.on("error", reject);
+    child.stdin.write("set session_replication_role = replica;\n");
+    dump.pipe(child.stdin, { end: false });
+    dump.on("end", () => {
+      child.stdin.write("\nset session_replication_role = origin;\n");
+      child.stdin.end();
+    });
   });
 }
 
@@ -172,7 +186,10 @@ async function main() {
     "-c",
     "select 'auth.users' as tbl, count(*) from auth.users " +
       "union all select 'public.videos', count(*) from public.videos " +
-      "union all select 'public.summaries', count(*) from public.summaries;",
+      "union all select 'public.summaries', count(*) from public.summaries " +
+      // user_credits should match auth.users 1:1 — a shortfall means the restore reseeded balances
+      // instead of carrying prod's over, which the trigger suppression above exists to prevent.
+      "union all select 'public.user_credits', count(*) from public.user_credits;",
   ]);
 }
 

@@ -1,7 +1,29 @@
 ---
 import Layout from "@/layouts/Layout.astro";
+import { createClient } from "@/lib/supabase";
+import { getBalance } from "@/lib/services/credits";
 
 const { user } = Astro.locals;
+
+// RLS-scoped read of the signed-in user's own credit balance. `null` when the row is missing,
+// Supabase isn't configured, or the read failed — rendered as "—" below rather than a misleading 0.
+let credits: number | null = null;
+if (user) {
+  const supabase = createClient(Astro.request.headers, Astro.cookies);
+  if (supabase) {
+    try {
+      // createClient returns supabase-js's default untyped client (no generated Database types yet),
+      // so passing it where the service expects its explicit shapes is an unavoidable `any` gap.
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+      credits = await getBalance(supabase, user.id);
+    } catch (err) {
+      // Display-only: this balance is never the enforcement gate (that lives in the generation
+      // endpoint, where getBalance must keep throwing), so a DB blip must not fail the page.
+      // eslint-disable-next-line no-console
+      console.error("dashboard: credit balance read failed", err);
+    }
+  }
+}
 ---
 
 <Layout title="Dashboard">
@@ -14,6 +36,10 @@ const { user } = Astro.locals;
         Welcome, <span class="font-semibold text-white">{user?.email}</span>
       </p>
       <p class="mt-2 text-sm text-blue-100/50">This page is only for authenticated users.</p>
+      <div class="mt-6 rounded-xl border border-white/10 bg-white/5 px-6 py-4">
+        <p class="text-3xl font-bold text-white">{credits ?? "—"}</p>
+        <p class="mt-1 text-xs tracking-wide text-blue-100/60 uppercase">summary credits left</p>
+      </div>
       <a
         href="/account"
         class="mt-6 inline-block rounded-lg border border-white/20 bg-white/10 px-4 py-2 text-sm transition-colors hover:bg-white/20"

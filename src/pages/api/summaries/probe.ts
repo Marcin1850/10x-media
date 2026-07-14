@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase";
 import { fetchTranscript } from "@/lib/services/transcript";
 import { summarize } from "@/lib/services/llm";
 import { extractYoutubeId, upsertVideoAndAppendSummary } from "@/lib/services/summaries";
+import { getBalance, spendCredit } from "@/lib/services/credits";
 
 export const prerender = false;
 
@@ -35,6 +36,21 @@ export const POST: APIRoute = async (context) => {
     return Response.json({ error: "url must be a valid YouTube video URL" }, { status: 400 });
   }
 
+  const supabase = createClient(context.request.headers, context.cookies);
+  if (!supabase) {
+    return Response.json({ error: "Supabase is not configured" }, { status: 503 });
+  }
+
+  // Credit gate: read the caller's balance and block at zero *before* any paid Supadata/OpenRouter
+  // call. createClient returns supabase-js's default untyped client — this codebase has no generated
+  // Database types yet, so passing it where the service expects its explicit shapes is a real,
+  // unavoidable `any` gap (not a fixable unsafe-argument).
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+  const balance = await getBalance(supabase, context.locals.user.id);
+  if (balance === null || balance <= 0) {
+    return Response.json({ error: "You have no summary credits left" }, { status: 402 });
+  }
+
   const transcript = await fetchTranscript({ url, lang: "pl" }, SUPADATA_API_KEY);
   if (!transcript.ok) {
     return Response.json({ error: "Transcript unavailable for this video" }, { status: 422 });
@@ -42,14 +58,6 @@ export const POST: APIRoute = async (context) => {
 
   const { text, model } = await summarize({ transcript: transcript.content, character }, OPENROUTER_API_KEY);
 
-  const supabase = createClient(context.request.headers, context.cookies);
-  if (!supabase) {
-    return Response.json({ error: "Supabase is not configured" }, { status: 503 });
-  }
-
-  // createClient returns supabase-js's default untyped client — this codebase has no generated
-  // Database types yet, so passing it where the service expects its explicit Row/Insert shapes
-  // is a real, unavoidable `any` gap (not a fixable unsafe-argument).
   // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
   const { videoId, summaryId } = await upsertVideoAndAppendSummary(supabase, {
     userId: context.locals.user.id,
@@ -61,5 +69,21 @@ export const POST: APIRoute = async (context) => {
     resolvedVia: transcript.resolvedVia,
   });
 
-  return Response.json({ summary: text, model, videoId, summaryId });
+  // Spend one credit, but only after the summary is persisted. The content already exists, so a
+  // post-save problem must never become an error response: a concurrent drain surfaces as the
+  // insufficient sentinel (reported as 0 remaining), and a genuine DB error is logged and the
+  // remaining balance best-effort re-read — the request still succeeds with the summary.
+  let creditsRemaining: number;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+    const spend = await spendCredit(supabase);
+    creditsRemaining = spend.balance;
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("spend_credit failed after a successful save:", error);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+    creditsRemaining = (await getBalance(supabase, context.locals.user.id).catch(() => null)) ?? 0;
+  }
+
+  return Response.json({ summary: text, model, videoId, summaryId, creditsRemaining });
 };

@@ -258,7 +258,19 @@ Negligible: one indexed primary-key `SELECT` per generation (the gate) and one s
 
 ## Migration Notes
 
-Single additive migration — new table, policy, function, trigger, and a one-time backfill; no changes to existing tables, so no data migration risk. The `SUPABASE_SERVICE_ROLE_KEY` is required **only** for the offline operator script (local `.env`); it is **not** wired into the Worker runtime here. If S-04 (delete-account) later adds the same key to the Astro env schema for its endpoint, that is compatible and independent.
+Planned as a single additive migration — new table, policy, function, trigger, and a one-time backfill; no changes to existing tables, so no data migration risk. The `SUPABASE_SERVICE_ROLE_KEY` is required **only** for the offline operator script (local `.env`); it is **not** wired into the Worker runtime here. If S-04 (delete-account) later adds the same key to the Astro env schema for its endpoint, that is compatible and independent.
+
+**As built (2026-07-14): five migrations**, all still additive and all local-only pending `npx supabase db push`:
+
+| Migration                                        | Origin         | Purpose                                                       |
+| ------------------------------------------------ | -------------- | ------------------------------------------------------------- |
+| `20260712175240_user_credits.sql`                | this plan      | Table, RLS, `spend_credit()`, signup trigger, backfill         |
+| `20260712182527_grant_table_privileges.sql`      | implementation | Table grants for the API roles                                 |
+| `20260714094500_grant_credits_rpc.sql`           | impl-review F1 | Atomic `grant_credits()` RPC; `service_role`-only execute      |
+| `20260714101500_assert_least_privilege.sql`      | impl-review F2 | Revoke-then-grant to make the privilege boundary deterministic |
+| `20260714113000_rename_credits_signup_trigger.sql` | impl-review F8 | Feature-specific signup trigger/function names                 |
+
+`20260714101500` also touches `videos`/`summaries` — beyond this change's nominal boundary, accepted because the additive-`GRANT` defect it fixes is shared across all three tables.
 
 ## References
 
@@ -278,55 +290,55 @@ Single additive migration — new table, policy, function, trigger, and a one-ti
 
 #### Automated
 
-- [ ] 1.1 Migration applies cleanly: `npx supabase migration up`
-- [ ] 1.2 Type checking / lint passes: `npm run lint`
-- [ ] 1.3 Build passes: `npm run build`
+- [x] 1.1 Migration applies cleanly: `npx supabase migration up` — 414ac92
+- [x] 1.2 Type checking / lint passes: `npm run lint` — 414ac92
+- [x] 1.3 Build passes: `npm run build` — 414ac92
 
 #### Manual
 
-- [ ] 1.4 New signup has a `user_credits` row with `balance = 5`
-- [ ] 1.5 Pre-existing user has a backfilled row
-- [ ] 1.6 `spend_credit()` decrements to 0 and then returns the insufficient sentinel without going negative
-- [ ] 1.7 Direct client `UPDATE`/cross-user `SELECT` on `user_credits` is rejected by RLS
+- [x] 1.4 New signup has a `user_credits` row with `balance = 5` — b760320
+- [x] 1.5 Pre-existing user has a backfilled row — b760320
+- [x] 1.6 `spend_credit()` decrements to 0 and then returns the insufficient sentinel without going negative — b760320
+- [x] 1.7 Direct client `UPDATE`/cross-user `SELECT` on `user_credits` is rejected by RLS — b760320
 
 ### Phase 2: Credits service + enforcement in the generation path
 
 #### Automated
 
-- [ ] 2.1 Type checking / lint passes: `npm run lint`
-- [ ] 2.2 Build passes: `npm run build`
-- [ ] 2.3 Prettier clean: `npm run format`
+- [x] 2.1 Type checking / lint passes: `npm run lint` — b6e1601
+- [x] 2.2 Build passes: `npm run build` — b6e1601
+- [x] 2.3 Prettier clean: `npm run format` — b6e1601
 
 #### Manual
 
-- [ ] 2.4 Balance 0 → `402` with no Supadata/OpenRouter call
-- [ ] 2.5 Successful call returns `creditsRemaining` and decrements the row by exactly 1
-- [ ] 2.6 Transcript-422 / LLM error leaves the balance unchanged
-- [ ] 2.7 Signed-out request still returns `401`
+- [x] 2.4 Balance 0 → `402` with no Supadata/OpenRouter call — dfa2e7f
+- [x] 2.5 Successful call returns `creditsRemaining` and decrements the row by exactly 1 — dfa2e7f
+- [x] 2.6 Transcript-422 / LLM error leaves the balance unchanged — dfa2e7f
+- [x] 2.7 Signed-out request still returns `401` — dfa2e7f
 
 ### Phase 3: Balance display on the dashboard
 
 #### Automated
 
-- [ ] 3.1 Type checking / lint passes: `npm run lint`
-- [ ] 3.2 Build passes: `npm run build`
-- [ ] 3.3 Prettier clean: `npm run format`
+- [x] 3.1 Type checking / lint passes: `npm run lint` — a61d781
+- [x] 3.2 Build passes: `npm run build` — a61d781
+- [x] 3.3 Prettier clean: `npm run format` — a61d781
 
 #### Manual
 
-- [ ] 3.4 Dashboard shows the correct current balance
-- [ ] 3.5 Balance display decrements after a successful generation
-- [ ] 3.6 No visual regression to the dashboard / cosmic theme
+- [x] 3.4 Dashboard shows the correct current balance — dfa2e7f
+- [x] 3.5 Balance display decrements after a successful generation — dfa2e7f
+- [x] 3.6 No visual regression to the dashboard / cosmic theme — dfa2e7f
 
 ### Phase 4: Manual refill operator script
 
 #### Automated
 
-- [ ] 4.1 Lint/build unaffected: `npm run lint` && `npm run build`
-- [ ] 4.2 Prettier clean: `npm run format`
+- [x] 4.1 Lint/build unaffected: `npm run lint` && `npm run build` — 49250e6
+- [x] 4.2 Prettier clean: `npm run format` — 49250e6
 
 #### Manual
 
-- [ ] 4.3 `npm run grant-credits -- <email> <n>` raises the balance and prints the new value
-- [ ] 4.4 Bad email / non-positive amount fails cleanly and changes nothing
-- [ ] 4.5 Missing `SUPABASE_SERVICE_ROLE_KEY` fails fast with an actionable message
+- [x] 4.3 `npm run grant-credits -- <email> <n>` raises the balance and prints the new value — b760320
+- [x] 4.4 Bad email / non-positive amount fails cleanly and changes nothing — b760320
+- [x] 4.5 Missing `SUPABASE_SERVICE_ROLE_KEY` fails fast with an actionable message — b760320

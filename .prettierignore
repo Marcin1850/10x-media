@@ -1,0 +1,3 @@
+# Agent-generated process documents (plans, reviews, foundation docs).
+# Formatting them adds churn to every skill write without improving the code.
+context/**
