@@ -3,7 +3,7 @@ change_id: summary-credits
 title: Summary credits
 status: impl_reviewed
 created: 2026-07-11
-updated: 2026-07-13
+updated: 2026-07-14
 archived_at: null
 ---
 
@@ -90,9 +90,19 @@ fallback); lint/build/prettier green. **2.7 (signed-out → 401) verified via cu
 - Add `SUPABASE_SERVICE_ROLE_KEY` to the local `.env` (the `service_role` key from
   `npx supabase status` / dashboard → Settings → API) before running `npm run grant-credits`.
 
-### Roadmap / Linear sync TODO (not done here — per lessons.md)
+### Impl-review triage complete (2026-07-14)
 
-- `context/foundation/roadmap.md`: update slice **S-05** status + Backlog Handoff once manual
-  verification is confirmed.
-- Linear: no S-05 issue ID was available in this session — needs the issue ID to move status +
-  post a completion comment. Held deliberately (external side-effect + verification pending).
+All 8 findings (5 warnings, 3 observations; 0 critical) triaged and fixed in `10f91f4` — see
+`reviews/impl-review.md` for per-finding decisions and evidence. Every review dimension is now PASS.
+Three of the fixes added migrations (F1 `grant_credits()` RPC, F2 least-privilege assertion, F8
+signup-trigger rename), taking the change's migration count to 5.
+
+### Roadmap / Linear sync (done 2026-07-14)
+
+- `context/foundation/roadmap.md`: S-05 Status + Backlog Handoff synced to triage-complete /
+  5 migrations / local-only. Note `roadmap.md:160` had survived the F5 documentation pass still
+  claiming migrations were "pushed to the cloud project" — F5 corrected only the Backlog Handoff row
+  at `:172`. Both now state local-only.
+- Linear **MAR-11**: description synced (same false "pushed to cloud" line removed) + completion
+  comment posted. Status left **In Progress** deliberately — the slice is not done until `db push`
+  and the merge to `master` land.
