@@ -169,7 +169,7 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
 | S-02       | browse-summary-list       | List of saved summaries                        | no                    | Waiting on S-01                              |
 | S-03       | delete-summary            | Delete a summary                               | no                    | Waiting on S-01; FR-007 nice-to-have         |
 | S-04       | delete-account            | Delete account + all data (GDPR)               | planned               | Plan written + reviewed (**SOUND**, 2026-07-11). Ready for `/10x-implement delete-account phase 1`. |
-| S-05       | summary-credits           | Credit budget for summary generation           | impl_reviewed         | Formal review: **NEEDS ATTENTION** (5 warnings + 3 observations pending triage), 2026-07-13 (Linear MAR-11). All 4 phases implemented + manually verified; DB migrations pushed to cloud. Remaining: triage/fix findings, PR/merge → `master` (CI deploy), then `/10x-archive`. |
+| S-05       | summary-credits           | Credit budget for summary generation           | impl_reviewed         | Formal review: **NEEDS ATTENTION** (5 warnings + 3 observations pending triage), 2026-07-13 (Linear MAR-11). All 4 phases implemented + manually verified; the change's 4 DB migrations are applied **locally only** — `npx supabase db push` still pending. Remaining: triage/fix findings, `db push`, PR/merge → `master` (CI deploy), then `/10x-archive`. |
 
 ## Open Roadmap Questions
 

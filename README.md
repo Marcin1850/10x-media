@@ -105,15 +105,21 @@ SUPABASE_URL=http://127.0.0.1:54321
 SUPABASE_KEY=<anon key from CLI output>
 ```
 
-5. To stop the stack when done:
+5. Apply the database migrations:
+
+```bash
+npx supabase migration up
+```
+
+This creates all application tables. Supabase Auth's built-in `auth.users` table is managed separately and needs no migration.
+
+6. To stop the stack when done:
 
 ```bash
 npx supabase stop
 ```
 
 The local Studio UI is available at `http://localhost:54323`.
-
-No database tables or migrations are required — this project uses Supabase Auth's built-in `auth.users` table only.
 
 ### Using a cloud Supabase project instead
 

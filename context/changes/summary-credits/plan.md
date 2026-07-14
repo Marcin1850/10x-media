@@ -258,7 +258,19 @@ Negligible: one indexed primary-key `SELECT` per generation (the gate) and one s
 
 ## Migration Notes
 
-Single additive migration — new table, policy, function, trigger, and a one-time backfill; no changes to existing tables, so no data migration risk. The `SUPABASE_SERVICE_ROLE_KEY` is required **only** for the offline operator script (local `.env`); it is **not** wired into the Worker runtime here. If S-04 (delete-account) later adds the same key to the Astro env schema for its endpoint, that is compatible and independent.
+Planned as a single additive migration — new table, policy, function, trigger, and a one-time backfill; no changes to existing tables, so no data migration risk. The `SUPABASE_SERVICE_ROLE_KEY` is required **only** for the offline operator script (local `.env`); it is **not** wired into the Worker runtime here. If S-04 (delete-account) later adds the same key to the Astro env schema for its endpoint, that is compatible and independent.
+
+**As built (2026-07-14): five migrations**, all still additive and all local-only pending `npx supabase db push`:
+
+| Migration                                        | Origin         | Purpose                                                       |
+| ------------------------------------------------ | -------------- | ------------------------------------------------------------- |
+| `20260712175240_user_credits.sql`                | this plan      | Table, RLS, `spend_credit()`, signup trigger, backfill         |
+| `20260712182527_grant_table_privileges.sql`      | implementation | Table grants for the API roles                                 |
+| `20260714094500_grant_credits_rpc.sql`           | impl-review F1 | Atomic `grant_credits()` RPC; `service_role`-only execute      |
+| `20260714101500_assert_least_privilege.sql`      | impl-review F2 | Revoke-then-grant to make the privilege boundary deterministic |
+| `20260714113000_rename_credits_signup_trigger.sql` | impl-review F8 | Feature-specific signup trigger/function names                 |
+
+`20260714101500` also touches `videos`/`summaries` — beyond this change's nominal boundary, accepted because the additive-`GRANT` defect it fixes is shared across all three tables.
 
 ## References
 

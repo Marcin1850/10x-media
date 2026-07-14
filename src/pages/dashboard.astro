@@ -5,16 +5,23 @@ import { getBalance } from "@/lib/services/credits";
 
 const { user } = Astro.locals;
 
-// RLS-scoped read of the signed-in user's own credit balance. `null` when the row is missing
-// (or Supabase isn't configured) — rendered as "—" below rather than a misleading 0.
+// RLS-scoped read of the signed-in user's own credit balance. `null` when the row is missing,
+// Supabase isn't configured, or the read failed — rendered as "—" below rather than a misleading 0.
 let credits: number | null = null;
 if (user) {
   const supabase = createClient(Astro.request.headers, Astro.cookies);
   if (supabase) {
-    // createClient returns supabase-js's default untyped client (no generated Database types yet),
-    // so passing it where the service expects its explicit shapes is an unavoidable `any` gap.
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-    credits = await getBalance(supabase, user.id);
+    try {
+      // createClient returns supabase-js's default untyped client (no generated Database types yet),
+      // so passing it where the service expects its explicit shapes is an unavoidable `any` gap.
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+      credits = await getBalance(supabase, user.id);
+    } catch (err) {
+      // Display-only: this balance is never the enforcement gate (that lives in the generation
+      // endpoint, where getBalance must keep throwing), so a DB blip must not fail the page.
+      // eslint-disable-next-line no-console
+      console.error("dashboard: credit balance read failed", err);
+    }
   }
 }
 ---

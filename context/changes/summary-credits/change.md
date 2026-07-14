@@ -76,8 +76,17 @@ fallback); lint/build/prettier green. **2.7 (signed-out → 401) verified via cu
 
 ### Deploy / config TODO (not done here)
 
-- Both new migrations (`20260712175240_user_credits.sql`, `20260712182527_grant_table_privileges.sql`)
-  are applied **locally only** — run `npx supabase db push` to apply them to the cloud project.
+- All five new migrations are applied **locally only** — run `npx supabase db push` to apply them to
+  the cloud project:
+  - `20260712175240_user_credits.sql` — table, RLS, `spend_credit()`, signup trigger, backfill
+  - `20260712182527_grant_table_privileges.sql` — table grants
+  - `20260714094500_grant_credits_rpc.sql` — atomic operator `grant_credits()` RPC (impl-review F1)
+  - `20260714101500_assert_least_privilege.sql` — revoke-then-grant least privilege (impl-review F2)
+  - `20260714113000_rename_credits_signup_trigger.sql` — feature-specific signup trigger/function
+    names (impl-review F8)
+- Until `db push` runs, prod has no `user_credits` table. This is also why `npm run db:sync-from-prod`
+  does not yet hit the trigger/PK collision described in impl-review F3 — that breakage is latent and
+  activates on the first push.
 - Add `SUPABASE_SERVICE_ROLE_KEY` to the local `.env` (the `service_role` key from
   `npx supabase status` / dashboard → Settings → API) before running `npm run grant-credits`.
 

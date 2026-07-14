@@ -70,31 +70,15 @@ if (!userId) {
   fail(`No user found with email: ${email}`);
 }
 
-// Read the current balance first so we can report the delta and detect a missing credits row.
-const { data: current, error: readError } = await supabase
-  .from("user_credits")
-  .select("balance")
-  .eq("user_id", userId)
-  .maybeSingle();
+// Increment in the database, not here: a read-then-write would silently overwrite any spend or
+// second grant that lands in between. The RPC raises if the credits row is missing.
+const { data: newBalance, error: grantError } = await supabase.rpc("grant_credits", {
+  target_user_id: userId,
+  amount,
+});
 
-if (readError) {
-  fail(`Failed to read current balance: ${readError.message}`);
-}
-if (!current) {
-  fail(`User ${email} has no user_credits row. It should have been seeded — check the migration/trigger.`);
+if (grantError) {
+  fail(`Failed to grant credits to ${email}: ${grantError.message}`);
 }
 
-const newBalance = current.balance + amount;
-
-const { data: updated, error: updateError } = await supabase
-  .from("user_credits")
-  .update({ balance: newBalance, updated_at: new Date().toISOString() })
-  .eq("user_id", userId)
-  .select("balance")
-  .single();
-
-if (updateError) {
-  fail(`Failed to update balance: ${updateError.message}`);
-}
-
-console.log(`\n✔ Granted ${amount} credit(s) to ${email}: ${current.balance} -> ${updated.balance}`);
+console.log(`\n✔ Granted ${amount} credit(s) to ${email}: ${newBalance - amount} -> ${newBalance}`);
