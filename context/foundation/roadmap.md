@@ -3,7 +3,7 @@ project: "10xMedia"
 version: 1
 status: draft
 created: 2026-06-11
-updated: 2026-07-13
+updated: 2026-07-14
 prd_version: 1
 main_goal: speed
 top_blocker: external
@@ -36,6 +36,7 @@ Watching YouTube videos is time-consuming — when regularly following informati
 | S-03 | delete-summary            | delete a summary                                             | S-01          | FR-007                        | proposed |
 | S-04 | delete-account            | delete their account and all associated data (GDPR)          | F-01          | Access Control, NFR (privacy) | done        |
 | S-05 | summary-credits           | start with 5 credits; each generation spends one             | F-01          | — (cost guardrail)            | done        |
+| S-06 | app-design-system         | use the app through a coherent, production-like UI           | S-02          | — (product polish)            | planned     |
 
 ## Streams
 
@@ -159,6 +160,20 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
 - **Risk:** Low-to-medium risk. Guards the OpenRouter budget against runaway generation. The storage/seeding/refill half depends only on F-01 and can be built independently; only the spend-and-block enforcement needs a call site, which lives in S-01's generation endpoint (and must be server-side so it can't be bypassed from the client). Because an un-credited S-01 exposes the budget, this slice should land **before or together with** S-01, not after it. Manual-only refill keeps scope small for the MVP.
 - **Status:** done — merged to `master` 2026-07-14 (`482b686`), CI green and the Worker auto-deployed. Formal `/10x-impl-review` landed **NEEDS ATTENTION** (2026-07-13: 5 warnings + 3 observations); **all 8 triaged and fixed 2026-07-14** in `10f91f4`, every dimension now PASS (change `summary-credits`, Linear MAR-11). All 4 phases implemented and manually verified. **All 6 DB migrations are live on the cloud project** as of 2026-07-14 (`ukbptccdffiigkdekzcn`) — local and remote histories match, and the post-push privilege state is verified by `db dump`. Pending `/10x-archive`. Enforcement wires into the F-02 probe endpoint now; S-01 reuses the same `credits` service. **Note for future slices:** the push revealed that cloud default privileges grant `ALL` on new tables to `anon`/`authenticated`; `20260714140000` revoked the `anon` half schema-wide, but `authenticated` still gets CRUD on any new table by default — tighten per-table as `user_credits` does.
 
+### S-06: Production-like application design
+
+- **Outcome:** the user works through a coherent, production-like UI instead of the starter template — consistent layout, navigation, typography and states (loading / empty / error) across the auth, generation and summary-list surfaces.
+- **Change ID:** app-design-system
+- **PRD refs:** — (no direct PRD ref; product-polish slice on the existing UI surfaces)
+- **Prerequisites:** S-02
+- **Parallel with:** —
+- **Blockers:** —
+- **Unknowns:**
+  - How far to go — restyle the existing shadcn/ui surfaces vs. adopt a fuller design language (colors, spacing scale, brand)? — Owner: user. Block: no.
+  - Which surfaces are in scope beyond auth + generation + list (e.g. landing page)? — Owner: user. Block: no.
+- **Risk:** Low risk, but ordering matters more than size here. This slice's value is coherence *across* surfaces, so it must run after the surfaces exist: S-01 builds generation, S-02 builds the list. Running it earlier means styling screens that don't exist yet, and contending for the same components in parallel worktrees. S-03 is deliberately not a prerequisite — it lands whenever it lands and inherits the design rather than re-opening this slice. Scope stays presentational — no behavior changes to generation, credits or CRUD. Under the "speed" goal it is deferrable alongside S-03 — polish, not a PRD requirement.
+- **Status:** planned
+
 ## Backlog Handoff
 
 | Roadmap ID | Change ID                 | Suggested issue title                          | Ready for `/10x-plan` | Notes                                       |
@@ -170,6 +185,7 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
 | S-03       | delete-summary            | Delete a summary                               | no                    | Waiting on S-01; FR-007 nice-to-have         |
 | S-04       | delete-account            | Delete account + all data (GDPR)               | done                  | Merged to `master` 2026-07-13 (`78bca68`), Linear MAR-10 → Done. Both phases implemented; Workers Secret set. Manual E2E passed; impl-review NEEDS ATTENTION (2 warnings, 3 observations), triage complete (F1/F3/F4 fixed, F2 skipped baseline drift, F5 tracker sync); lint + build green. Pending `/10x-archive`. |
 | S-05       | summary-credits           | Credit budget for summary generation           | done                  | Merged to `master` 2026-07-14 (`482b686`), CI green + Worker deployed, Linear MAR-11 → Done. Formal review: **NEEDS ATTENTION** (5 warnings + 3 observations), 2026-07-13; **all 8 findings triaged + fixed 2026-07-14** (`10f91f4`), every dimension now PASS. All 4 phases implemented + manually verified. All 6 DB migrations are **live on cloud** (2026-07-14), privilege state verified post-push. Pending `/10x-archive`. |
+| S-06       | app-design-system         | Production-like application design             | no                    | Waiting on S-02 (needs the surfaces it styles to exist); presentational scope only |
 
 ## Open Roadmap Questions
 
