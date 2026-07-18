@@ -43,3 +43,10 @@
 - **Problem**: I'm not able to simply copy/paste multiline command to PowerShell terminal.
 - **Rule**: When giving shell commands on Windows/PowerShell, use curl.exe with PowerShell-friendly quoting instead of the Invoke-WebRequest alias.
 - **Applies to**: implement, impl-review
+
+## Create a new branch when starting a change with /10x-new
+
+- **Context**: Any /10x-new invocation
+- **Problem**: Work lands on master
+- **Rule**: Always create a new branch when /10x-new skill is used
+- **Applies to**: new
