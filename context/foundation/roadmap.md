@@ -3,7 +3,7 @@ project: "10xMedia"
 version: 1
 status: draft
 created: 2026-06-11
-updated: 2026-07-14
+updated: 2026-07-18
 prd_version: 1
 main_goal: speed
 top_blocker: external
@@ -31,7 +31,7 @@ Watching YouTube videos is time-consuming — when regularly following informati
 | ---- | ------------------------- | ------------------------------------------------------------ | ------------- | ----------------------------- | -------- |
 | F-01 | video-summary-schema      | (foundation) video/summary tables with per-user RLS          | —             | Access Control, NFR, FR-006   | done        |
 | F-02 | transcript-llm-probe      | (foundation) transcript→LLM path verified on the Worker      | —             | FR-005, NFR                   | done        |
-| S-01 | generate-and-save-summary | paste URL + pick character → get and save a Polish summary   | F-01, F-02    | US-01, FR-003, FR-004, FR-005 | proposed |
+| S-01 | generate-and-save-summary | paste URL + pick character → get and save a Polish summary   | F-01, F-02    | US-01, FR-003, FR-004, FR-005 | planned  |
 | S-02 | browse-summary-list       | browse the list of saved summaries                           | S-01          | FR-006                        | proposed |
 | S-03 | delete-summary            | delete a summary                                             | S-01          | FR-007                        | proposed |
 | S-04 | delete-account            | delete their account and all associated data (GDPR)          | F-01          | Access Control, NFR (privacy) | done        |
@@ -104,7 +104,7 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
   - How to handle a video without an available transcript (user-facing message, alternative source)? — Owner: user. Block: no.
   - What exact YouTube URL validation rules to apply, and how to communicate validation errors? — Owner: implementation. Block: no.
 - **Risk:** This is the north star — the slice that validates the product's core. It depends on F-02: if the transcript→LLM path fails on the chosen plan, this slice must be re-planned (workaround / Railway) before UI work starts. The open questions about missing transcripts and URL validation do not block planning — they have sensible default fallbacks (a message, input-side validation).
-- **Status:** proposed
+- **Status:** planned — 7-phase plan written 2026-07-18 (`context/changes/generate-and-save-summary/plan.md`). Approach: productionize the F-02 probe pipeline (rename `probe`→`/api/summaries/generate`), add a dashboard generation UI, carry F-02 follow-ups (prompt-engineering, transcript-length guard, upstream-error handling), and add a variable-cost path (>40k transcript chars ⇒ 2 credits via new `spend_credits(amount)` RPC + `allowLong` confirmation). Testing manual-only (Module-3 deferral).
 
 ### S-02: User browses the list of summaries
 
@@ -180,7 +180,7 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
 | ---------- | ------------------------- | ---------------------------------------------- | --------------------- | ------------------------------------------- |
 | F-01       | video-summary-schema      | Data schema: videos/summaries tables + RLS     | done                  | Implemented + impl-reviewed (`impl_reviewed`); pending `/10x-archive`. |
 | F-02       | transcript-llm-probe      | Spike: YouTube transcript → LLM on the Worker  | done                  | De-risk complete — free CF plan sufficient, Railway not needed. Implemented + impl-reviewed (`impl_reviewed`); pending `/10x-archive`. |
-| S-01       | generate-and-save-summary | Generate and save a video summary              | yes                   | Unblocked — F-01 + F-02 both done. `/10x-plan generate-and-save-summary`. Carry F-02 follow-ups: LLM prompt-engineering, transcript-length guard (F2), upstream-error handling (F3). |
+| S-01       | generate-and-save-summary | Generate and save a video summary              | planned               | Plan written 2026-07-18 (7 phases; `context/changes/generate-and-save-summary/plan.md`). Next: `/10x-implement generate-and-save-summary phase 1`. F-02 follow-ups folded in (prompt-engineering, transcript-length guard, upstream-error handling). |
 | S-02       | browse-summary-list       | List of saved summaries                        | no                    | Waiting on S-01                              |
 | S-03       | delete-summary            | Delete a summary                               | no                    | Waiting on S-01; FR-007 nice-to-have         |
 | S-04       | delete-account            | Delete account + all data (GDPR)               | done                  | Merged to `master` 2026-07-13 (`78bca68`), Linear MAR-10 → Done. Both phases implemented; Workers Secret set. Manual E2E passed; impl-review NEEDS ATTENTION (2 warnings, 3 observations), triage complete (F1/F3/F4 fixed, F2 skipped baseline drift, F5 tracker sync); lint + build green. Pending `/10x-archive`. |
