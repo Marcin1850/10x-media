@@ -44,7 +44,7 @@ Verify: sign in, generate a normal video (1 credit spent, Polish summary shown, 
 
 ## Implementation Approach
 
-Build backend-first in curl-verifiable increments, then the UI. Isolate the cross-cutting English-copy cleanup first (smallest, independent). Then: the DB primitive (variable spend), the pure cost policy, the prompt rewrite, the endpoint productionization, the confirmation gate, and finally the dashboard island. Each phase is independently verifiable; the UI phase is the only one requiring a browser.
+Build backend-first in curl-verifiable increments, then the UI. Isolate the cross-cutting English-copy cleanup first (smallest, independent). Then: the DB primitive (variable spend), the pure cost policy, the endpoint productionization, the confirmation gate, and the dashboard island. Prompt engineering comes last because judging and iterating on output quality is manual work and is most useful after the complete generation flow exists. Each phase is independently verifiable; the UI and final prompt-quality phases require manual browser/API checks.
 
 ## Critical Implementation Details
 
@@ -59,7 +59,7 @@ Build backend-first in curl-verifiable increments, then the UI. Isolate the cros
 
 ### Overview
 
-Standardize the only Polish *chrome* to English so the app is consistent with the new English generation UI. Excludes the `llm.ts` system prompts (they produce Polish summaries — handled in Phase 4).
+Standardize the only Polish *chrome* to English so the app is consistent with the new English generation UI. Excludes the `llm.ts` system prompts (they produce Polish summaries — handled in Phase 7).
 
 ### Changes Required:
 
@@ -198,51 +198,17 @@ Add the pure length→cost policy the endpoint will use to decide 1 vs 2 credits
 
 #### Manual Verification:
 
-- N/A (pure function, exercised via the endpoint in Phase 5/6).
+- N/A (pure function, exercised via the endpoint in Phase 4/5).
 
 **Implementation Note**: After automated verification passes, proceed (no manual gate needed for this pure-logic phase).
 
 ---
 
-## Phase 4: Prompt engineering
+## Phase 4: Endpoint — rename & harden
 
 ### Overview
 
-Rewrite the two system prompts to produce the PRD's two distinct output shapes with format and length guidance — the single biggest lever on the 75% "good-enough" success criterion. Prompts are authored in **English** with an explicit instruction to **answer in Polish**.
-
-### Changes Required:
-
-#### 1. Character-tailored prompts
-
-**File**: `src/lib/services/llm.ts`
-
-**Intent**: Replace the one-line prompts with fuller prompts that (a) instruct the model to always respond in Polish, (b) define the output shape per character per the PRD, and (c) give length/format guidance so summaries are skimmable and support a watch/skip decision.
-
-**Contract**: `SYSTEM_PROMPTS` keeps its `Record<ChannelCharacter, string>` type. Each prompt, in English, must specify: always respond in Polish; the video's transcript is the input; produce a summary whose purpose is to decide whether to watch the full video.
-- **informational** → an exhaustive, scannable bulleted list of the key facts / data / conclusions from the video.
-- **educational** → an overview of the topics and skills the viewer would learn, in a clear didactic structure.
-Include a length ceiling appropriate to a skim (e.g. a bounded number of bullets / short sections). `summarize()`'s signature and return shape are unchanged.
-
-### Success Criteria:
-
-#### Automated Verification:
-
-- Type checking passes: `npm run build`
-- Linting passes: `npm run lint`
-
-#### Manual Verification:
-
-- A curl call to the endpoint (once Phase 5 lands) for an informational video returns a Polish bulleted key-facts list; an educational video returns a Polish learning-overview. Output language is Polish despite English prompts.
-
-**Implementation Note**: After automated verification passes, pause for manual confirmation (prompt quality is the success criterion — spot-check both characters).
-
----
-
-## Phase 5: Endpoint — rename & harden
-
-### Overview
-
-Promote the probe to the production generation endpoint: rename the file, spend the computed cost, and add upstream-error handling (the F-02 follow-up). The long-video confirmation gate is added in Phase 6; here a long video simply proceeds at cost 2.
+Promote the probe to the production generation endpoint: rename the file, spend the computed cost, and add upstream-error handling (the F-02 follow-up). The long-video confirmation gate is added in Phase 5; here a long video simply proceeds at cost 2.
 
 ### Changes Required:
 
@@ -288,11 +254,11 @@ Promote the probe to the production generation endpoint: rename the file, spend 
 
 ---
 
-## Phase 6: Long-video confirmation gate
+## Phase 5: Long-video confirmation gate
 
 ### Overview
 
-Add the opt-in for the higher cost: an `allowLong` request flag plus a 409 "confirmation required" response when a long video hasn't been pre-authorized. Both the up-front toggle and the "Generate anyway" button (Phase 7) resolve to this one flag.
+Add the opt-in for the higher cost: an `allowLong` request flag plus a 409 "confirmation required" response when a long video hasn't been pre-authorized. Both the up-front toggle and the "Generate anyway" button (Phase 6) resolve to this one flag.
 
 ### Changes Required:
 
@@ -321,7 +287,7 @@ Add the opt-in for the higher cost: an `allowLong` request flag plus a 409 "conf
 
 ---
 
-## Phase 7: UI — dashboard generation form
+## Phase 6: UI — dashboard generation form
 
 ### Overview
 
@@ -373,6 +339,40 @@ Inputs are preserved across errors for retry.
 - Verified on latest Chrome and Firefox (NFR).
 
 **Implementation Note**: After automated verification passes, pause for manual confirmation — this is the end-to-end acceptance of S-01.
+
+---
+
+## Phase 7: Prompt engineering
+
+### Overview
+
+Rewrite the two system prompts to produce the PRD's two distinct output shapes with format and length guidance — the single biggest lever on the 75% "good-enough" success criterion. Prompts are authored in **English** with an explicit instruction to **answer in Polish**. This phase intentionally comes last so prompt iteration and manual quality judgment happen against the completed endpoint and dashboard flow.
+
+### Changes Required:
+
+#### 1. Character-tailored prompts
+
+**File**: `src/lib/services/llm.ts`
+
+**Intent**: Replace the one-line prompts with fuller prompts that (a) instruct the model to always respond in Polish, (b) define the output shape per character per the PRD, and (c) give length/format guidance so summaries are skimmable and support a watch/skip decision.
+
+**Contract**: `SYSTEM_PROMPTS` keeps its `Record<ChannelCharacter, string>` type. Each prompt, in English, must specify: always respond in Polish; the video's transcript is the input; produce a summary whose purpose is to decide whether to watch the full video.
+- **informational** → an exhaustive, scannable bulleted list of the key facts / data / conclusions from the video.
+- **educational** → an overview of the topics and skills the viewer would learn, in a clear didactic structure.
+Include a length ceiling appropriate to a skim (e.g. a bounded number of bullets / short sections). `summarize()`'s signature and return shape are unchanged.
+
+### Success Criteria:
+
+#### Automated Verification:
+
+- Type checking passes: `npm run build`
+- Linting passes: `npm run lint`
+
+#### Manual Verification:
+
+- Using the completed dashboard flow (or an authenticated `curl.exe` call), an informational video returns a Polish bulleted key-facts list and an educational video returns a Polish learning-overview. Output language is Polish despite English prompts.
+
+**Implementation Note**: After automated verification passes, pause for the final manual prompt-quality pass. Spot-check both characters and iterate on the prompts before closing S-01.
 
 ---
 
@@ -442,32 +442,34 @@ One new forward migration only (`spend_credits`); existing live migrations are u
 - [ ] 3.1 Type checking passes: `npm run build`
 - [ ] 3.2 Linting passes: `npm run lint`
 
-### Phase 4: Prompt engineering
+### Phase 4: Endpoint — rename & harden
 
 #### Automated
 
 - [ ] 4.1 Type checking passes: `npm run build`
 - [ ] 4.2 Linting passes: `npm run lint`
+- [ ] 4.3 No stale references: `grep -rn "summaries/probe" src/` returns nothing
 
 #### Manual
 
-- [ ] 4.3 Informational → Polish key-facts list; educational → Polish learning-overview (Polish output from English prompts)
+- [ ] 4.4 Normal video → 200, Polish summary, `cost: 1`, balance −1, row written
+- [ ] 4.5 Long video → 200, `cost: 2`, balance −2
+- [ ] 4.6 No-transcript → 422; forced upstream error → 502 (not 500), no spend
 
-### Phase 5: Endpoint — rename & harden
+### Phase 5: Long-video confirmation gate
 
 #### Automated
 
 - [ ] 5.1 Type checking passes: `npm run build`
 - [ ] 5.2 Linting passes: `npm run lint`
-- [ ] 5.3 No stale references: `grep -rn "summaries/probe" src/` returns nothing
 
 #### Manual
 
-- [ ] 5.4 Normal video → 200, Polish summary, `cost: 1`, balance −1, row written
-- [ ] 5.5 Long video → 200, `cost: 2`, balance −2
-- [ ] 5.6 No-transcript → 422; forced upstream error → 502 (not 500), no spend
+- [ ] 5.3 Long video without `allowLong` → 409 `requiresConfirmation`, `cost: 2`, no spend
+- [ ] 5.4 Retry with `allowLong: true` → 200, balance −2
+- [ ] 5.5 1-credit user → 409 then 402 (`need 2, have 1`) on the `allowLong` retry
 
-### Phase 6: Long-video confirmation gate
+### Phase 6: UI — dashboard generation form
 
 #### Automated
 
@@ -476,11 +478,13 @@ One new forward migration only (`spend_credits`); existing live migrations are u
 
 #### Manual
 
-- [ ] 6.3 Long video without `allowLong` → 409 `requiresConfirmation`, `cost: 2`, no spend
-- [ ] 6.4 Retry with `allowLong: true` → 200, balance −2
-- [ ] 6.5 1-credit user → 409 then 402 (`need 2, have 1`) on the `allowLong` retry
+- [ ] 6.3 Valid URL + character + submit → loading → Polish summary inline; credit count −1
+- [ ] 6.4 Invalid URL blocked with a message
+- [ ] 6.5 Long video → confirmation → "Generate anyway (2 credits)" → count −2
+- [ ] 6.6 0 credits blocked; no-transcript shows message and spends nothing
+- [ ] 6.7 Verified on latest Chrome and Firefox
 
-### Phase 7: UI — dashboard generation form
+### Phase 7: Prompt engineering
 
 #### Automated
 
@@ -489,8 +493,4 @@ One new forward migration only (`spend_credits`); existing live migrations are u
 
 #### Manual
 
-- [ ] 7.3 Valid URL + character + submit → loading → Polish summary inline; credit count −1
-- [ ] 7.4 Invalid URL blocked with a message
-- [ ] 7.5 Long video → confirmation → "Generate anyway (2 credits)" → count −2
-- [ ] 7.6 0 credits blocked; no-transcript shows message and spends nothing
-- [ ] 7.7 Verified on latest Chrome and Firefox
+- [ ] 7.3 Informational → Polish key-facts list; educational → Polish learning-overview (Polish output from English prompts)

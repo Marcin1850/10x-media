@@ -29,7 +29,7 @@ A signed-in user on `/dashboard` fills a form (URL + character + "allow long vid
 
 ## Scope
 
-**In scope:** English-copy cleanup; `spend_credits(amount)` migration; length→cost policy; prompt rewrite; endpoint rename + 502 upstream handling; `allowLong` + 409 confirmation + cost-aware 402; dashboard generation island with live credit count.
+**In scope:** English-copy cleanup; `spend_credits(amount)` migration; length→cost policy; endpoint rename + 502 upstream handling; `allowLong` + 409 confirmation + cost-aware 402; dashboard generation island with live credit count; final prompt rewrite and manual quality pass.
 
 **Out of scope:** browse list (S-02), delete (S-03), design system (S-06), summary detail/permalink, storing per-summary cost, video metadata, markdown rendering, streaming, tests, any F-01 schema/RLS change.
 
@@ -44,17 +44,17 @@ A signed-in user on `/dashboard` fills a form (URL + character + "allow long vid
 | 1. Copy → English | `config-status.ts` + `Layout.astro` banner in English | (low) chrome only |
 | 2. DB variable spend | `spend_credits(amount)` RPC, retire `spend_credit()` | Least-privilege / migration correctness |
 | 3. Cost policy | `summaryCost()` + 40k threshold | (low) pure function |
-| 4. Prompt engineering | PRD's two output shapes, English prompt → Polish output | Prompt quality vs the 75% bar |
-| 5. Endpoint rename & harden | `generate.ts`, computed-cost spend, 502 handling | Upstream-error mapping; no stale refs |
-| 6. Confirmation gate | `allowLong` + 409 + cost-aware 402 | Double transcript fetch on confirm (accepted) |
-| 7. Dashboard UI | Island: form, inline result, errors, confirm, live credits | Loading UX for slow Whisper jobs; browser matrix |
+| 4. Endpoint rename & harden | `generate.ts`, computed-cost spend, 502 handling | Upstream-error mapping; no stale refs |
+| 5. Confirmation gate | `allowLong` + 409 + cost-aware 402 | Double transcript fetch on confirm (accepted) |
+| 6. Dashboard UI | Island: form, inline result, errors, confirm, live credits | Loading UX for slow Whisper jobs; browser matrix |
+| 7. Prompt engineering | PRD's two output shapes, English prompt → Polish output | Final manual prompt-quality iteration vs the 75% bar |
 
 **Prerequisites:** local Supabase running (migration) + Supadata/OpenRouter keys set (manual E2E). Backend proven in F-02; F-01/S-05 schema live.
 **Estimated effort:** ~2–3 sessions across 7 thin phases (backend phases are curl-verifiable; the UI phase is the substance).
 
 ## Open Risks & Assumptions
 
-- **Prompt quality is judged manually** — Phase 4 needs spot-checks of both characters to trust the 75% bar; no automated guard.
+- **Prompt quality is judged manually** — Phase 7 intentionally comes last and needs spot-checks of both characters to trust the 75% bar; no automated guard.
 - **Char count is a token proxy** — accepted; the surcharge is a coarse signal, not exact billing.
 - **Confirm path re-fetches the transcript** — accepted MVP tradeoff; the up-front toggle avoids it.
 - **Cloud migration push** — `spend_credits` must reach the cloud project before deploy, or generation breaks in prod.
