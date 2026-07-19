@@ -20,6 +20,7 @@ const generateSchema = z.object({
     message: "url must be a valid YouTube video URL",
   }),
   character: z.enum(["informational", "educational"]),
+  allowLong: z.boolean().optional().default(false),
 });
 
 export const POST: APIRoute = async (context) => {
@@ -36,7 +37,7 @@ export const POST: APIRoute = async (context) => {
   if (!parsed.success) {
     return Response.json({ error: z.prettifyError(parsed.error) }, { status: 400 });
   }
-  const { url, character } = parsed.data;
+  const { url, character, allowLong } = parsed.data;
   const youtubeId = extractYoutubeId(url);
   if (!youtubeId) {
     return Response.json({ error: "url must be a valid YouTube video URL" }, { status: 400 });
@@ -81,6 +82,22 @@ export const POST: APIRoute = async (context) => {
   // summaryCost, which only prices — is what bounds worst-case token cost/latency.
   if (transcriptLength > HARD_MAX_TRANSCRIPT_CHARS) {
     return Response.json({ error: "This video's transcript is too long to summarize." }, { status: 413 });
+  }
+
+  // Long-video confirmation gate: a long video (cost > 1) that hasn't been pre-authorized returns a
+  // distinct 409 *before* the debit and the LLM call — no spend, no refund needed. The client asks
+  // the user to confirm the higher cost and resubmits with `allowLong: true`. A short video always
+  // costs 1 and ignores this flag.
+  if (cost > 1 && !allowLong) {
+    return Response.json(
+      {
+        error: "This video is long and costs more credits. Confirm to continue.",
+        requiresConfirmation: true,
+        cost,
+        transcriptLength,
+      },
+      { status: 409 },
+    );
   }
 
   // Atomic debit BEFORE the paid LLM call. The RPC's row-level `UPDATE … WHERE balance >= cost` is
