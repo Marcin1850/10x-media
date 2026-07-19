@@ -21,7 +21,7 @@ A signed-in user on `/dashboard` fills a form (URL + character + "allow long vid
 | Endpoint | Rename `probe` → `/api/summaries/generate`, harden in place | Probe was a spike name; F-02 always intended S-01 to keep the services | Plan |
 | Credit model | **Debit before the paid LLM call (atomic reservation), refund on any failure** | The atomic `UPDATE … WHERE balance >= cost` is the race-safe gate; refund means no charge for failed work — replaces the probe's persist-then-best-effort-spend | Plan (F1) |
 | Refund privilege | New `refund_credits(user_id, amount)` granted to **`service_role` only**, via the admin client | A refund raises a balance, so a user-callable one would let anyone self-credit | Plan (F1) |
-| Migration strategy | **Expand/contract, two migrations**: this slice adds `spend_credits`+`refund_credits` and leaves `spend_credit()` in place; a follow-up migration drops it after the new Worker is live | Dropping `spend_credit()` now opens a deploy window (DB-first breaks old Worker, Worker-first calls a missing RPC) | Plan (F3) |
+| Migration strategy | **Expand/contract, two migrations**: this slice adds `spend_credits`+`refund_credits` and leaves `spend_credit()` in place (Phases 2–7); **Phase 8** drops it after the new Worker is live | Dropping `spend_credit()` now opens a deploy window (DB-first breaks old Worker, Worker-first calls a missing RPC) | Plan (F3) |
 | Long-video cost | >40k chars ⇒ 2 credits (char count as proxy) | Cheap to measure; coarse budget signal, not exact billing | Plan |
 | Hard length cap | >200k chars ⇒ reject with 413 before any debit/LLM call | `summaryCost` only prices; this is what actually bounds worst-case token cost/latency | Plan (F5) |
 | Confirm mechanism | Up-front toggle **and** 409 "Generate anyway" — both set `allowLong` | Toggle for known-long videos; button as the safety net | Plan |
@@ -33,9 +33,9 @@ A signed-in user on `/dashboard` fills a form (URL + character + "allow long vid
 
 ## Scope
 
-**In scope:** English-copy cleanup; `spend_credits(amount)` + `refund_credits(user_id, amount)` migration (expand-only); length→cost policy + hard-max cap; endpoint rename with debit-before-LLM / refund-on-failure and 502/500/413 handling; `allowLong` + 409 confirmation + cost-aware 402; dashboard generation island with live credit count; final prompt rewrite and manual quality pass.
+**In scope:** English-copy cleanup; `spend_credits(amount)` + `refund_credits(user_id, amount)` migration (expand-only); length→cost policy + hard-max cap; endpoint rename with debit-before-LLM / refund-on-failure and 502/500/413 handling; `allowLong` + 409 confirmation + cost-aware 402; dashboard generation island with live credit count; prompt rewrite and manual quality pass; the **Phase 8** contract migration dropping `spend_credit()` (deploy-gated — applied to cloud only after the phases 1–7 Worker is live).
 
-**Out of scope:** the follow-up contract migration that drops `spend_credit()` (deferred until the new Worker is live); browse list (S-02); delete (S-03); design system (S-06); summary detail/permalink; storing per-summary cost; video metadata; markdown rendering; streaming; tests; any F-01 schema/RLS change.
+**Out of scope:** browse list (S-02); delete (S-03); design system (S-06); summary detail/permalink; storing per-summary cost; video metadata; markdown rendering; streaming; tests; any F-01 schema/RLS change.
 
 ## Architecture / Approach
 
@@ -62,16 +62,17 @@ The endpoint stays thin; the cost policy, the atomic variable spend, and the com
 | 5. Confirmation gate | `allowLong` + 409 (before debit) + cost-aware 402 | Double transcript fetch on confirm (accepted) |
 | 6. Dashboard UI | Island: form, inline result, errors, confirm, live credits | Loading UX for slow Whisper jobs; browser matrix |
 | 7. Prompt engineering | PRD's two output shapes, English prompt → Polish output | Final manual prompt-quality iteration vs the 75% bar |
+| 8. Contract migration | Drops the retired `spend_credit()` RPC | **Deploy-gated** — apply to cloud only after the phases 1–7 Worker is live; may land in a separate commit/PR |
 
 **Prerequisites:** local Supabase running (migration) + Supadata/OpenRouter keys set (manual E2E). Backend proven in F-02; F-01/S-05 schema live.
-**Estimated effort:** ~2–3 sessions across 7 thin phases (backend phases are curl-verifiable; the UI phase is the substance).
+**Estimated effort:** ~2–3 sessions across 8 thin phases (backend phases are curl-verifiable; the UI phase is the substance; Phase 8 is a one-line migration gated on deployment).
 
 ## Open Risks & Assumptions
 
 - **Prompt quality is judged manually** — Phase 7 intentionally comes last and needs spot-checks of both characters to trust the 75% bar; no automated guard.
 - **Char count is a token proxy** — accepted; the 2-credit surcharge is a coarse signal, not exact billing.
 - **Confirm path re-fetches the transcript** — accepted MVP tradeoff; the up-front toggle avoids it. A race-losing request may also pay the cheaper transcript fetch — same accepted tradeoff.
-- **Expand/contract migration must reach cloud in order** — the expand migration (adds `spend_credits`/`refund_credits`) must be pushed to the cloud project before/with the Worker deploy; the `spend_credit()` drop is a **separate follow-up migration** run only after the new Worker is confirmed live.
+- **Expand/contract migration must reach cloud in order** — the expand migration (adds `spend_credits`/`refund_credits`) must be pushed to the cloud project before/with the Worker deploy; the `spend_credit()` drop is **Phase 8's contract migration**, run only after the new Worker is confirmed live (folded in from the former roadmap `S-01-fu`).
 - **Refund is best-effort** — if the service-role key is unset or the refund RPC errors, it logs and resolves without throwing, so it never masks the original failure returned to the user (but the debit may stand in that edge case).
 
 ## Success Criteria (Summary)

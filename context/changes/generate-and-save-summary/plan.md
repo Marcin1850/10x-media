@@ -44,11 +44,11 @@ Verify: sign in, generate a normal video (1 credit spent, Polish summary shown, 
 
 ## Implementation Approach
 
-Build backend-first in curl-verifiable increments, then the UI. Isolate the cross-cutting English-copy cleanup first (smallest, independent). Then: the DB primitive (variable spend), the pure cost policy, the endpoint productionization, the confirmation gate, and the dashboard island. Prompt engineering comes last because judging and iterating on output quality is manual work and is most useful after the complete generation flow exists. Each phase is independently verifiable; the UI and final prompt-quality phases require manual browser/API checks.
+Build backend-first in curl-verifiable increments, then the UI. Isolate the cross-cutting English-copy cleanup first (smallest, independent). Then: the DB primitive (variable spend), the pure cost policy, the endpoint productionization, the confirmation gate, and the dashboard island. Prompt engineering comes next-to-last because judging and iterating on output quality is manual work and is most useful after the complete generation flow exists. A final **contract migration (Phase 8)** drops the retired `spend_credit()` — but only after the phases 1–7 Worker (which calls the new `spend_credits`) is confirmed live on cloud, since dropping it any earlier reopens the deploy window this slice deliberately avoids. Each phase is independently verifiable; the UI and prompt-quality phases require manual browser/API checks.
 
 ## Critical Implementation Details
 
-- **Migration immutability + expand/contract** (F3): the credit migrations are live on cloud and must not be edited. This slice's migration is **expand-only** — it *adds* `spend_credits`/`refund_credits` and leaves the old `spend_credit()` in place. Dropping `spend_credit()` in the same migration would open a deploy window (DB-first breaks the old Worker; Worker-first calls a not-yet-created RPC), so the drop is deferred to a **follow-up contract migration** made after the new Worker is live.
+- **Migration immutability + expand/contract** (F3): the credit migrations are live on cloud and must not be edited. This slice's migration is **expand-only** — it *adds* `spend_credits`/`refund_credits` and leaves the old `spend_credit()` in place. Dropping `spend_credit()` in the same migration would open a deploy window (DB-first breaks the old Worker; Worker-first calls a not-yet-created RPC), so the drop is deferred to a **contract migration (Phase 8)** run after the new Worker is live.
 - **Up-front gate ordering**: the minimum-1-credit balance *read* gate stays **before** `fetchTranscript` so a zero-balance user never triggers a paid Supadata/OpenRouter call.
 - **Debit before paid LLM work; refund on failure** (this replaces the probe's persist-then-best-effort-spend contract — see F1): after the transcript length is known and any 409 confirmation is resolved, `spend_credits(cost)` runs as an **atomic reservation** — its row-level `UPDATE … WHERE balance >= cost` is the concurrency serialization point, so parallel requests sharing one stale balance read cannot all overspend (the losers get the `-1` sentinel → 402). Only after a successful debit does the paid `summarize` call run. If `summarize` **or** the persist step fails, `refund_credits(cost)` releases the debit and the request returns 502/500 — the user is never charged for failed work. There is no persist-then-best-effort-spend and no "return 200 despite a failed spend." A race-losing request may still have paid the cheaper transcript fetch — the same accepted tradeoff as the confirm-path double fetch.
 - **Double transcript fetch on confirm**: when a long video hits the 409 gate, the transcript was already fetched; the "Generate anyway" resubmit fetches it again. Accepted MVP tradeoff (usually a fast inline fetch; a rare Whisper re-trigger is the edge). The up-front toggle avoids it entirely for users who know a video is long.
@@ -405,6 +405,52 @@ Include a length ceiling appropriate to a skim (e.g. a bounded number of bullets
 
 ---
 
+## Phase 8: Contract migration — drop legacy `spend_credit()`
+
+### Overview
+
+The expand/contract close-out. Phase 2 added `spend_credits`/`refund_credits` and switched `credits.ts` off the old fixed-cost `spend_credit()`, but left `spend_credit()` in place so the still-running old Worker kept working during rollout. This phase drops it.
+
+**Deploy-ordering gate (do this phase LAST, after deploy).** This migration must run **only after the phases 1–7 Worker is live on cloud** — i.e. the deployed Worker no longer calls `spend_credit()`. Running the drop while the old Worker is still serving traffic reopens exactly the deploy window §Migration Notes avoids: DB-first would break the old Worker mid-generation. Nothing in this slice references `spend_credit` after the Phase 2 `credits.ts` switch, so once the new Worker is confirmed live the drop is forward-safe.
+
+### Changes Required:
+
+#### 1. New contract migration
+
+**File**: `supabase/migrations/<YYYYMMDDHHmmss>_drop_spend_credit.sql`
+
+**Intent**: Remove the now-unused fixed-cost RPC. `drop function if exists` keeps the migration idempotent and safe to re-run.
+
+**Contract**:
+
+```sql
+-- Contract half of the spend_credit → spend_credits expand/contract (S-01 Phase 8).
+-- Safe only after the Worker calling spend_credits is live on cloud (see plan §Migration Notes).
+-- spend_credits/refund_credits (20260719120000) fully replace this fixed-cost RPC.
+drop function if exists public.spend_credit();
+```
+
+No other file changes — the code switch already happened in Phase 2.
+
+### Success Criteria:
+
+#### Automated Verification:
+
+- Migration applies cleanly: `npx supabase migration up`
+- Type checking passes: `npm run build`
+- Linting passes: `npm run lint`
+- No stale references (PowerShell): `Get-ChildItem -Recurse -File src supabase/migrations | Select-String "spend_credit\b"` returns nothing outside the drop migration itself and the historical `20260712175240_user_credits.sql` (which defines it).
+
+#### Manual Verification:
+
+- **Precondition**: confirm the cloud Worker in production is the phases 1–7 build (calling `spend_credits`), not the old `spend_credit` build, before applying to cloud.
+- After the migration, `select public.spend_credit();` in the SQL editor errors with `function public.spend_credit() does not exist`.
+- A normal and a long generation still succeed end-to-end (they use `spend_credits`), confirming nothing regressed.
+
+**Implementation Note**: This is the roadmap's former `S-01-fu` (`drop-spend-credit-contract`), folded in as the closing phase. It is gated on deployment, so it may land in a separate commit/PR after phases 1–7 ship — sequence it after the Worker is live rather than bundling the drop into the pre-deploy work.
+
+---
+
 ## Testing Strategy
 
 Per the roadmap's Module-3 deferral, S-01 uses **manual verification only** (no test tooling). The backend phases are curl-verifiable before any UI exists.
@@ -430,7 +476,7 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 **Expand/contract, two migrations** (F3). Existing live migrations are untouched.
 
 1. **Expand (this slice)**: one forward migration adds `spend_credits` + `refund_credits` and **leaves `spend_credit()` in place**. `credits.ts` is switched to `spend_credits` in the same phase. Deploy order is now safe in both directions: the DB has both functions, so the old Worker (still calling `spend_credit`) and the new Worker (calling `spend_credits`) each work. Apply locally with `npx supabase migration up`; push to cloud before/with the Worker deploy.
-2. **Contract (follow-up, after the new Worker is live)**: a later migration runs `drop function if exists public.spend_credit();`. This is deferred because dropping it alongside the expand migration would open a deploy window — DB-first would break the still-running old Worker, and Worker-first would call an RPC not yet created. Nothing in this slice's scope references `spend_credit` after the `credits.ts` switch, so the drop is forward-safe once the new Worker is confirmed live.
+2. **Contract (Phase 8, after the new Worker is live)**: a later migration runs `drop function if exists public.spend_credit();`. This is gated on deployment because dropping it alongside the expand migration would open a deploy window — DB-first would break the still-running old Worker, and Worker-first would call an RPC not yet created. Nothing in this slice's scope references `spend_credit` after the `credits.ts` switch, so the drop is forward-safe once the new Worker is confirmed live. Folded in from the former roadmap `S-01-fu` (`drop-spend-credit-contract`); see Phase 8.
 
 ## References
 
@@ -528,3 +574,19 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 #### Manual
 
 - [ ] 7.3 Informational → Polish key-facts list; educational → Polish learning-overview (Polish output from English prompts)
+
+### Phase 8: Contract migration — drop legacy `spend_credit()`
+
+> Gated: apply to cloud only after the phases 1–7 Worker is live (calls `spend_credits`).
+
+#### Automated
+
+- [ ] 8.1 Migration applies cleanly: `npx supabase migration up`
+- [ ] 8.2 Type checking passes: `npm run build`
+- [ ] 8.3 Linting passes: `npm run lint`
+- [ ] 8.4 No stale `spend_credit(` references outside the drop migration and `20260712175240_user_credits.sql`
+
+#### Manual
+
+- [ ] 8.5 Cloud Worker confirmed on the phases 1–7 build before applying to cloud
+- [ ] 8.6 `select public.spend_credit();` errors (function no longer exists); normal + long generation still succeed
