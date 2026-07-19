@@ -553,8 +553,8 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 
 #### Automated
 
-- [x] 6.1 Type checking passes: `npm run build`
-- [x] 6.2 Linting passes: `npm run lint`
+- [x] 6.1 Type checking passes: `npm run build` — 10b3ffa
+- [x] 6.2 Linting passes: `npm run lint` — 10b3ffa
 
 #### Manual
 
