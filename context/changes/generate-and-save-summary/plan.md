@@ -568,12 +568,12 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 
 #### Automated
 
-- [x] 7.1 Type checking passes: `npm run build`
-- [x] 7.2 Linting passes: `npm run lint`
+- [x] 7.1 Type checking passes: `npm run build` — af3bea3
+- [x] 7.2 Linting passes: `npm run lint` — af3bea3
 
 #### Manual
 
-- [x] 7.3 Informational → Polish key-facts list; educational → Polish learning-overview (Polish output from English prompts)
+- [x] 7.3 Informational → Polish key-facts list; educational → Polish learning-overview (Polish output from English prompts) — af3bea3
 
 ### Phase 8: Contract migration — drop legacy `spend_credit()`
 
