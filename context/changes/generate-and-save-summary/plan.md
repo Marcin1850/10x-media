@@ -525,9 +525,9 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 
 #### Automated
 
-- [ ] 4.1 Type checking passes: `npm run build`
-- [ ] 4.2 Linting passes: `npm run lint`
-- [ ] 4.3 No stale references (PowerShell): `Get-ChildItem -Recurse -File src | Select-String "summaries/probe"` returns nothing
+- [x] 4.1 Type checking passes: `npm run build`
+- [x] 4.2 Linting passes: `npm run lint`
+- [x] 4.3 No stale references (PowerShell): `Get-ChildItem -Recurse -File src | Select-String "summaries/probe"` returns nothing
 
 #### Manual
 

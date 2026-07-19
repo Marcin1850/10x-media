@@ -43,7 +43,7 @@ export const POST: APIRoute = async (context) => {
 
   // Mask any pre-delete failure behind a stable generic 500: a resolved
   // Supabase error and a rejected promise both funnel here, so the browser
-  // never sees raw provider details (matches src/pages/api/summaries/probe.ts).
+  // never sees raw provider details (matches src/pages/api/summaries/generate.ts).
   try {
     const { error } = await admin.auth.admin.deleteUser(context.locals.user.id);
     if (error) throw error;
