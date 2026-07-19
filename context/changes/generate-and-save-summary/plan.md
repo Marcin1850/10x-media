@@ -447,8 +447,8 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 
 #### Automated
 
-- [ ] 1.1 Linting passes: `npm run lint`
-- [ ] 1.2 Build passes: `npm run build`
+- [x] 1.1 Linting passes: `npm run lint`
+- [x] 1.2 Build passes: `npm run build`
 
 #### Manual
 

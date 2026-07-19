@@ -12,14 +12,14 @@ export const configStatuses: ConfigStatus[] = [
   {
     name: "Supabase",
     configured: Boolean(SUPABASE_URL && SUPABASE_KEY),
-    message: "Supabase nie jest skonfigurowany — funkcje uwierzytelniania są wyłączone.",
+    message: "Supabase is not configured — authentication features are disabled.",
     docsUrl: "https://github.com/Marcin1850/10x-media#supabase-configuration",
-    docsLabel: "Zobacz instrukcję konfiguracji",
+    docsLabel: "See the configuration guide",
   },
   {
-    name: "Transkrypcja / LLM",
+    name: "Transcript / LLM",
     configured: Boolean(SUPADATA_API_KEY && OPENROUTER_API_KEY),
-    message: "Transkrypcja lub LLM nie są skonfigurowane — generowanie podsumowań jest wyłączone.",
+    message: "Transcript/LLM is not configured — summary generation is disabled.",
   },
 ];
 
