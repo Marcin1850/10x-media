@@ -472,8 +472,8 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 
 #### Automated
 
-- [x] 3.1 Type checking passes: `npm run build`
-- [x] 3.2 Linting passes: `npm run lint`
+- [x] 3.1 Type checking passes: `npm run build` — b22d6f1
+- [x] 3.2 Linting passes: `npm run lint` — b22d6f1
 
 ### Phase 4: Endpoint — rename & harden
 
