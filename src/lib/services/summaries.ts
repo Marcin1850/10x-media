@@ -63,7 +63,8 @@ export interface AppDatabase {
     };
     Views: Record<never, never>;
     Functions: {
-      spend_credit: { Args: Record<string, never>; Returns: number };
+      spend_credits: { Args: { amount?: number }; Returns: number };
+      refund_credits: { Args: { target_user: string; amount: number }; Returns: undefined };
     };
   };
 }
