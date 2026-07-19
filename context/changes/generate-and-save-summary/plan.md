@@ -48,9 +48,9 @@ Build backend-first in curl-verifiable increments, then the UI. Isolate the cros
 
 ## Critical Implementation Details
 
-- **Migration immutability**: the credit migrations are live on cloud and must not be edited. Add one new forward migration; retire `spend_credit()` there with `drop function` (forward-safe on fresh replay).
-- **Up-front gate ordering**: the minimum-1-credit balance check must stay **before** `fetchTranscript` so a zero-balance user never triggers a paid Supadata/OpenRouter call. The cost-specific gate (`balance < cost`) runs **after** transcript length is known.
-- **Post-save spend is best-effort**: preserve the probe's existing contract — once the summary is persisted, a spend failure is logged and the balance re-read, but the request still returns 200 with the summary. A spend must never turn a saved summary into an error.
+- **Migration immutability + expand/contract** (F3): the credit migrations are live on cloud and must not be edited. This slice's migration is **expand-only** — it *adds* `spend_credits`/`refund_credits` and leaves the old `spend_credit()` in place. Dropping `spend_credit()` in the same migration would open a deploy window (DB-first breaks the old Worker; Worker-first calls a not-yet-created RPC), so the drop is deferred to a **follow-up contract migration** made after the new Worker is live.
+- **Up-front gate ordering**: the minimum-1-credit balance *read* gate stays **before** `fetchTranscript` so a zero-balance user never triggers a paid Supadata/OpenRouter call.
+- **Debit before paid LLM work; refund on failure** (this replaces the probe's persist-then-best-effort-spend contract — see F1): after the transcript length is known and any 409 confirmation is resolved, `spend_credits(cost)` runs as an **atomic reservation** — its row-level `UPDATE … WHERE balance >= cost` is the concurrency serialization point, so parallel requests sharing one stale balance read cannot all overspend (the losers get the `-1` sentinel → 402). Only after a successful debit does the paid `summarize` call run. If `summarize` **or** the persist step fails, `refund_credits(cost)` releases the debit and the request returns 502/500 — the user is never charged for failed work. There is no persist-then-best-effort-spend and no "return 200 despite a failed spend." A race-losing request may still have paid the cheaper transcript fetch — the same accepted tradeoff as the confirm-path double fetch.
 - **Double transcript fetch on confirm**: when a long video hits the 409 gate, the transcript was already fetched; the "Generate anyway" resubmit fetches it again. Accepted MVP tradeoff (usually a fast inline fetch; a rare Whisper re-trigger is the edge). The up-front toggle avoids it entirely for users who know a video is long.
 
 ---
@@ -106,9 +106,9 @@ Add an atomic `spend_credits(amount)` RPC so a generation can cost more than 1 c
 
 **File**: `supabase/migrations/<YYYYMMDDHHmmss>_spend_credits_variable.sql`
 
-**Intent**: Create an atomic, owner-scoped, variable-amount spend that can only ever lower the caller's own balance; grant it to `authenticated` only (mirroring the existing least-privilege pattern); drop the now-unused `spend_credit()`.
+**Intent**: Create (a) an atomic, owner-scoped, variable-amount **spend** that can only ever lower the caller's own balance, granted to `authenticated` only, and (b) a **refund** that restores a debit on a failed generation. Because refund *raises* a balance, a user-callable refund would let anyone self-credit — so `refund_credits` takes an explicit `user_id` and is granted to **`service_role` only** (invoked via the admin client, never the user's SSR client). This migration is **expand-only**: it leaves the old `spend_credit()` in place (the contract-phase drop is deferred — see F3 / Migration Notes).
 
-**Contract**: Function shape mirrors `spend_credit()` (SECURITY DEFINER, `set search_path = ''`, returns new balance or `-1` sentinel). The signature is the contract Phase 2's service and later phases depend on:
+**Contract**: Both functions mirror `spend_credit()`'s shape (SECURITY DEFINER, `set search_path = ''`). `spend_credits` returns the new balance or the `-1` sentinel. Its signature is the contract Phase 2's service and later phases depend on:
 
 ```sql
 create or replace function public.spend_credits(amount integer default 1)
@@ -137,24 +137,47 @@ $$;
 revoke all on function public.spend_credits(integer) from public, anon;
 grant execute on function public.spend_credits(integer) to authenticated;
 
-drop function if exists public.spend_credit();
+-- Refund restores a debit after a failed generation. It RAISES a balance, so it
+-- must never be user-callable: service_role only, invoked via the admin client.
+create or replace function public.refund_credits(target_user uuid, amount integer)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if amount is null or amount < 1 then
+    raise exception 'amount must be a positive integer, got: %', amount;
+  end if;
+  update public.user_credits
+  set balance = balance + amount, updated_at = now()
+  where user_id = target_user;
+end;
+$$;
+
+revoke all on function public.refund_credits(uuid, integer) from public, anon, authenticated;
+grant execute on function public.refund_credits(uuid, integer) to service_role;
+
+-- NOTE (F3): do NOT drop spend_credit() here. This migration is expand-only so
+-- the old Worker keeps working until the new one is deployed. The drop lands in a
+-- later contract migration once the new Worker (calling spend_credits) is live.
 ```
 
 #### 2. Credits service: variable amount
 
 **File**: `src/lib/services/credits.ts`
 
-**Intent**: Let `spendCredit` spend N credits via the new RPC, defaulting to 1; keep the `-1` insufficient-sentinel handling and `SpendResult` shape unchanged.
+**Intent**: Let `spendCredit` spend N credits via the new RPC, defaulting to 1; keep the `-1` insufficient-sentinel handling and `SpendResult` shape unchanged. Add a `refundCredits` that reverses a debit on a failed generation via the **admin** client.
 
-**Contract**: `spendCredit(supabase, amount = 1)` calls `.rpc("spend_credits", { amount })`. Same `{ ok, balance }` return; `INSUFFICIENT_SENTINEL` logic unchanged.
+**Contract**: `spendCredit(supabase, amount = 1)` calls `.rpc("spend_credits", { amount })`. Same `{ ok, balance }` return shape, but on the `-1` insufficient sentinel it **re-reads the caller's actual balance via `getBalance`** for `{ ok: false, balance }` instead of hard-coding `0` (F4) — otherwise a 2-credit spend at balance 1 would report 0 and the 402 "you have &lt;balance&gt;" message would be wrong. New `refundCredits(admin, userId, amount)` (admin = `createAdminClient()` result) calls `.rpc("refund_credits", { target_user: userId, amount })`; it is a best-effort compensating action — on error (including a null admin client when the service-role key is unset) it logs and resolves without throwing, so it never masks the original generation failure being returned to the user.
 
 #### 3. Function type update
 
 **File**: `src/lib/services/summaries.ts`
 
-**Intent**: Update the local `AppDatabase` Functions map to the new RPC.
+**Intent**: Update the local `AppDatabase` Functions map to the new RPCs.
 
-**Contract**: Replace `spend_credit: { Args: Record<string, never>; Returns: number }` with `spend_credits: { Args: { amount?: number }; Returns: number }`.
+**Contract**: Replace `spend_credit: { Args: Record<string, never>; Returns: number }` with `spend_credits: { Args: { amount?: number }; Returns: number }` and add `refund_credits: { Args: { target_user: string; amount: number }; Returns: undefined }`.
 
 ### Success Criteria:
 
@@ -166,8 +189,9 @@ drop function if exists public.spend_credit();
 
 #### Manual Verification:
 
-- In the SQL editor, `select public.spend_credits(2)` on a seeded user lowers the balance by 2 and returns the new balance; calling it with amount > balance returns `-1` and does not change the balance.
+- `spend_credits` debits the *caller's* row via `auth.uid()`, so a bare `select public.spend_credits(2)` in the SQL editor has no `auth.uid()` and won't debit the seeded user (F6). Verify under an authenticated context — either set the JWT claims in the SQL editor (`select set_config('request.jwt.claims', json_build_object('sub','<user-uuid>')::text, true); set local role authenticated; select public.spend_credits(2);`) or call the generate endpoint with an authenticated session. Under that context, a 2-credit spend lowers the balance by 2 and returns the new balance; a spend of amount > balance returns `-1` and does not change the balance.
 - `spend_credits` is not executable by `anon` (least privilege holds).
+- `refund_credits` is executable only by `service_role` — a call as `authenticated`/`anon` is denied (prevents self-crediting).
 
 **Implementation Note**: After automated verification passes, pause for manual confirmation before proceeding.
 
@@ -185,9 +209,9 @@ Add the pure length→cost policy the endpoint will use to decide 1 vs 2 credits
 
 **File**: `src/lib/services/summaries.ts`
 
-**Intent**: Expose the long-transcript threshold and a pure function mapping transcript length to credit cost, so the endpoint stays thin and the policy is one testable place.
+**Intent**: Expose the long-transcript threshold, a **hard maximum** that actually bounds LLM cost/latency (F5), and a pure function mapping transcript length to credit cost, so the endpoint stays thin and the policy is one testable place.
 
-**Contract**: `export const LONG_TRANSCRIPT_CHARS = 40000;` and `export function summaryCost(transcriptLength: number): number` returning `2` when `transcriptLength > LONG_TRANSCRIPT_CHARS`, else `1`.
+**Contract**: `export const LONG_TRANSCRIPT_CHARS = 40000;` (the 1→2 credit boundary), `export const HARD_MAX_TRANSCRIPT_CHARS = 200000;` (the reject-above bound — well above the long threshold so only pathological transcripts hit it), and `export function summaryCost(transcriptLength: number): number` returning `2` when `transcriptLength > LONG_TRANSCRIPT_CHARS`, else `1`. `summaryCost` only prices; the hard cap is enforced by the endpoint before the LLM call (Phase 4).
 
 ### Success Criteria:
 
@@ -195,10 +219,6 @@ Add the pure length→cost policy the endpoint will use to decide 1 vs 2 credits
 
 - Type checking passes: `npm run build`
 - Linting passes: `npm run lint`
-
-#### Manual Verification:
-
-- N/A (pure function, exercised via the endpoint in Phase 4/5).
 
 **Implementation Note**: After automated verification passes, proceed (no manual gate needed for this pure-logic phase).
 
@@ -224,17 +244,25 @@ Promote the probe to the production generation endpoint: rename the file, spend 
 
 **File**: `src/pages/api/summaries/generate.ts`
 
-**Intent**: Compute the cost from transcript length and spend that many credits; gate on the cost after length is known; wrap the two external calls so Supadata/OpenRouter failures return a clean 502 instead of an unhandled 500. Preserve the existing up-front minimum-1 gate ordering and best-effort post-save spend.
+**Intent**: Compute the cost from transcript length, then **debit before the paid LLM call** and **refund on any downstream failure** (F1). Wrap the external calls so Supadata/OpenRouter failures return a clean 502 instead of an unhandled 500, and wrap persistence so a post-debit failure refunds and returns a stable 500 (F7). Preserve only the up-front minimum-1 *read* gate ordering; the best-effort post-save spend is removed.
 
-**Contract**: After `fetchTranscript` succeeds, `const cost = summaryCost(transcript.content.length)`. If `balance < cost` → `402` (`"You need <cost> credits for this video; you have <balance>"`). `spendCredit(supabase, cost)` replaces the fixed spend. `fetchTranscript` and `summarize` are each wrapped in try/catch → `502 { error }` (log the real error server-side; do not leak internals). The unavailable-transcript branch stays `422`. Success response gains `cost` and `transcriptLength`: `{ summary, model, videoId, summaryId, creditsRemaining, cost, transcriptLength }`.
+**Contract**: Flow (Phase 5 inserts the 409 confirmation between steps 3 and 4):
+1. Up-front `getBalance` min-1 read gate before any paid call (`402` at 0) — unchanged.
+2. `fetchTranscript` in try/catch → `502 { error }`; the unavailable branch stays `422`.
+3. `const cost = summaryCost(transcript.content.length)`. **Hard-cap gate (F5)**: if `transcript.content.length > HARD_MAX_TRANSCRIPT_CHARS` → `413 { error }` ("This video's transcript is too long to summarize.") — before any 409, debit, or LLM call. This is what actually bounds worst-case token cost/latency; `summaryCost` only prices.
+4. **Atomic debit**: `spendCredit(supabase, cost)`. On the insufficient sentinel → `402` (`"You need <cost> credits for this video; you have <balance>"`, balance re-read per F4). This debit — not a pre-read `balance < cost` compare — is the authoritative, race-safe cost gate.
+5. In try/catch: `summarize` (failure → `502`) then persist the video+summary (failure → stable `500 { error }`, F7). **On any throw in this block, call `refundCredits(admin, userId, cost)` before returning** so the user isn't charged for failed work.
+6. `200` — success response gains `cost` and `transcriptLength`: `{ summary, model, videoId, summaryId, creditsRemaining, cost, transcriptLength }`, where `creditsRemaining` is the balance returned by the successful debit.
 
-#### 3. Config-status reference
+Log real errors server-side; never leak internals in the `error` field.
 
-**File**: `src/lib/config-status.ts` (verify only)
+#### 3. Stale `probe` references
 
-**Intent**: Confirm no code references the old `probe` path; the config-status "Transcript / LLM" entry is unaffected.
+**Files**: `src/pages/api/account/delete.ts` (update comment), `src/lib/config-status.ts` (verify only)
 
-**Contract**: No functional change; grep confirms `probe` has no remaining references.
+**Intent**: Remove every lingering reference to the old `probe` path so the no-stale-refs gate can actually pass (F6). `account/delete.ts:46` has a comment (`matches src/pages/api/summaries/probe.ts`) that must be repointed to `generate.ts`. The config-status "Transcript / LLM" entry is unaffected.
+
+**Contract**: Update the `account/delete.ts` comment to reference `generate.ts`; no functional change. A repo-wide search (see the PowerShell command in Success Criteria — `grep` is unavailable in this environment, F6) confirms `summaries/probe` has no remaining references.
 
 ### Success Criteria:
 
@@ -242,13 +270,14 @@ Promote the probe to the production generation endpoint: rename the file, spend 
 
 - Type checking passes: `npm run build`
 - Linting passes: `npm run lint`
-- No stale references: `grep -rn "summaries/probe" src/` returns nothing
+- No stale references (PowerShell, F6): `Get-ChildItem -Recurse -File src | Select-String "summaries/probe"` returns nothing
 
 #### Manual Verification:
 
-- `curl -X POST /api/summaries/generate` (authenticated) with a normal video returns 200, a Polish summary, `cost: 1`, and decrements the balance by 1; a new `summaries` row is written.
+- `curl.exe -X POST /api/summaries/generate` (authenticated) with a normal video returns 200, a Polish summary, `cost: 1`, and decrements the balance by 1; a new `summaries` row is written.
 - A >40k-char video returns 200 with `cost: 2` and decrements by 2.
-- A video with no transcript returns 422; forcing an upstream error (e.g. a bad key) returns 502, not 500, and spends no credit.
+- A transcript longer than `HARD_MAX_TRANSCRIPT_CHARS` returns `413` before any debit or LLM call and spends nothing (F5).
+- A video with no transcript returns 422 (before any debit); forcing an upstream error (e.g. a bad OpenRouter key) returns 502, not 500, and leaves the balance unchanged net (the cost is debited then refunded — confirm the balance is back to its pre-request value).
 
 **Implementation Note**: After automated verification passes, pause for manual confirmation before proceeding.
 
@@ -268,7 +297,7 @@ Add the opt-in for the higher cost: an `allowLong` request flag plus a 409 "conf
 
 **Intent**: Accept `allowLong` in the request; when the transcript is long and `allowLong` is not set, return a distinct confirmation response *before* summarizing (no LLM call, no spend) so the client can ask the user to confirm the 2-credit cost.
 
-**Contract**: `probeSchema` (now the generate schema) gains `allowLong: z.boolean().optional().default(false)`. After computing `cost`: `if (cost > 1 && !allowLong)` → `409 { error, requiresConfirmation: true, cost, transcriptLength }`. When `allowLong` is true, a long video proceeds and the existing `balance < cost` → 402 check still applies. A short video ignores `allowLong` and always costs 1.
+**Contract**: `probeSchema` (now the generate schema) gains `allowLong: z.boolean().optional().default(false)`. The 409 is checked **after computing `cost` (step 3) and before the atomic debit (step 4)**, so a confirmation-required response never debits and never needs a refund: `if (cost > 1 && !allowLong)` → `409 { error, requiresConfirmation: true, cost, transcriptLength }`. When `allowLong` is true, a long video proceeds to the debit, where the insufficient sentinel still yields `402`. A short video ignores `allowLong` and always costs 1.
 
 ### Success Criteria:
 
@@ -304,7 +333,7 @@ The user-facing surface: a React island on `/dashboard` that drives the endpoint
 **Contract**: Props `{ initialCredits: number | null }`. Local state: `url`, `character` (`"informational" | "educational"`, default informational), `allowLong` (default false), request status, `summary`/`cost`, error message, a `confirm` state (`{ cost, transcriptLength }` from a 409), and `credits` (seeded from `initialCredits`, updated to `creditsRemaining` on success). Client-side URL validation reuses `extractYoutubeId` (pure import) to enable/disable submit; submit is also disabled while loading or when `credits` is 0/null. POSTs `{ url, character, allowLong }` to `/api/summaries/generate`. Response handling:
 - `200` → render summary (`whitespace-pre-wrap`), set `credits = creditsRemaining`, note credits spent.
 - `409` → enter confirm state; show "This is a long video (~N chars). Generating costs {cost} credits." with a **"Generate anyway ({cost} credits)"** button that resubmits with `allowLong: true`; disable that button when `credits < cost` with a "not enough credits" note.
-- `402` → credits message; `422` → "No transcript is available for this video."; `502` → "The transcript or summarization service failed. Please try again."; `503` → "Summary generation isn't configured."; `400`/`401` → validation / "Your session expired — sign in again."
+- `402` → credits message; `413` → "This video is too long to summarize." (F5); `422` → "No transcript is available for this video."; `502` → "The transcript or summarization service failed. Please try again."; `503` → "Summary generation isn't configured."; `500` → "Something went wrong saving your summary. Please try again." (retryable — persistence failure, F7); `400`/`401` → validation / "Your session expired — sign in again."
 Inputs are preserved across errors for retry.
 
 #### 2. Character selector + toggle controls
@@ -394,11 +423,14 @@ Per the roadmap's Module-3 deferral, S-01 uses **manual verification only** (no 
 
 ## Performance Considerations
 
-The transcript fetch (possibly a polled Whisper job) dominates latency; the UI must show a loading state and tolerate multi-second waits. The 40k-char cap bounds worst-case LLM token cost/latency. The confirm path re-fetches the transcript (accepted tradeoff). No new N+1 or hot-path concerns; volumes are MVP-small.
+The transcript fetch (possibly a polled Whisper job) dominates latency; the UI must show a loading state and tolerate multi-second waits. The 40k-char threshold only sets the 1→2 credit *price*; worst-case LLM token cost/latency is bounded by the `HARD_MAX_TRANSCRIPT_CHARS` reject gate (F5), which returns 413 before the LLM call for pathologically long transcripts. The confirm path re-fetches the transcript (accepted tradeoff). No new N+1 or hot-path concerns; volumes are MVP-small.
 
 ## Migration Notes
 
-One new forward migration only (`spend_credits`); existing live migrations are untouched. `spend_credit()` is dropped in the same migration and its sole caller (`credits.ts`) is switched in the same phase, so there is no window where the app references a missing function. Apply locally with `npx supabase migration up`; it must also be pushed to the cloud project before/with deploy.
+**Expand/contract, two migrations** (F3). Existing live migrations are untouched.
+
+1. **Expand (this slice)**: one forward migration adds `spend_credits` + `refund_credits` and **leaves `spend_credit()` in place**. `credits.ts` is switched to `spend_credits` in the same phase. Deploy order is now safe in both directions: the DB has both functions, so the old Worker (still calling `spend_credit`) and the new Worker (calling `spend_credits`) each work. Apply locally with `npx supabase migration up`; push to cloud before/with the Worker deploy.
+2. **Contract (follow-up, after the new Worker is live)**: a later migration runs `drop function if exists public.spend_credit();`. This is deferred because dropping it alongside the expand migration would open a deploy window — DB-first would break the still-running old Worker, and Worker-first would call an RPC not yet created. Nothing in this slice's scope references `spend_credit` after the `credits.ts` switch, so the drop is forward-safe once the new Worker is confirmed live.
 
 ## References
 
@@ -409,7 +441,7 @@ One new forward migration only (`spend_credits`); existing live migrations are u
 
 ## Progress
 
-> Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles. See `references/progress-format.md`.
+> Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Existing UI copy → English
 
@@ -434,6 +466,7 @@ One new forward migration only (`spend_credits`); existing live migrations are u
 
 - [ ] 2.4 `spend_credits(2)` lowers balance by 2 / returns new balance; over-spend returns -1 and no change
 - [ ] 2.5 `spend_credits` not executable by `anon` (least privilege holds)
+- [ ] 2.6 `refund_credits` executable only by `service_role` (denied for `authenticated`/`anon`)
 
 ### Phase 3: Cost policy
 
@@ -448,13 +481,14 @@ One new forward migration only (`spend_credits`); existing live migrations are u
 
 - [ ] 4.1 Type checking passes: `npm run build`
 - [ ] 4.2 Linting passes: `npm run lint`
-- [ ] 4.3 No stale references: `grep -rn "summaries/probe" src/` returns nothing
+- [ ] 4.3 No stale references (PowerShell): `Get-ChildItem -Recurse -File src | Select-String "summaries/probe"` returns nothing
 
 #### Manual
 
 - [ ] 4.4 Normal video → 200, Polish summary, `cost: 1`, balance −1, row written
 - [ ] 4.5 Long video → 200, `cost: 2`, balance −2
-- [ ] 4.6 No-transcript → 422; forced upstream error → 502 (not 500), no spend
+- [ ] 4.6 Transcript over `HARD_MAX_TRANSCRIPT_CHARS` → 413 before any debit/LLM call, spends nothing
+- [ ] 4.7 No-transcript → 422; forced upstream error → 502 (not 500), balance net-unchanged (debit then refund)
 
 ### Phase 5: Long-video confirmation gate
 
