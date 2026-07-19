@@ -38,7 +38,6 @@ if (user) {
       <p class="text-blue-100/80">
         Welcome, <span class="font-semibold text-white">{user?.email}</span>
       </p>
-      <p class="mt-2 text-sm text-blue-100/50">This page is only for authenticated users.</p>
       <div class="mt-6 border-t border-white/10 pt-6">
         <GenerateSummaryForm client:load initialCredits={credits} />
       </div>
