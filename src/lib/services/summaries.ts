@@ -76,6 +76,19 @@ export interface AppDatabase {
  */
 export type AppSupabaseClient = SupabaseClient<AppDatabase, "public", "public", AppDatabase["public"]>;
 
+/**
+ * Cost policy (pure). A summary of a long transcript costs 2 credits instead of 1; transcripts
+ * above the hard maximum are rejected by the endpoint before the LLM call (Phase 4) to bound
+ * worst-case token cost/latency. `summaryCost` only prices — it does not enforce the hard cap.
+ */
+export const LONG_TRANSCRIPT_CHARS = 40000;
+export const HARD_MAX_TRANSCRIPT_CHARS = 200000;
+
+/** Maps transcript length to credit cost: 2 for a long transcript, else 1. */
+export function summaryCost(transcriptLength: number): number {
+  return transcriptLength > LONG_TRANSCRIPT_CHARS ? 2 : 1;
+}
+
 const YOUTUBE_ID_PATTERN = /^[a-zA-Z0-9_-]{11}$/;
 const YOUTUBE_HOSTS = new Set(["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"]);
 

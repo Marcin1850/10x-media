@@ -458,9 +458,9 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 
 #### Automated
 
-- [x] 2.1 Migration applies cleanly: `npx supabase migration up`
-- [x] 2.2 Type checking passes: `npm run build`
-- [x] 2.3 Linting passes: `npm run lint`
+- [x] 2.1 Migration applies cleanly: `npx supabase migration up` — 23d59cc
+- [x] 2.2 Type checking passes: `npm run build` — 23d59cc
+- [x] 2.3 Linting passes: `npm run lint` — 23d59cc
 
 #### Manual
 
@@ -472,8 +472,8 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 
 #### Automated
 
-- [ ] 3.1 Type checking passes: `npm run build`
-- [ ] 3.2 Linting passes: `npm run lint`
+- [x] 3.1 Type checking passes: `npm run build`
+- [x] 3.2 Linting passes: `npm run lint`
 
 ### Phase 4: Endpoint — rename & harden
 
