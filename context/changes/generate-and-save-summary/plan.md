@@ -37,7 +37,7 @@ Verify: sign in, generate a normal video (1 credit spent, Polish summary shown, 
 - Full **design-system** restyle (S-06) — the form matches the existing custom cosmic theme; polish comes later.
 - **No schema change to `summaries`** — we do not store per-summary credit cost, and `videos.title`/`thumbnail_url` stay null (no metadata fetch).
 - **Token-accurate** cost measurement — character count is the proxy (see Cost policy).
-- **Markdown rendering** of summaries — plain text with preserved line breaks.
+- ~~**Markdown rendering** of summaries — plain text with preserved line breaks.~~ **Amended in Phase 7**: summaries are now authored as Markdown and rendered with `react-markdown` in the dashboard island (themed `components` map, HTML escaped by default). Pulled in at the user's request during the Phase 7 manual-quality pass — S-06 concerns app design, not summary content formatting.
 - **Streaming** responses or structured LLM output.
 - **Tests / test tooling** — manual verification only (roadmap defers testing to Module 3).
 - Any change to **F-01's** existing columns or RLS.
@@ -568,12 +568,12 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 
 #### Automated
 
-- [ ] 7.1 Type checking passes: `npm run build`
-- [ ] 7.2 Linting passes: `npm run lint`
+- [x] 7.1 Type checking passes: `npm run build`
+- [x] 7.2 Linting passes: `npm run lint`
 
 #### Manual
 
-- [ ] 7.3 Informational → Polish key-facts list; educational → Polish learning-overview (Polish output from English prompts)
+- [x] 7.3 Informational → Polish key-facts list; educational → Polish learning-overview (Polish output from English prompts)
 
 ### Phase 8: Contract migration — drop legacy `spend_credit()`
 

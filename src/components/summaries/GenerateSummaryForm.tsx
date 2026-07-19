@@ -1,5 +1,7 @@
 import React, { useState } from "react";
 import { Link2, Sparkles, CircleAlert } from "lucide-react";
+import Markdown from "react-markdown";
+import type { Components } from "react-markdown";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/auth/FormField";
 import { ServerError } from "@/components/auth/ServerError";
@@ -24,6 +26,27 @@ const CHARACTERS: { value: ChannelCharacter; label: string; hint: string }[] = [
   { value: "informational", label: "Informational", hint: "Key facts & data" },
   { value: "educational", label: "Educational", hint: "Topics & skills to learn" },
 ];
+
+/**
+ * Tailwind-styled element map for the Markdown summary, matching the cosmic theme. Raw HTML in the
+ * summary is escaped by react-markdown's default (no rehype-raw), so no extra sanitizer is needed.
+ */
+const summaryMarkdownComponents: Components = {
+  p: ({ children }) => <p className="text-sm leading-relaxed text-blue-50/90">{children}</p>,
+  ul: ({ children }) => <ul className="list-disc space-y-1 pl-5 text-sm text-blue-50/90">{children}</ul>,
+  ol: ({ children }) => <ol className="list-decimal space-y-1 pl-5 text-sm text-blue-50/90">{children}</ol>,
+  li: ({ children }) => <li className="marker:text-blue-200/40">{children}</li>,
+  strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
+  em: ({ children }) => <em className="italic">{children}</em>,
+  h2: ({ children }) => <h2 className="text-base font-semibold text-white">{children}</h2>,
+  h3: ({ children }) => <h3 className="text-sm font-semibold text-white">{children}</h3>,
+  a: ({ href, children }) => (
+    <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-300 underline">
+      {children}
+    </a>
+  ),
+  code: ({ children }) => <code className="rounded bg-white/10 px-1 py-0.5 text-xs">{children}</code>,
+};
 
 /**
  * Maps a generate-endpoint HTTP status to a user-facing English message. The 402/409 paths carry
@@ -255,7 +278,9 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
           <p className="text-xs tracking-wide text-blue-100/50 uppercase">
             Summary · {result.cost} credit{result.cost === 1 ? "" : "s"} spent
           </p>
-          <p className="text-sm whitespace-pre-wrap text-blue-50/90">{result.summary}</p>
+          <div className="space-y-2">
+            <Markdown components={summaryMarkdownComponents}>{result.summary}</Markdown>
+          </div>
         </div>
       ) : null}
     </div>
