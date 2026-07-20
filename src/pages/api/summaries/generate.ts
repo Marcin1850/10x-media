@@ -11,7 +11,7 @@ import {
   summaryCost,
   HARD_MAX_TRANSCRIPT_CHARS,
 } from "@/lib/services/summaries";
-import { getBalance, spendCredit, refundCredits } from "@/lib/services/credits";
+import { getBalance, reserveCredits, settleReservation, refundReservation } from "@/lib/services/credits";
 import { acquireGenerationLock, releaseGenerationLock } from "@/lib/services/generation-lock";
 
 export const prerender = false;
@@ -174,42 +174,55 @@ async function runGeneration({
     );
   }
 
-  // Atomic debit BEFORE the paid LLM call. The RPC's row-level `UPDATE … WHERE balance >= cost` is
-  // the concurrency serialization point, so parallel requests sharing one stale balance read cannot
-  // all overspend (losers get the -1 sentinel → 402). This debit, not a pre-read compare, is the
-  // authoritative cost gate.
+  // Atomic debit BEFORE the paid LLM call, opened as a reservation. The RPC's row-level
+  // `UPDATE … WHERE balance >= cost` is the concurrency serialization point, so parallel requests
+  // sharing one stale balance read cannot all overspend (losers get the -1 sentinel → 402). This
+  // debit, not a pre-read compare, is the authoritative cost gate.
+  //
+  // The reservation is what makes the compensation below durable: every exit path past this point
+  // must either settle it (success) or refund it (failure). A row left `reserved` is a recorded,
+  // recoverable debt rather than a silently charged user.
   let creditsRemaining: number;
+  let reservationId: string;
   try {
+    // Same untyped-client gap as the getBalance call above: createClient returns supabase-js's
+    // default untyped client and this codebase has no generated Database types yet.
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-    const spend = await spendCredit(supabase, cost);
-    if (!spend.ok) {
+    const reserved = await reserveCredits(supabase, cost);
+    if (!reserved.ok) {
       return Response.json(
-        { error: `You need ${cost} credits for this video; you have ${spend.balance}` },
+        { error: `You need ${cost} credits for this video; you have ${reserved.balance}` },
         { status: 402 },
       );
     }
-    creditsRemaining = spend.balance;
+    creditsRemaining = reserved.balance;
+    reservationId = reserved.reservationId;
   } catch (error) {
     // eslint-disable-next-line no-console
-    console.error("spend_credits failed:", error);
+    console.error("reserve_credits failed:", error);
     return Response.json({ error: "Something went wrong. Please try again." }, { status: 500 });
   }
 
-  // Paid work. On ANY failure past this point the user has been debited, so refund before returning
-  // so they are never charged for failed work. refundCredits is best-effort and never throws.
+  // Paid work. On ANY failure past this point the user has been debited, so refund the reservation
+  // before returning so they are never charged for failed work. refundReservation is best-effort,
+  // never throws, and is idempotent — a retry cannot credit twice.
   let summary: Awaited<ReturnType<typeof summarize>>;
   try {
     summary = await summarize({ transcript: transcript.content, character }, openrouterKey);
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("summarize failed:", error);
-    await refundCredits(admin, userId, cost);
+    await refundReservation(admin, userId, reservationId);
     return Response.json({ error: "The summarization service failed. Please try again." }, { status: 502 });
   }
 
+  // Persist alone stays inside the refunding try/catch. Settling deliberately sits OUTSIDE it: a
+  // throw from bookkeeping must never reach a catch that refunds a generation the user actually
+  // received, which would hand back credits for delivered work.
+  let persisted: Awaited<ReturnType<typeof upsertVideoAndAppendSummary>>;
   try {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-    const { videoId, summaryId } = await upsertVideoAndAppendSummary(supabase, {
+    persisted = await upsertVideoAndAppendSummary(supabase, {
       userId,
       url,
       youtubeId,
@@ -218,20 +231,25 @@ async function runGeneration({
       model: summary.model,
       resolvedVia: transcript.resolvedVia,
     });
-
-    return Response.json({
-      summary: summary.text,
-      model: summary.model,
-      videoId,
-      summaryId,
-      creditsRemaining,
-      cost,
-      transcriptLength,
-    });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("persist summary failed:", error);
-    await refundCredits(admin, userId, cost);
+    await refundReservation(admin, userId, reservationId);
     return Response.json({ error: "Something went wrong saving your summary. Please try again." }, { status: 500 });
   }
+
+  // The summary is persisted and the user received the work, so the debit stands. Settling is
+  // best-effort bookkeeping that closes the ledger row so reconciliation doesn't later mistake this
+  // successful generation for an unresolved debt. A failure here must not fail the response.
+  await settleReservation(admin, userId, reservationId);
+
+  return Response.json({
+    summary: summary.text,
+    model: summary.model,
+    videoId: persisted.videoId,
+    summaryId: persisted.summaryId,
+    creditsRemaining,
+    cost,
+    transcriptLength,
+  });
 }

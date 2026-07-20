@@ -44,7 +44,15 @@ For Phases 1-7, 17 automated/manual Progress items are checked and 16 manual acc
   - Tradeoff: Requires a forward migration and coordinated endpoint/service changes.
   - Confidence: HIGH - the current boolean/log path records failure but cannot repair or safely replay it.
   - Blind spot: The desired reconciliation worker/operator workflow and retention period are not yet specified.
-- **Decision**: PENDING
+- **Decision**: FIXED via the recommended fix — durable reservation ledger.
+  - New expand-only migration `20260720160000_credit_reservations.sql`: `credit_reservations` table (RLS on, no policies, revoked from anon/authenticated) + `reserve_credits(amount)` (authenticated, atomic debit **and** ledger insert in one transaction) + `settle_reservation` / `refund_reservation` (service_role only).
+  - Idempotency comes from the status transition itself: `update … where status = 'reserved' returning amount` — a retry finds no row, returns `false`, and never touches the balance.
+  - `credits.ts`: `spendCredit`/`refundCredits` replaced by `reserveCredits`/`settleReservation`/`refundReservation`; `ReserveResult` is a discriminated union so a successful debit always carries its id. Both admin-side helpers now wrap `rpc()` in try/catch, making the documented "never throws" true rather than aspirational.
+  - `generate.ts`: both former `refundCredits` sites now refund the reservation; the success path settles it. Settle was deliberately moved **outside** the persist try/catch so a bookkeeping throw can never reach a catch that refunds delivered work.
+  - Durability: a failed refund leaves the row `reserved` — a queryable debt, not just a `CREDIT_LEAK` log line. Reconciliation query documented in the migration header; partial index `credit_reservations_unresolved_idx` backs it.
+  - Verified against the local DB: reserve→refund credits once (3→5) and the retry returns `false` with no second credit; insufficient balance returns the `-1` sentinel and opens **no** ledger row; a settled row cannot be refunded; a cross-user refund is rejected and leaves the other balance untouched; an unauthenticated reserve raises instead of silently returning the sentinel. Grants confirmed: `reserve_credits` authenticated-only, settle/refund service_role-only, table unreadable by anon/authenticated.
+  - **Not** done (was the finding's own blind spot): no reconciliation worker, no retention policy. Recoverability is in place; automating the sweep is a separate change.
+  - Expand-only per repo convention — `spend_credit`, `spend_credits`, `refund_credits` all stay until the Phase 8 contract migration, which was widened from one drop to all three (`plan.md` Phase 8 + §Migration Notes updated).
 
 ### F2 - Stale lock recovery can release a newer request's lock
 
