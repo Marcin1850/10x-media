@@ -32,12 +32,13 @@ Watching YouTube videos is time-consuming — when regularly following informati
 | F-01 | video-summary-schema      | (foundation) video/summary tables with per-user RLS          | —             | Access Control, NFR, FR-006   | done        |
 | F-02 | transcript-llm-probe      | (foundation) transcript→LLM path verified on the Worker      | —             | FR-005, NFR                   | done        |
 | S-01 | generate-and-save-summary | paste URL + pick character → get and save a Polish summary   | F-01, F-02    | US-01, FR-003, FR-004, FR-005 | in progress |
-| S-02 | browse-summary-list       | browse the list of saved summaries                           | S-01          | FR-006                        | proposed |
+| S-02 | browse-summary-list       | browse the list of saved summaries                           | S-01, S-08    | FR-006                        | proposed |
 | S-03 | delete-summary            | delete a summary                                             | S-01          | FR-007                        | proposed |
 | S-04 | delete-account            | delete their account and all associated data (GDPR)          | F-01          | Access Control, NFR (privacy) | done        |
 | S-05 | summary-credits           | start with 5 credits; each generation spends one             | F-01          | — (cost guardrail)            | done        |
 | S-06 | app-design-system         | use the app through a coherent, production-like UI           | S-02          | — (product polish)            | planned     |
 | S-07 | summary-generation-telemetry | (observability) each summary records how long it took and what it cost | S-01 | — (F-02 follow-ups F4/F5)  | proposed |
+| S-08 | video-metadata            | see the video's thumbnail, title and channel name next to a summary | S-01          | FR-006 (list legibility)      | proposed |
 
 ## Streams
 
@@ -45,7 +46,7 @@ Navigation aid — groups items that share a Prerequisites chain. Canonical orde
 
 | Stream | Theme                          | Chain                             | Note                                                                                          |
 | ------ | ------------------------------ | --------------------------------- | --------------------------------------------------------------------------------------------- |
-| A      | Core: transcript→summary       | `F-02` → `S-01` → `S-02` / `S-03` | Front-loads the top risk (external) per the "speed" goal; `S-02` and `S-03` run parallel after `S-01`. |
+| A      | Core: transcript→summary       | `F-02` → `S-01` → `S-08` → `S-02` / `S-03` | Front-loads the top risk (external) per the "speed" goal. `S-08` gates `S-02` so the list ships with video metadata; `S-03` and `S-07` run parallel after `S-01` and do not wait on `S-08`. |
 | B      | Data & privacy                 | `F-01`                            | Minimal schema + RLS; joins Stream A at `S-01`.                                                |
 
 ## Baseline
@@ -112,11 +113,11 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
 - **Outcome:** the user browses the list of their saved summaries.
 - **Change ID:** browse-summary-list
 - **PRD refs:** FR-006
-- **Prerequisites:** S-01
+- **Prerequisites:** S-01, S-08
 - **Parallel with:** S-03
 - **Blockers:** —
 - **Unknowns:** —
-- **Risk:** Low risk. After S-01 the data already exists; this visible list surface is also the mechanism by which the user judges the "75% good-enough summaries" criterion over time. Sequenced after S-01 because without saved summaries there is nothing to browse.
+- **Risk:** Low risk. After S-01 the data already exists; this visible list surface is also the mechanism by which the user judges the "75% good-enough summaries" criterion over time. Sequenced after S-01 because without saved summaries there is nothing to browse, and after S-08 so the list renders thumbnails, titles and channel names from the start rather than shipping a bare-URL list that is immediately retrofitted.
 - **Status:** proposed
 
 ### S-03: User deletes a summary
@@ -192,6 +193,25 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
   - **F5 (cost):** add `usage: { include: true }` to the model options in `getSummaryModel` (`src/lib/services/llm.ts:7-9`, currently no options object), return `providerMetadata?.openrouter?.usage` from `summarize()`, persist to an additive `cost_usd numeric`. Feasibility already confirmed against `@openrouter/ai-sdk-provider` via Context7 — no new dependency. `cost` is `number | undefined`, so persist null-safely.
 - **Status:** proposed
 
+### S-08: Video metadata (thumbnail, title, channel name)
+
+- **Outcome:** the user sees the video's thumbnail, title and YouTube channel name alongside a summary, instead of a bare URL — so a saved summary is recognisable at a glance.
+- **Change ID:** video-metadata
+- **PRD refs:** — (no direct PRD ref; makes FR-006's summary list legible)
+- **Prerequisites:** S-01
+- **Unlocks:** S-02 (the list is the main surface that renders this metadata)
+- **Parallel with:** S-07
+- **Integrates with:** S-06 (styling of the resulting card)
+- **Blockers:** —
+- **Unknowns:**
+  - Which metadata source — YouTube oEmbed (no API key, returns title + `author_name` + thumbnail) vs. the YouTube Data API (key + quota) vs. Supadata's own video metadata? — Owner: implementation. Block: no.
+  - Hotlink the YouTube thumbnail CDN URL or copy the image into storage? — Owner: implementation. Block: no. (Hotlinking is the cheap default for the MVP.)
+- **Risk:** Low risk. `videos.title` and `videos.thumbnail_url` already exist from F-01 but are never written (`VideoInsert`, `src/lib/services/summaries.ts:14-18`), so half the slice is populating dead columns; only the channel name needs an additive migration. The care point is failure isolation — metadata is decorative, so a fetch failure must not fail a paid generation that already succeeded; persist nulls and render a fallback. Sequenced after S-01 to avoid contending with the deploy-gated Phase 8 migration, and made a hard prerequisite of S-02 so the list ships with metadata rather than being retrofitted.
+- **Scope notes:**
+  - Additive `channel_name text` on `videos` (same idempotent-migration pattern as `model` / `resolved_via`); populate `title` and `thumbnail_url` on the existing insert path.
+  - Metadata fetch happens in the generation endpoint next to the transcript fetch, best-effort and non-fatal.
+- **Status:** proposed
+
 ## Backlog Handoff
 
 | Roadmap ID | Change ID                 | Suggested issue title                          | Ready for `/10x-plan` | Notes                                       |
@@ -199,12 +219,13 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
 | F-01       | video-summary-schema      | Data schema: videos/summaries tables + RLS     | done                  | Implemented + impl-reviewed (`impl_reviewed`); pending `/10x-archive`. |
 | F-02       | transcript-llm-probe      | Spike: YouTube transcript → LLM on the Worker  | done                  | De-risk complete — free CF plan sufficient, Railway not needed. Implemented + impl-reviewed (`impl_reviewed`); pending `/10x-archive`. |
 | S-01       | generate-and-save-summary | Generate and save a video summary              | in progress           | Plan written 2026-07-18 (now 8 phases — former `S-01-fu` folded in as Phase 8, 2026-07-19), plan-reviewed + hardened 2026-07-18→19 (RETHINK → SOUND; all 7 findings fixed). **Implementation 2026-07-19 (branch `generate-and-save-summary`, Linear MAR-7 → In Progress): phases 1–7 of 8 done** — P1 English copy (`4f48536`), P2 `spend_credits`/`refund_credits` (`23d59cc`), P3 cost policy (`b22d6f1`), P4 endpoint rename & harden (`9072baa`), P5 `allowLong` 409 gate (`17817f2`), P6 dashboard island (`10b3ffa`), P7 prompts + Markdown rendering (`af3bea3`); automated checks green, P7 manual pass passed. DB manual checks (2.4–2.6) + P1 banner (1.3) still to spot-check. **Only Phase 8 remains — deploy-gated**: apply the contract migration dropping `spend_credit()` to cloud only after the phases 1–7 Worker is live. Next: open PR for phases 1–7 → deploy → confirm Worker calls `spend_credits` → `/10x-implement generate-and-save-summary phase 8`. |
-| S-02       | browse-summary-list       | List of saved summaries                        | no                    | Waiting on S-01                              |
+| S-02       | browse-summary-list       | List of saved summaries                        | no                    | Waiting on S-01 and S-08 (metadata must land first so the list is not retrofitted) |
 | S-03       | delete-summary            | Delete a summary                               | no                    | Waiting on S-01; FR-007 nice-to-have         |
 | S-04       | delete-account            | Delete account + all data (GDPR)               | done                  | Merged to `master` 2026-07-13 (`78bca68`), Linear MAR-10 → Done. Both phases implemented; Workers Secret set. Manual E2E passed; impl-review NEEDS ATTENTION (2 warnings, 3 observations), triage complete (F1/F3/F4 fixed, F2 skipped baseline drift, F5 tracker sync); lint + build green. Pending `/10x-archive`. |
 | S-05       | summary-credits           | Credit budget for summary generation           | done                  | Merged to `master` 2026-07-14 (`482b686`), CI green + Worker deployed, Linear MAR-11 → Done. Formal review: **NEEDS ATTENTION** (5 warnings + 3 observations), 2026-07-13; **all 8 findings triaged + fixed 2026-07-14** (`10f91f4`), every dimension now PASS. All 4 phases implemented + manually verified. All 6 DB migrations are **live on cloud** (2026-07-14), privilege state verified post-push. Pending `/10x-archive`. |
 | S-06       | app-design-system         | Production-like application design             | no                    | Waiting on S-02 (needs the surfaces it styles to exist); presentational scope only |
 | S-07       | summary-generation-telemetry | Persist summary generation time + LLM cost  | yes                   | Carries F-02 impl-review F4 (`generation_ms`) + F5 (`cost_usd` via OpenRouter usage accounting) — **deferred to S-01 but missed during S-01 planning**, found 2026-07-20. Small and well-specified: one additive migration + two service touches; feasibility already confirmed. Waits on S-01 landing (incl. deploy-gated Phase 8) to avoid contending on the same files. |
+| S-08       | video-metadata            | Persist video thumbnail, title + channel name  | no                    | Gap found 2026-07-20: F-01 created `videos.title` / `videos.thumbnail_url` but no code ever writes them; no channel-name column exists. Needs a metadata source decision (oEmbed vs. Data API vs. Supadata) plus one additive `channel_name` column. **Hard prerequisite of S-02** so the list ships with metadata rather than being retrofitted. Waits on S-01 (deploy-gated Phase 8). |
 
 ## Open Roadmap Questions
 
