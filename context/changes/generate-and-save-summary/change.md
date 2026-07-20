@@ -3,7 +3,7 @@ change_id: generate-and-save-summary
 title: Generate and save a video summary
 status: impl_reviewed
 created: 2026-07-18
-updated: 2026-07-19
+updated: 2026-07-20
 archived_at: null
 ---
 
