@@ -54,22 +54,35 @@ export async function spendCredit(supabase: AppSupabaseClient, amount = 1): Prom
 }
 
 /**
+ * Log marker for a debit that could not be reversed. Grep for it to find users owed credits — this
+ * is the manual reconciliation path until a reservation ledger exists.
+ */
+const CREDIT_LEAK = "CREDIT_LEAK";
+
+/**
  * Reverses a debit after a failed generation by crediting `amount` back to `userId`. Because it
  * raises a balance it must never be user-callable — it runs via the service-role admin client and
  * the `refund_credits` RPC is granted to `service_role` only. Best-effort compensating action:
- * on any error, including a null admin client (service-role key unset), it logs and resolves without
- * throwing, so it never masks the original generation failure being returned to the user.
+ * on any error it logs and resolves without throwing, so it never masks the original generation
+ * failure being returned to the user. Returns `false` when the user is still charged, so callers
+ * can tell an honoured invariant from a leaked debit.
+ *
+ * Callers must ensure `admin` is non-null *before* debiting (the generate endpoint fails 503 in
+ * preflight when it isn't) — a null client here means the debit is already unrecoverable.
  */
-export async function refundCredits(admin: SupabaseClient | null, userId: string, amount: number): Promise<void> {
+export async function refundCredits(admin: SupabaseClient | null, userId: string, amount: number): Promise<boolean> {
   if (!admin) {
     // eslint-disable-next-line no-console
-    console.error(`refundCredits: admin client unavailable, cannot refund ${amount} credit(s) to ${userId}`);
-    return;
+    console.error(`${CREDIT_LEAK}: admin client unavailable, cannot refund ${amount} credit(s) to ${userId}`);
+    return false;
   }
 
   const { error } = await admin.rpc("refund_credits", { target_user: userId, amount });
   if (error) {
     // eslint-disable-next-line no-console
-    console.error(`refundCredits: failed to refund ${amount} credit(s) to ${userId}: ${error.message}`);
+    console.error(`${CREDIT_LEAK}: failed to refund ${amount} credit(s) to ${userId}: ${error.message}`);
+    return false;
   }
+
+  return true;
 }

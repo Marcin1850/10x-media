@@ -29,7 +29,7 @@ Turn a list of YouTube videos into summaries that tell you what's actually worth
 | [OpenRouter](https://openrouter.ai/)  | Generating summaries       | **Yes** — pay-as-you-go, requires credit                            |
 | [Cloudflare](https://cloudflare.com/) | Deployment only            | Only to deploy; not needed for local dev                            |
 
-Auth works without Supadata and OpenRouter keys, but summary generation stays disabled — the app detects missing keys at runtime (`src/lib/config-status.ts`) and surfaces a notice instead of failing on a paid call.
+Auth works without the Supadata, OpenRouter, and Supabase service-role keys, but summary generation stays disabled — the app detects missing keys at runtime (`src/lib/config-status.ts`) and surfaces a notice instead of failing on a paid call.
 
 ## Getting Started
 
@@ -115,7 +115,9 @@ Copy `.env.example` to both `.env` and `.dev.vars` and fill in the values.
 - **`POST /api/account/delete`** (Worker runtime) — deleting an `auth.users` record requires the service-role key; the anon SSR client cannot do it. Without this secret the endpoint returns `503` and account deletion is unavailable.
 - **`npm run grant-credits`** (offline, your machine) — reads it from `.env`.
 
-Both need it, so it must be set locally **and** as a Worker secret in production.
+- **`POST /api/summaries/generate`** (Worker runtime) — generation debits credits *before* the paid LLM call, and only the admin client can refund them if that call fails. The endpoint refuses with `503` when the key is unset rather than risk charging a user for failed work.
+
+All three need it, so it must be set locally **and** as a Worker secret in production.
 
 ## Supabase Configuration
 

@@ -81,5 +81,13 @@ export async function summarize(
     prompt: transcript,
   });
 
-  return { text: result.text, model: result.finalStep.response.modelId };
+  // A resolved call is not necessarily a usable summary. Throwing here routes into the endpoint's
+  // existing refund + 502 path, so the user isn't charged for an empty summary.
+  // A truncated one (finishReason "length") is deliberately kept — partial coverage still has value.
+  const text = result.text.trim();
+  if (text === "") {
+    throw new Error(`summarize: model returned empty text (finishReason: ${result.finishReason})`);
+  }
+
+  return { text, model: result.finalStep.response.modelId };
 }

@@ -12,6 +12,7 @@ import {
   HARD_MAX_TRANSCRIPT_CHARS,
 } from "@/lib/services/summaries";
 import { getBalance, spendCredit, refundCredits } from "@/lib/services/credits";
+import { acquireGenerationLock, releaseGenerationLock } from "@/lib/services/generation-lock";
 
 export const prerender = false;
 
@@ -26,6 +27,15 @@ const generateSchema = z.object({
 export const POST: APIRoute = async (context) => {
   if (!SUPADATA_API_KEY || !OPENROUTER_API_KEY) {
     return Response.json({ error: "Transcript/LLM services are not configured" }, { status: 503 });
+  }
+
+  // The debit below happens before the paid LLM call, so the refund path is what upholds "failed
+  // work never charges the user". Without the service-role key that path cannot run at all, so a
+  // failure would silently leave the user charged. Fail here — before any debit — rather than
+  // discovering it at compensation time.
+  const admin = createAdminClient();
+  if (!admin) {
+    return Response.json({ error: "Summary generation is not configured" }, { status: 503 });
   }
 
   if (!context.locals.user) {
@@ -50,6 +60,70 @@ export const POST: APIRoute = async (context) => {
 
   const userId = context.locals.user.id;
 
+  // One generation in flight per user. The read gate below is not a serialization point, so without
+  // this every concurrent request would pay for its own transcript fetch before the atomic debit
+  // rejected all but the affordable ones. Acquired before the read gate — the paid work starts
+  // right after it — and released in the `finally` regardless of how generation exits.
+  let locked: boolean;
+  try {
+    locked = await acquireGenerationLock(admin, userId);
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("acquireGenerationLock failed:", error);
+    return Response.json({ error: "Something went wrong. Please try again." }, { status: 500 });
+  }
+  if (!locked) {
+    return Response.json(
+      { error: "A summary is already being generated. Wait for it to finish before starting another." },
+      { status: 429 },
+    );
+  }
+
+  try {
+    return await runGeneration({
+      supabase,
+      admin,
+      userId,
+      url,
+      youtubeId,
+      character,
+      allowLong,
+      supadataKey: SUPADATA_API_KEY,
+      openrouterKey: OPENROUTER_API_KEY,
+    });
+  } finally {
+    await releaseGenerationLock(admin, userId);
+  }
+};
+
+interface GenerationInput {
+  supabase: NonNullable<ReturnType<typeof createClient>>;
+  admin: NonNullable<ReturnType<typeof createAdminClient>>;
+  userId: string;
+  url: string;
+  youtubeId: string;
+  character: "informational" | "educational";
+  allowLong: boolean;
+  /** Passed in rather than re-read from `astro:env`: the POST preflight already proved both non-null. */
+  supadataKey: string;
+  openrouterKey: string;
+}
+
+/**
+ * The generation pipeline proper, extracted so the caller can hold the per-user lock across every
+ * exit path with a single `try`/`finally` instead of releasing it before each of the many returns.
+ */
+async function runGeneration({
+  supabase,
+  admin,
+  userId,
+  url,
+  youtubeId,
+  character,
+  allowLong,
+  supadataKey,
+  openrouterKey,
+}: GenerationInput): Promise<Response> {
   // Up-front credit gate: read the caller's balance and block at zero *before* any paid Supadata/
   // OpenRouter call. This is a minimum-1 read gate only — the authoritative, race-safe cost gate is
   // the atomic debit below. createClient returns supabase-js's default untyped client; this codebase
@@ -65,7 +139,7 @@ export const POST: APIRoute = async (context) => {
   // resolvable-but-unavailable transcript returns ok:false → 422. Neither has debited a credit yet.
   let transcript: Awaited<ReturnType<typeof fetchTranscript>>;
   try {
-    transcript = await fetchTranscript({ url, lang: "pl" }, SUPADATA_API_KEY);
+    transcript = await fetchTranscript({ url, lang: "pl" }, supadataKey);
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("fetchTranscript failed:", error);
@@ -125,11 +199,11 @@ export const POST: APIRoute = async (context) => {
   // so they are never charged for failed work. refundCredits is best-effort and never throws.
   let summary: Awaited<ReturnType<typeof summarize>>;
   try {
-    summary = await summarize({ transcript: transcript.content, character }, OPENROUTER_API_KEY);
+    summary = await summarize({ transcript: transcript.content, character }, openrouterKey);
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("summarize failed:", error);
-    await refundCredits(createAdminClient(), userId, cost);
+    await refundCredits(admin, userId, cost);
     return Response.json({ error: "The summarization service failed. Please try again." }, { status: 502 });
   }
 
@@ -157,7 +231,7 @@ export const POST: APIRoute = async (context) => {
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("persist summary failed:", error);
-    await refundCredits(createAdminClient(), userId, cost);
+    await refundCredits(admin, userId, cost);
     return Response.json({ error: "Something went wrong saving your summary. Please try again." }, { status: 500 });
   }
-};
+}

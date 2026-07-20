@@ -28,6 +28,14 @@ const CHARACTERS: { value: ChannelCharacter; label: string; hint: string }[] = [
 ];
 
 /**
+ * Elements the summary is allowed to render. LLM output is untrusted (transcript content can steer
+ * it), so `img` and `a` are excluded: an image would make the viewer's browser fetch an
+ * attacker-controlled URL, and a link would offer an attacker-controlled navigation target. Anything
+ * outside this list is unwrapped, so its text still shows.
+ */
+const SUMMARY_ALLOWED_ELEMENTS = ["p", "ul", "ol", "li", "strong", "em", "h2", "h3", "code"];
+
+/**
  * Tailwind-styled element map for the Markdown summary, matching the cosmic theme. Raw HTML in the
  * summary is escaped by react-markdown's default (no rehype-raw), so no extra sanitizer is needed.
  */
@@ -40,11 +48,6 @@ const summaryMarkdownComponents: Components = {
   em: ({ children }) => <em className="italic">{children}</em>,
   h2: ({ children }) => <h2 className="text-base font-semibold text-white">{children}</h2>,
   h3: ({ children }) => <h3 className="text-sm font-semibold text-white">{children}</h3>,
-  a: ({ href, children }) => (
-    <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-300 underline">
-      {children}
-    </a>
-  ),
   code: ({ children }) => <code className="rounded bg-white/10 px-1 py-0.5 text-xs">{children}</code>,
 };
 
@@ -54,6 +57,8 @@ const summaryMarkdownComponents: Components = {
  */
 function messageForStatus(status: number, serverError?: string): string {
   switch (status) {
+    case 429:
+      return "A summary is already being generated. Wait for it to finish before starting another.";
     case 413:
       return "This video is too long to summarize.";
     case 422:
@@ -84,7 +89,10 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
   const [credits, setCredits] = useState<number | null>(initialCredits);
 
   const urlIsValid = extractYoutubeId(url) !== null;
-  const noCredits = credits === null || credits <= 0;
+  // `null` means the display-only balance read failed or was unavailable — not that the user is broke.
+  // Never gate submission on it: the endpoint debits atomically and answers 402 if credits really ran out.
+  const balanceUnknown = credits === null;
+  const noCredits = credits !== null && credits <= 0;
   const submitDisabled = loading || !urlIsValid || noCredits;
 
   async function generate(withAllowLong: boolean) {
@@ -151,7 +159,7 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
     void generate(allowLong);
   }
 
-  const confirmTooExpensive = confirm !== null && (credits === null || credits < confirm.cost);
+  const confirmTooExpensive = confirm !== null && credits !== null && credits < confirm.cost;
 
   return (
     <div className="space-y-6 text-left">
@@ -170,6 +178,9 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
           value={url}
           onChange={(v) => {
             setUrl(v);
+            // The long-video quote was priced for the previous inputs — drop it so a changed
+            // video can't be generated at 2 credits on an earlier video's confirmation.
+            setConfirm(null);
           }}
           placeholder="https://www.youtube.com/watch?v=..."
           icon={<Link2 className="size-4" />}
@@ -196,6 +207,7 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
                     checked={selected}
                     onChange={() => {
                       setCharacter(option.value);
+                      setConfirm(null);
                     }}
                     className="sr-only"
                   />
@@ -244,6 +256,13 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
             You have no summary credits left. Generation is disabled.
           </p>
         ) : null}
+
+        {balanceUnknown ? (
+          <p className="text-center text-xs text-blue-100/50">
+            Your credit balance is unavailable right now. You can still generate — we&apos;ll tell you if you&apos;re
+            out of credits.
+          </p>
+        ) : null}
       </form>
 
       {confirm ? (
@@ -267,7 +286,7 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
           </Button>
           {confirmTooExpensive ? (
             <p className="text-xs text-amber-200/70">
-              Not enough credits — you need {confirm.cost} but have {credits ?? 0}.
+              Not enough credits — you need {confirm.cost} but have {credits}.
             </p>
           ) : null}
         </div>
@@ -279,7 +298,13 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
             Summary · {result.cost} credit{result.cost === 1 ? "" : "s"} spent
           </p>
           <div className="space-y-2">
-            <Markdown components={summaryMarkdownComponents}>{result.summary}</Markdown>
+            <Markdown
+              allowedElements={SUMMARY_ALLOWED_ELEMENTS}
+              unwrapDisallowed
+              components={summaryMarkdownComponents}
+            >
+              {result.summary}
+            </Markdown>
           </div>
         </div>
       ) : null}
