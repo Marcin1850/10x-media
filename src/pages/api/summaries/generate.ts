@@ -12,7 +12,7 @@ import {
   HARD_MAX_TRANSCRIPT_CHARS,
 } from "@/lib/services/summaries";
 import { getBalance, reserveCredits, settleReservation, refundReservation } from "@/lib/services/credits";
-import { acquireGenerationLock, releaseGenerationLock } from "@/lib/services/generation-lock";
+import { acquireGenerationLease, releaseGenerationLease } from "@/lib/services/generation-lock";
 
 export const prerender = false;
 
@@ -64,15 +64,19 @@ export const POST: APIRoute = async (context) => {
   // this every concurrent request would pay for its own transcript fetch before the atomic debit
   // rejected all but the affordable ones. Acquired before the read gate — the paid work starts
   // right after it — and released in the `finally` regardless of how generation exits.
-  let locked: boolean;
+  //
+  // The lease id is what scopes that release to *this* acquisition: if this request stalls past the
+  // stale window and is swept, the successor holds a different lease and our release is a no-op,
+  // instead of unlocking a generation that is still running.
+  let lease: string | null;
   try {
-    locked = await acquireGenerationLock(admin, userId);
+    lease = await acquireGenerationLease(admin, userId);
   } catch (error) {
     // eslint-disable-next-line no-console
-    console.error("acquireGenerationLock failed:", error);
+    console.error("acquireGenerationLease failed:", error);
     return Response.json({ error: "Something went wrong. Please try again." }, { status: 500 });
   }
-  if (!locked) {
+  if (lease === null) {
     return Response.json(
       { error: "A summary is already being generated. Wait for it to finish before starting another." },
       { status: 429 },
@@ -92,7 +96,7 @@ export const POST: APIRoute = async (context) => {
       openrouterKey: OPENROUTER_API_KEY,
     });
   } finally {
-    await releaseGenerationLock(admin, userId);
+    await releaseGenerationLease(admin, userId, lease);
   }
 };
 

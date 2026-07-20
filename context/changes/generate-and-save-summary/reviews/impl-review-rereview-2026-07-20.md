@@ -66,7 +66,15 @@ For Phases 1-7, 17 automated/manual Progress items are checked and 16 manual acc
   - Tradeoff: Requires a forward migration plus RPC/service/endpoint contract changes.
   - Confidence: HIGH - ownerless release creates the race directly.
   - Blind spot: Real production generation duration has not been measured, so the best lease duration remains empirical.
-- **Decision**: PENDING
+- **Decision**: FIXED via the recommended fix — opaque lease id required on release.
+  - New expand-only migration `20260720170000_generation_lock_lease.sql`: `generation_locks.lock_id uuid not null default gen_random_uuid()` + `acquire_generation_lease` (returns the new lease id, `NULL` when held) / `release_generation_lease(target_user, lease)` (deletes only `where user_id = … and lock_id = …`, returns whether a row went).
+  - The stale sweep is unchanged, but a takeover now mints a **new** lock_id — that is what makes the displaced request's later release harmless instead of unlocking a running successor.
+  - `generation-lock.ts`: `acquireGenerationLock`/`releaseGenerationLock` → `acquireGenerationLease` (`Promise<string | null>`) / `releaseGenerationLease(admin, userId, lease)`. Release still never throws; a `false` result now logs a warning, because it means this generation outran the stale window and may have overlapped a successor.
+  - `generate.ts`: `lease === null` drives the 429; the `finally` passes the lease back.
+  - Verified against the local DB (12 assertions): second acquire while held returns NULL; a foreign lease release returns `false` and leaves the row; the owner's release returns `true`. The race itself — A acquires, A goes stale, B takes over, **A's release returns `false` and B's lock survives**, C is still blocked, B can release. Grants confirmed: both functions service_role-only.
+  - Column default is what keeps the overlap window safe: the legacy `acquire_generation_lock` keeps inserting valid rows until Phase 8.
+  - Expand-only per repo convention — Phase 8's contract migration widened from three drops to five (`plan.md` Phase 8 + §Migration Notes + Progress 8.x updated).
+  - **Not** done: no bounded external-call deadline / lease renewal. The 600s stale window is still empirical (the finding's own blind spot), but a wrong guess is now merely a wasted takeover, not a correctness bug.
 
 ### F3 - The confirmation fix still has an in-flight stale-response race
 

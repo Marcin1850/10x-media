@@ -408,49 +408,55 @@ Each prompt is **layered** so one output serves both jobs: one or two framing se
 
 ---
 
-## Phase 8: Contract migration — drop the three legacy credit RPCs
+## Phase 8: Contract migration — drop the five superseded RPCs
 
 ### Overview
 
-The expand/contract close-out. **Three** generations of credit RPC now coexist, each left in place for the same deploy-window reason, and this phase drops all of them in one migration:
+The expand/contract close-out. Three generations of credit RPC and two generations of generation-lock RPC now coexist, each left in place for the same deploy-window reason, and this phase drops all of them in one migration:
 
 | Function | Added | Superseded by | Why it is still there |
 | --- | --- | --- | --- |
 | `spend_credit()` | `20260712175240` | `spend_credits(amount)` | Phase 2 expand-only |
 | `spend_credits(integer)` | `20260719120000` | `reserve_credits(amount)` | F1 ledger expand-only |
 | `refund_credits(uuid, integer)` | `20260719120000` | `refund_reservation(uuid, uuid)` | F1 ledger expand-only |
+| `acquire_generation_lock(uuid, integer)` | `20260720133000` | `acquire_generation_lease(uuid, integer)` | F2 lease expand-only |
+| `release_generation_lock(uuid)` | `20260720133000` | `release_generation_lease(uuid, uuid)` | F2 lease expand-only |
 
-They are dropped **together** because they share one precondition (the Worker calling `reserve_credits` is live), so splitting them across migrations would buy nothing and leave dead SECURITY DEFINER functions in the schema for longer.
+They are dropped **together** because they share one precondition (the phases 1–7 Worker is live), so splitting them across migrations would buy nothing and leave dead SECURITY DEFINER functions in the schema for longer.
 
-**Why this is not cosmetic.** Each is `SECURITY DEFINER`, running as `postgres`. `spend_credit`/`spend_credits` are granted to `authenticated`; `refund_credits` raises balances on an explicit `target_user`. `20260714140000` makes exactly this argument: an unused definer function is latent blast radius waiting for someone to extend it. `refund_credits` is the sharpest case — it credits an arbitrary user by amount, with no reservation to check against, so it is precisely the primitive the F1 ledger exists to remove.
+**Why this is not cosmetic.** Each is `SECURITY DEFINER`, running as `postgres`. `spend_credit`/`spend_credits` are granted to `authenticated`; `refund_credits` raises balances on an explicit `target_user`. `20260714140000` makes exactly this argument: an unused definer function is latent blast radius waiting for someone to extend it. `refund_credits` is the sharpest case — it credits an arbitrary user by amount, with no reservation to check against, so it is precisely the primitive the F1 ledger exists to remove. `release_generation_lock` is the same class of hazard for the lock: it releases by `user_id` alone, which is exactly the ownerless release the F2 lease replaced.
 
-**Deploy-ordering gate (do this phase LAST, after deploy).** This migration must run **only after the phases 1–7 Worker is live on cloud** — i.e. the deployed Worker calls `reserve_credits`/`settle_reservation`/`refund_reservation` and none of the three legacy functions. Running the drop while an older Worker still serves traffic reopens exactly the deploy window §Migration Notes avoids: DB-first would break it mid-generation, and for `refund_credits` that break is **silent** — `refundCredits` logged and swallowed failures, so an in-flight failed generation would leave the user charged with no error surfaced.
+**Deploy-ordering gate (do this phase LAST, after deploy).** This migration must run **only after the phases 1–7 Worker is live on cloud** — i.e. the deployed Worker calls `reserve_credits`/`settle_reservation`/`refund_reservation` and `acquire_generation_lease`/`release_generation_lease`, and none of the five legacy functions. Running the drop while an older Worker still serves traffic reopens exactly the deploy window §Migration Notes avoids: DB-first would break it mid-generation, and for `refund_credits` that break is **silent** — `refundCredits` logged and swallowed failures, so an in-flight failed generation would leave the user charged with no error surfaced. A dropped `release_generation_lock` is likewise silent (release is best-effort), leaving the user locked out for one stale window.
 
 ### Changes Required:
 
 #### 1. New contract migration
 
-**File**: `supabase/migrations/<YYYYMMDDHHmmss>_drop_legacy_credit_rpcs.sql`
+**File**: `supabase/migrations/<YYYYMMDDHHmmss>_drop_legacy_rpcs.sql`
 
-**Intent**: Remove all three superseded RPCs. `drop function if exists` keeps the migration idempotent and safe to re-run.
+**Intent**: Remove all five superseded RPCs. `drop function if exists` keeps the migration idempotent and safe to re-run.
 
 **Contract**:
 
 ```sql
--- Contract half of the credit-RPC expand/contract chain (S-01 Phase 8).
--- Safe only after the Worker calling reserve_credits is live on cloud (see plan §Migration Notes).
+-- Contract half of the expand/contract chains opened in S-01 (Phase 8).
+-- Safe only after the phases 1-7 Worker is live on cloud (see plan §Migration Notes).
 --
 -- spend_credit  -> spend_credits (20260719120000) -> reserve_credits (20260720160000)
 -- refund_credits (20260719120000)                 -> refund_reservation (20260720160000)
+-- acquire/release_generation_lock (20260720133000) -> ..._generation_lease (20260720170000)
 --
--- All three are SECURITY DEFINER and unreferenced by the shipped Worker; refund_credits in
--- particular credits an arbitrary user by amount with no reservation to validate against.
+-- All five are SECURITY DEFINER and unreferenced by the shipped Worker; refund_credits in
+-- particular credits an arbitrary user by amount with no reservation to validate against, and
+-- release_generation_lock releases by user_id alone — the ownerless release F2 replaced.
 drop function if exists public.spend_credit();
 drop function if exists public.spend_credits(integer);
 drop function if exists public.refund_credits(uuid, integer);
+drop function if exists public.acquire_generation_lock(uuid, integer);
+drop function if exists public.release_generation_lock(uuid);
 ```
 
-No other file changes — the code switches already happened in Phase 2 (`spend_credits`) and the F1 fix (`reserve_credits`).
+No other file changes — the code switches already happened in Phase 2 (`spend_credits`), the F1 fix (`reserve_credits`), and the F2 fix (`acquire_generation_lease`).
 
 ### Success Criteria:
 
@@ -459,13 +465,13 @@ No other file changes — the code switches already happened in Phase 2 (`spend_
 - Migration applies cleanly: `npx supabase migration up`
 - Type checking passes: `npm run build`
 - Linting passes: `npm run lint`
-- No stale references (PowerShell): `Get-ChildItem -Recurse -File src supabase/migrations | Select-String "spend_credit\b|spend_credits|refund_credits"` returns nothing outside the drop migration itself and the historical migrations that define them (`20260712175240`, `20260719120000`).
+- No stale references (PowerShell): `Get-ChildItem -Recurse -File src supabase/migrations | Select-String "spend_credit\b|spend_credits|refund_credits|generation_lock\("` returns nothing outside the drop migration itself and the historical migrations that define them (`20260712175240`, `20260719120000`, `20260720133000`).
 - `AppDatabase["public"]["Functions"]` in `src/lib/services/summaries.ts` no longer declares `spend_credits` / `refund_credits` (their "legacy, kept for the expand/contract window" entries are removed with the drop).
 
 #### Manual Verification:
 
-- **Precondition**: confirm the cloud Worker in production is the build calling `reserve_credits` (not `spend_credit`/`spend_credits`) before applying to cloud.
-- After the migration, each of `select public.spend_credit();`, `select public.spend_credits(1);`, and `select public.refund_credits('<uuid>', 1);` errors with `function ... does not exist`.
+- **Precondition**: confirm the cloud Worker in production is the build calling `reserve_credits` and `acquire_generation_lease` (not `spend_credit`/`spend_credits`/`acquire_generation_lock`) before applying to cloud.
+- After the migration, each of `select public.spend_credit();`, `select public.spend_credits(1);`, `select public.refund_credits('<uuid>', 1);`, `select public.acquire_generation_lock('<uuid>');`, and `select public.release_generation_lock('<uuid>');` errors with `function ... does not exist`.
 - A normal and a long generation still succeed end-to-end (they use `reserve_credits`), and a forced failure still refunds (via `refund_reservation`), confirming nothing regressed.
 
 **Implementation Note**: This is the roadmap's former `S-01-fu` (`drop-spend-credit-contract`), folded in as the closing phase and widened to cover the F1 ledger's two additional legacy functions. It is gated on deployment, so it lands in a separate commit/PR after phases 1–7 ship — sequence it after the Worker is live rather than bundling the drops into the pre-deploy work.
@@ -494,11 +500,12 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 
 ## Migration Notes
 
-**Expand/contract, two migrations** (F3). Existing live migrations are untouched.
+**Expand/contract** (F3). Existing live migrations are untouched.
 
 1. **Expand (this slice)**: one forward migration adds `spend_credits` + `refund_credits` and **leaves `spend_credit()` in place**. `credits.ts` is switched to `spend_credits` in the same phase. Deploy order is now safe in both directions: the DB has both functions, so the old Worker (still calling `spend_credit`) and the new Worker (calling `spend_credits`) each work. Apply locally with `npx supabase migration up`; push to cloud before/with the Worker deploy.
 2. **Expand (F1 ledger, `20260720160000_credit_reservations.sql`)**: adds the `credit_reservations` table plus `reserve_credits` / `settle_reservation` / `refund_reservation`, and **leaves `spend_credits` and `refund_credits` in place** for the same reason step 1 left `spend_credit()`. Both orders stay safe: the DB carries old and new functions, so the previous Worker and the reservation-aware Worker each work throughout rollout.
-3. **Contract (Phase 8, after the new Worker is live)**: one later migration drops **all three** superseded functions together — `spend_credit()`, `spend_credits(integer)`, `refund_credits(uuid, integer)` — since they share the single precondition "the Worker calling `reserve_credits` is live". Gated on deployment because dropping any of them alongside its expand migration would open a deploy window: DB-first breaks the still-running Worker, Worker-first calls an RPC not yet created. For `refund_credits` that breakage is silent (failures were logged and swallowed), which is why it waits for the gate rather than going early. Folded in from the former roadmap `S-01-fu` (`drop-spend-credit-contract`) and widened to the full set; see Phase 8.
+3. **Expand (F2 lease, `20260720170000_generation_lock_lease.sql`)**: adds `generation_locks.lock_id` plus `acquire_generation_lease` / `release_generation_lease`, and **leaves `acquire_generation_lock` / `release_generation_lock` in place** for the same reason. The new column is defaulted, so the legacy acquire keeps writing valid rows during the overlap window.
+4. **Contract (Phase 8, after the new Worker is live)**: one later migration drops **all five** superseded functions together — `spend_credit()`, `spend_credits(integer)`, `refund_credits(uuid, integer)`, `acquire_generation_lock(uuid, integer)`, `release_generation_lock(uuid)` — since they share the single precondition "the phases 1–7 Worker is live". Gated on deployment because dropping any of them alongside its expand migration would open a deploy window: DB-first breaks the still-running Worker, Worker-first calls an RPC not yet created. For `refund_credits` that breakage is silent (failures were logged and swallowed), which is why it waits for the gate rather than going early. Folded in from the former roadmap `S-01-fu` (`drop-spend-credit-contract`) and widened to the full set; see Phase 8.
 
 ## References
 
@@ -597,16 +604,16 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 
 - [x] 7.3 Informational → Polish key-facts list; educational → Polish learning-overview (Polish output from English prompts) — af3bea3
 
-### Phase 8: Contract migration — drop legacy `spend_credit()`
+### Phase 8: Contract migration — drop the five superseded RPCs
 
-> Gated: apply to cloud only after the phases 1–7 Worker is live (calls `spend_credits`).
+> Gated: apply to cloud only after the phases 1–7 Worker is live (calls `reserve_credits` + `acquire_generation_lease`).
 
 #### Automated
 
 - [ ] 8.1 Migration applies cleanly: `npx supabase migration up`
 - [ ] 8.2 Type checking passes: `npm run build`
 - [ ] 8.3 Linting passes: `npm run lint`
-- [ ] 8.4 No stale `spend_credit(` references outside the drop migration and `20260712175240_user_credits.sql`
+- [ ] 8.4 No stale `spend_credit(` / `generation_lock(` references outside the drop migration and the migrations that define them
 
 #### Manual
 
