@@ -28,7 +28,7 @@ Single user (the product creator themselves) — a person regularly following se
 ## Success Criteria
 
 ### Primary
-- 75% of summaries are considered by the user as good enough (accurate, useful for deciding whether to watch or skip a video).
+- 75% of summaries are considered by the user as good enough — accurate, and useful either for deciding whether to watch a video, or as a stand-in for watching it.
 
 ### Secondary
 - None — Primary is sufficient for MVP.
@@ -85,7 +85,7 @@ Output:
   - Informational: exhaustive list of key information/facts from the video
   - Educational: overview of topics and knowledge the user can gain from the video
 
-The user encounters the result when browsing their summary list — they see a ready-made summary based on which they decide whether the video is worth watching in full.
+The user encounters the result when browsing their summary list. A summary serves two purposes: deciding whether the video is worth watching in full, and — when it isn't, or when time is short — conveying the video's key content directly, so watching becomes unnecessary. This is why summary length follows the video's actual content rather than a fixed ceiling: the opening sentences serve the watch/skip decision, the body serves the reader who is skipping the video and wants its substance.
 
 ## Access Control
 

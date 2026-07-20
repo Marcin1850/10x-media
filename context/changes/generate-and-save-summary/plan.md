@@ -383,12 +383,15 @@ Rewrite the two system prompts to produce the PRD's two distinct output shapes w
 
 **File**: `src/lib/services/llm.ts`
 
-**Intent**: Replace the one-line prompts with fuller prompts that (a) instruct the model to always respond in Polish, (b) define the output shape per character per the PRD, and (c) give length/format guidance so summaries are skimmable and support a watch/skip decision.
+**Intent**: Replace the one-line prompts with fuller prompts that (a) instruct the model to always respond in Polish, (b) define the output shape per character per the PRD, and (c) give length/format guidance serving both jobs a summary does — the watch/skip decision and the substitute-for-watching read.
 
-**Contract**: `SYSTEM_PROMPTS` keeps its `Record<ChannelCharacter, string>` type. Each prompt, in English, must specify: always respond in Polish; the video's transcript is the input; produce a summary whose purpose is to decide whether to watch the full video.
+**Contract**: `SYSTEM_PROMPTS` keeps its `Record<ChannelCharacter, string>` type. Each prompt, in English, must specify: always respond in Polish; the video's transcript is the input; produce a summary that both supports a watch/skip decision **and** stands in for the video when the user skips it.
 - **informational** → an exhaustive, scannable bulleted list of the key facts / data / conclusions from the video.
 - **educational** → an overview of the topics and skills the viewer would learn, in a clear didactic structure.
-Include a length ceiling appropriate to a skim (e.g. a bounded number of bullets / short sections). `summarize()`'s signature and return shape are unchanged.
+
+Each prompt is **layered** so one output serves both jobs: one or two framing sentences up front (the watch/skip verdict), then complete coverage of the content (the substitute read). Length **follows the video's actual content** — no fixed ceiling; important points must not be dropped to stay short, and padding is equally disallowed. `summarize()`'s signature and return shape are unchanged.
+
+> **Amended 2026-07-20 (impl-review F1).** This contract originally required "a length ceiling appropriate to a skim (e.g. a bounded number of bullets / short sections)." The Phase 7 manual quality pass found the ceiling cut material the reader needed, and the prompts shipped content-driven instead (`af3bea3`). The impl-review flagged the mismatch; the decision was to keep the implemented behavior and correct this contract, because a summary's second job — replacing the video rather than triaging it — is incompatible with a fixed cap. The PRD's Success Criteria and FR-005 output description were updated to name both jobs. **Unbounded output length is an accepted, unmeasured cost vector**: cost is priced off transcript length (input) only, so a fact-dense video yields a long, more expensive completion at the same credit price. Revisit if per-summary cost drifts.
 
 ### Success Criteria:
 

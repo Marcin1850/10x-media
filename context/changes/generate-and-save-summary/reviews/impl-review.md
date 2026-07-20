@@ -49,7 +49,7 @@ Sixteen manual acceptance checks in phases 1–7 remain unchecked. Phase 7's pro
   - Tradeoff: Weakens the skim experience and removes the planned response-length bound.
   - Confidence: HIGH — this accurately documents the implemented behavior.
   - Blind spot: Token-cost and output-length behavior has not been measured across long transcripts.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix B (2026-07-20) — confirmed a conscious Phase 7 decision, not drift. Resolved by reframing the product around the **two jobs a summary does**: (1) decide whether the video is worth watching, (2) stand in for the video when it isn't. The shipped prompts already serve both via a layered shape (framing sentences → complete body), which is why the ceiling had to go. Docs updated, prompts deliberately untouched to preserve the Phase 7 manual quality pass: `prd.md` Success Criteria + FR-005 output, `plan.md` Phase 7 contract (with amendment note), `README.md`, `Welcome.astro`. `shape-notes.md`/`idea-notes.md` left as dated discovery records. Lint + build pass. **Carried risk**: unbounded output length is unmeasured, and cost is priced off transcript length (input) only — a fact-dense video yields a longer, more expensive completion at the same credit price.
 
 ### F2 — Markdown summaries can trigger third-party image requests
 

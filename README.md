@@ -2,7 +2,7 @@
 
 ![10xMedia](./public/banner.png)
 
-Turn a list of YouTube videos into summaries you can skim, so you can decide what's actually worth watching. Summaries are generated in Polish and adapted to the character of the channel (informational vs. educational).
+Turn a list of YouTube videos into summaries that tell you what's actually worth watching — and give you the key content of the ones you skip, so you don't have to watch them at all. Summaries are generated in Polish and adapted to the character of the channel (informational vs. educational).
 
 ## Tech Stack
 
