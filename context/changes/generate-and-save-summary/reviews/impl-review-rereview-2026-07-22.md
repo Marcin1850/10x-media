@@ -47,7 +47,7 @@ For Phases 1–7, all 17 automated/recorded Progress items are checked and 16 ma
   - Tradeoff: Requires a forward schema migration plus persistence, RPC, type, and runbook changes; it amends the original “no schema change to summaries” boundary.
   - Confidence: HIGH — both successful-settle failure and failed-refund failure currently converge on the identical `reserved` state.
   - Blind spot: Existing unresolved rows will need a one-time classification policy because they predate the link.
-- **Decision**: PENDING
+- **Decision**: FIXED — new migration `20260722120000_link_summary_to_reservation.sql` adds `summaries.reservation_id` (unique + composite FK to `credit_reservations (id, user_id)` for a DB-validated same-user link) and a `reconcile_reservation()` RPC that settles linked reservations / refunds only unlinked ones; persist path (`summaries.ts`, `generate.ts`) writes the link; old migration's refund-everything runbook redirected to `reconcile_reservation`.
 
 ### F17 — Long-video confirmation permits unlimited paid transcript attempts
 
@@ -61,7 +61,7 @@ For Phases 1–7, all 17 automated/recorded Progress items are checked and 16 ma
   - Tradeoff: Introduces state, expiry, storage limits, and invalidation rules on a latency-sensitive path.
   - Confidence: HIGH — every 409 currently occurs after transcript work and before any charge.
   - Blind spot: Actual Supadata billing/cache behavior and the appropriate rate window have not been measured.
-- **Decision**: PENDING
+- **Decision**: FIXED (rate limit + quote-cache) — new migration `20260722130000_transcript_spend_guards.sql` adds `transcript_fetch_attempts` (+ `record_transcript_attempt` per-user rate limit, default 10 fetches / 10 min) and `transcript_quotes` (+ `get_/save_transcript_quote`, 10-min TTL) so the long-video confirmation retry reuses the paid transcript. New service `src/lib/services/transcript-guard.ts`; `generate.ts` rate-limits before every real fetch (429 over cap; fail-closed 500 on RPC error), reuses a fresh quote on `allowLong`, and caches the transcript on the 409 branch. Window/TTL are tunable consts (unmeasured — conservative defaults). Verified: lint, build, `supabase migration up` all pass.
 
 ### F18 — Editing during generation silently discards a paid successful result
 
@@ -80,7 +80,7 @@ For Phases 1–7, all 17 automated/recorded Progress items are checked and 16 ma
   - Tradeoff: More UI state and a result can refer to a different URL than the currently edited form.
   - Confidence: HIGH — the client already holds the submitted URL and character snapshot.
   - Blind spot: The product needs a clear presentation for an old request completing beneath newly edited inputs.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix B — `GenerateSummaryForm.tsx` now applies any `response.ok` outcome (result + `creditsRemaining`) before the sequence-staleness guard, so a saved+charged summary is never discarded when inputs were edited mid-flight; only advisory 409/402/error branches remain gated by the guard. `SuccessState` gained a `url` field and the result card renders the submitted URL (truncated, `title` on hover) so a result that no longer matches the edited form is unambiguous.
 
 ### F19 — Lock-release transport errors can replace a valid endpoint response
 
@@ -90,7 +90,7 @@ For Phases 1–7, all 17 automated/recorded Progress items are checked and 16 ma
 - **Location**: `src/lib/services/generation-lock.ts:49`; `src/pages/api/summaries/generate.ts:98`
 - **Detail**: `releaseGenerationLease` is documented as best-effort and “never throws,” but its `admin.rpc()` await is not wrapped in `try/catch`. A transport-level rejection propagates from the endpoint's `finally` and replaces the response returned by `runGeneration`. After a successful persist and debit, the user can receive a framework 500 and retry even though the summary was saved; the lock also remains until the stale sweep. The credit settlement/refund helpers already catch this same rejected-promise class.
 - **Fix**: Wrap the entire release RPC call in `try/catch`, log the failure, and always resolve without throwing.
-- **Decision**: PENDING
+- **Decision**: FIXED — `releaseGenerationLease` now wraps the entire `admin.rpc()` call in `try/catch`; a transport-level rejection is logged and swallowed so the release can never replace the endpoint's already-produced response from the `finally` block.
 
 ### F20 — Invalid YouTube URLs have no clear validation message
 
@@ -100,7 +100,7 @@ For Phases 1–7, all 17 automated/recorded Progress items are checked and 16 ma
 - **Location**: `src/components/summaries/GenerateSummaryForm.tsx:102`
 - **Detail**: An invalid non-empty URL makes `submitDisabled` true, but the form renders no field error and uses `noValidate`, so the user only sees a silently disabled button. This misses Phase 6's contract and manual criterion 6.4 requiring invalid URLs to be blocked with a clear message. The reused `FormField` already supports an `error` prop.
 - **Fix**: Pass a concise `error` to `FormField` whenever the URL is non-empty and `urlIsValid` is false.
-- **Decision**: PENDING
+- **Decision**: FIXED — `GenerateSummaryForm.tsx` derives `urlError` ("Enter a valid YouTube video URL.") when the URL is non-empty and unparseable and passes it to the URL `FormField`, so an invalid URL now shows an inline field message instead of only a silently disabled button. Empty field stays clean, matching the auth forms.
 
 ### F21 — Phase contract and deployment secret count remain stale
 
@@ -110,4 +110,4 @@ For Phases 1–7, all 17 automated/recorded Progress items are checked and 16 ma
 - **Location**: `context/changes/generate-and-save-summary/plan.md:336`; `README.md:278`
 - **Detail**: The Phase 6 response contract still says every 500 maps to the persistence-specific “saving your summary” message, contradicting the accepted F14 behavior implemented in the client and documented later in Testing Strategy item 17. README also says to set “all four runtime secrets” immediately before listing five, including `SUPABASE_SERVICE_ROLE_KEY`.
 - **Fix**: Update the Phase 6 500 mapping to distinguish generic pre-save failures from persistence failures, and change README's deployment count from four to five.
-- **Decision**: PENDING
+- **Decision**: FIXED — `plan.md` Phase 6 500 mapping rewritten to match F14: prefer the server-supplied `error` (so pre-save lock/balance/reserve failures keep their own message), generic fallback only for a non-JSON framework 500, persistence keeps the retryable "saving your summary" message. `README.md` deployment count corrected from "four" to "five" runtime secrets.

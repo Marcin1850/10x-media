@@ -13,6 +13,8 @@ import {
 } from "@/lib/services/summaries";
 import { getBalance, reserveCredits, settleReservation, refundReservation } from "@/lib/services/credits";
 import { acquireGenerationLease, releaseGenerationLease } from "@/lib/services/generation-lock";
+import { recordTranscriptAttempt, getTranscriptQuote, saveTranscriptQuote } from "@/lib/services/transcript-guard";
+import type { TranscriptResolvedVia } from "@/types";
 
 export const prerender = false;
 
@@ -149,27 +151,60 @@ async function runGeneration({
     return Response.json({ error: "You have no summary credits left" }, { status: 402 });
   }
 
-  // Transcript fetch: a genuine upstream failure (network/Supadata error) throws → clean 502; a
-  // resolvable-but-unavailable transcript returns ok:false → 422. Neither has debited a credit yet.
-  let transcript: Awaited<ReturnType<typeof fetchTranscript>>;
-  try {
-    transcript = await fetchTranscript({ url, lang: "pl" }, supadataKey);
-  } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error("fetchTranscript failed:", error);
-    return Response.json({ error: "The transcript service failed. Please try again." }, { status: 502 });
-  }
-  if (!transcript.ok) {
-    return Response.json({ error: "Transcript unavailable for this video" }, { status: 422 });
-  }
-  // A whitespace-only (or empty) transcript is effectively "no transcript": summarizing it would
-  // charge a credit for a generic model reply built from nothing. Reject it as unavailable, before
-  // any cost is priced or a credit reserved.
-  if (transcript.content.trim().length === 0) {
-    return Response.json({ error: "Transcript unavailable for this video" }, { status: 422 });
+  // Transcript acquisition. The paid Supadata fetch is guarded two ways (F17), because the balance
+  // gate above is a minimum-1 read and the long-video 409 below returns before any debit: without
+  // this a one-credit user could fetch transcript after transcript, sequentially, for free.
+  let content: string;
+  let resolvedVia: TranscriptResolvedVia | null;
+
+  // A confirmation retry (allowLong) reuses the transcript cached when the 409 was issued — no second
+  // paid fetch and no rate-limit token consumed. Best-effort: a miss just falls through to a re-fetch.
+  const cachedQuote = allowLong ? await getTranscriptQuote(admin, userId, youtubeId, character) : null;
+  if (cachedQuote) {
+    content = cachedQuote.content;
+    resolvedVia = cachedQuote.resolvedVia;
+  } else {
+    // A real paid fetch. Rate-limit it first; a genuine RPC failure fails the request CLOSED (500)
+    // rather than proceed to the very unbounded fetch this guard exists to prevent.
+    let allowed: boolean;
+    try {
+      allowed = await recordTranscriptAttempt(admin, userId);
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("recordTranscriptAttempt failed:", error);
+      return Response.json({ error: "Something went wrong. Please try again." }, { status: 500 });
+    }
+    if (!allowed) {
+      return Response.json(
+        { error: "Too many transcript requests. Please wait a moment and try again." },
+        { status: 429 },
+      );
+    }
+
+    // A genuine upstream failure (network/Supadata error) throws → clean 502; a resolvable-but-
+    // unavailable transcript returns ok:false → 422. Neither has debited a credit yet.
+    let transcript: Awaited<ReturnType<typeof fetchTranscript>>;
+    try {
+      transcript = await fetchTranscript({ url, lang: "pl" }, supadataKey);
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("fetchTranscript failed:", error);
+      return Response.json({ error: "The transcript service failed. Please try again." }, { status: 502 });
+    }
+    if (!transcript.ok) {
+      return Response.json({ error: "Transcript unavailable for this video" }, { status: 422 });
+    }
+    // A whitespace-only (or empty) transcript is effectively "no transcript": summarizing it would
+    // charge a credit for a generic model reply built from nothing. Reject it as unavailable, before
+    // any cost is priced or a credit reserved.
+    if (transcript.content.trim().length === 0) {
+      return Response.json({ error: "Transcript unavailable for this video" }, { status: 422 });
+    }
+    content = transcript.content;
+    resolvedVia = transcript.resolvedVia;
   }
 
-  const transcriptLength = transcript.content.length;
+  const transcriptLength = content.length;
   const cost = summaryCost(transcriptLength);
 
   // Hard-cap gate: reject pathologically long transcripts before any debit or LLM call. This — not
@@ -181,8 +216,10 @@ async function runGeneration({
   // Long-video confirmation gate: a long video (cost > 1) that hasn't been pre-authorized returns a
   // distinct 409 *before* the debit and the LLM call — no spend, no refund needed. The client asks
   // the user to confirm the higher cost and resubmits with `allowLong: true`. A short video always
-  // costs 1 and ignores this flag.
+  // costs 1 and ignores this flag. Cache the transcript first (F17) so that confirmation retry reuses
+  // it instead of paying Supadata a second time.
   if (cost > 1 && !allowLong) {
+    await saveTranscriptQuote(admin, { userId, youtubeId, character, content, resolvedVia });
     return Response.json(
       {
         error: "This video is long and costs more credits. Confirm to continue.",
@@ -228,7 +265,7 @@ async function runGeneration({
   // never throws, and is idempotent — a retry cannot credit twice.
   let summary: Awaited<ReturnType<typeof summarize>>;
   try {
-    summary = await summarize({ transcript: transcript.content, character }, openrouterKey);
+    summary = await summarize({ transcript: content, character }, openrouterKey);
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("summarize failed:", error);
@@ -249,7 +286,11 @@ async function runGeneration({
       character,
       content: summary.text,
       model: summary.model,
-      resolvedVia: transcript.resolvedVia,
+      resolvedVia,
+      // Durable link so reconciliation can tell this delivered summary apart from failed work if the
+      // best-effort settle below is lost — a `reserved` row with a linked summary is settled, not
+      // refunded (F16).
+      reservationId,
     });
   } catch (error) {
     // eslint-disable-next-line no-console

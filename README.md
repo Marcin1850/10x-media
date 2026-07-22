@@ -275,7 +275,7 @@ npm run build
 npx wrangler deploy
 ```
 
-Set all four runtime secrets in your Cloudflare dashboard or via `npx wrangler secret put`:
+Set all five runtime secrets in your Cloudflare dashboard or via `npx wrangler secret put`:
 
 ```bash
 npx wrangler secret put SUPABASE_URL

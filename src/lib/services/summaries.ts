@@ -25,6 +25,7 @@ interface SummaryRow {
   content: string;
   model: string | null;
   resolved_via: TranscriptResolvedVia | null;
+  reservation_id: string | null;
   created_at: string;
 }
 
@@ -35,6 +36,7 @@ interface SummaryInsert {
   content: string;
   model: string | null;
   resolved_via: TranscriptResolvedVia | null;
+  reservation_id: string | null;
 }
 
 interface UserCreditsRow {
@@ -135,6 +137,12 @@ export interface AppendSummaryParams {
   content: string;
   model: string | null;
   resolvedVia: TranscriptResolvedVia | null;
+  /**
+   * The reservation that paid for this summary. Persisted on the row (not a bookkeeping side call) so
+   * the ledger has durable proof the work was delivered: reconciliation settles a `reserved` row that
+   * produced a linked summary and refunds only the ones with none (F16).
+   */
+  reservationId: string;
 }
 
 export interface AppendSummaryResult {
@@ -145,7 +153,7 @@ export interface AppendSummaryResult {
 /** Gets-or-creates the `videos` row for (user_id, youtube_id), then appends a new `summaries` row. Never replaces an existing summary. */
 export async function upsertVideoAndAppendSummary(
   supabase: AppSupabaseClient,
-  { userId, url, youtubeId, character, content, model, resolvedVia }: AppendSummaryParams,
+  { userId, url, youtubeId, character, content, model, resolvedVia, reservationId }: AppendSummaryParams,
 ): Promise<AppendSummaryResult> {
   const { data: video, error: videoError } = await supabase
     .from("videos")
@@ -162,7 +170,15 @@ export async function upsertVideoAndAppendSummary(
 
   const { data: summary, error: summaryError } = await supabase
     .from("summaries")
-    .insert({ user_id: userId, video_id: video.id, character, content, model, resolved_via: resolvedVia })
+    .insert({
+      user_id: userId,
+      video_id: video.id,
+      character,
+      content,
+      model,
+      resolved_via: resolvedVia,
+      reservation_id: reservationId,
+    })
     .select("id")
     .single();
 

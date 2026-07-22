@@ -24,6 +24,10 @@ interface ConfirmState {
 interface SuccessState {
   summary: string;
   cost: number;
+  // The URL this summary was generated for. A successful paid result is applied even if the form was
+  // edited while the request was in flight, so the result is labelled with its own input to stay
+  // unambiguous when it no longer matches the currently edited URL.
+  url: string;
 }
 
 const CHARACTERS: { value: ChannelCharacter; label: string; hint: string }[] = [
@@ -100,6 +104,9 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
   const requestSeq = useRef(0);
 
   const urlIsValid = extractYoutubeId(url) !== null;
+  // Only flag a non-empty URL that fails to parse — an empty field shows no error, matching the
+  // auth forms. Without this the submit button just silently disables, giving no reason why.
+  const urlError = url.length > 0 && !urlIsValid ? "Enter a valid YouTube video URL." : undefined;
   // `null` means the display-only balance read failed or was unavailable — not that the user is broke.
   // Never gate submission on it: the endpoint debits atomically and answers 402 if credits really ran out.
   const balanceUnknown = credits === null;
@@ -127,13 +134,6 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
 
     const data: unknown = await response.json().catch(() => ({}));
 
-    // The inputs this request was priced for are no longer current (newer submit or an edited field),
-    // so its outcome can't be applied to what the user now sees — drop it, including any late 409.
-    if (seq !== requestSeq.current) {
-      setLoading(false);
-      return;
-    }
-
     const payload = (data ?? {}) as {
       summary?: string;
       cost?: number;
@@ -143,10 +143,23 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
       error?: string;
     };
 
+    // A successful response means the summary was already saved and the user was charged. Apply it even
+    // if the form was edited while the request was in flight (seq is now stale): dropping paid work
+    // would hide both the result and the new balance, inviting a duplicate — and duplicate — charge.
+    // Label the result with its own submitted URL so it stays unambiguous when it no longer matches the
+    // currently edited form.
     if (response.ok) {
-      setResult({ summary: payload.summary ?? "", cost: payload.cost ?? 1 });
+      setResult({ summary: payload.summary ?? "", cost: payload.cost ?? 1, url: submittedUrl });
       setConfirm(null);
       if (typeof payload.creditsRemaining === "number") setCredits(payload.creditsRemaining);
+      setLoading(false);
+      return;
+    }
+
+    // Every remaining outcome is advisory (a consent prompt or an error), not a persisted result. If
+    // the inputs it was computed for are no longer current, it can't be applied to what the user now
+    // sees — drop it, including any late 409.
+    if (seq !== requestSeq.current) {
       setLoading(false);
       return;
     }
@@ -212,6 +225,7 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
           }}
           placeholder="https://www.youtube.com/watch?v=..."
           icon={<Link2 className="size-4" />}
+          error={urlError}
         />
 
         <fieldset>
@@ -327,6 +341,9 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
         <div className="space-y-2 rounded-lg border border-white/10 bg-white/5 px-4 py-4">
           <p className="text-xs tracking-wide text-blue-100/50 uppercase">
             Summary · {result.cost} credit{result.cost === 1 ? "" : "s"} spent
+          </p>
+          <p className="truncate text-xs text-blue-100/40" title={result.url}>
+            {result.url}
           </p>
           <div className="space-y-2">
             <Markdown

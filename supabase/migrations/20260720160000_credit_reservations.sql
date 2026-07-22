@@ -34,15 +34,19 @@ alter table public.credit_reservations enable row level security;
 
 revoke all on table public.credit_reservations from public, anon, authenticated;
 
--- Reconciliation index. The operator query for "debits that were never resolved" is:
+-- Reconciliation index over "debits that were never resolved":
 --
 --   select id, user_id, amount, created_at
 --   from public.credit_reservations
 --   where status = 'reserved' and created_at < now() - interval '1 hour'
 --   order by created_at;
 --
--- Each row is a user owed `amount` credits; refund_reservation(user_id, id) settles the debt and is
--- safe to re-run. The partial index keeps that sweep cheap as settled rows accumulate.
+-- The partial index keeps that sweep cheap as settled rows accumulate.
+--
+-- NOTE (superseded by 20260722120000_link_summary_to_reservation): do NOT blindly refund these rows.
+-- A `reserved` row can be delivered-but-unsettled work as well as a genuine unpaid debt. Resolve each
+-- with `select public.reconcile_reservation(user_id, id);`, which settles rows that produced a linked
+-- summary and refunds only rows with none. See that migration for the reasoning.
 create index if not exists credit_reservations_unresolved_idx
   on public.credit_reservations (created_at)
   where status = 'reserved';

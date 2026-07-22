@@ -47,19 +47,28 @@ export async function acquireGenerationLease(admin: SupabaseClient, userId: stri
  * this generation ran past the stale window and may have overlapped a successor.
  */
 export async function releaseGenerationLease(admin: SupabaseClient, userId: string, lease: string): Promise<void> {
-  const { data, error } = (await admin.rpc("release_generation_lease", {
-    target_user: userId,
-    lease,
-  })) as { data: boolean | null; error: { message: string } | null };
+  // The whole RPC is wrapped so a transport-level rejection (not just an application `error`) can't
+  // escape: this runs in the endpoint's `finally`, where a throw would replace the response the
+  // endpoint already produced — turning a saved-and-charged success into a framework 500 and inviting
+  // a duplicate retry. Losing the lock only costs one stale-window wait, so we always resolve.
+  try {
+    const { data, error } = (await admin.rpc("release_generation_lease", {
+      target_user: userId,
+      lease,
+    })) as { data: boolean | null; error: { message: string } | null };
 
-  if (error) {
-    // eslint-disable-next-line no-console
-    console.error(`releaseGenerationLease: failed to release lock for ${userId}: ${error.message}`);
-    return;
-  }
+    if (error) {
+      // eslint-disable-next-line no-console
+      console.error(`releaseGenerationLease: failed to release lock for ${userId}: ${error.message}`);
+      return;
+    }
 
-  if (data !== true) {
+    if (data !== true) {
+      // eslint-disable-next-line no-console
+      console.warn(`releaseGenerationLease: lease ${lease} for ${userId} was already swept as stale`);
+    }
+  } catch (err) {
     // eslint-disable-next-line no-console
-    console.warn(`releaseGenerationLease: lease ${lease} for ${userId} was already swept as stale`);
+    console.error(`releaseGenerationLease: RPC threw releasing lock for ${userId}:`, err);
   }
 }
