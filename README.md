@@ -106,16 +106,15 @@ All variables are declared via Astro's `astro:env` schema (`astro.config.mjs`) a
 | `SUPABASE_KEY`              | Supabase `anon` public key                                       |
 | `SUPADATA_API_KEY`          | Supadata API key (transcripts)                                   |
 | `OPENROUTER_API_KEY`        | OpenRouter API key (summarization)                               |
-| `SUPABASE_SERVICE_ROLE_KEY` | Service-role key — account deletion and offline operator scripts |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service-role key — account deletion, summary generation, and offline operator scripts |
 
 Copy `.env.example` to both `.env` and `.dev.vars` and fill in the values.
 
-`SUPABASE_SERVICE_ROLE_KEY` bypasses RLS, so it is only ever read from `astro:env/server` inside server code (`src/lib/supabase-admin.ts`) and never reaches an island or the browser. It has two consumers:
+`SUPABASE_SERVICE_ROLE_KEY` bypasses RLS, so it is only ever read from `astro:env/server` inside server code (`src/lib/supabase-admin.ts`) and never reaches an island or the browser. It has three consumers:
 
 - **`POST /api/account/delete`** (Worker runtime) — deleting an `auth.users` record requires the service-role key; the anon SSR client cannot do it. Without this secret the endpoint returns `503` and account deletion is unavailable.
 - **`npm run grant-credits`** (offline, your machine) — reads it from `.env`.
-
-- **`POST /api/summaries/generate`** (Worker runtime) — generation debits credits *before* the paid LLM call, and only the admin client can refund them if that call fails. The endpoint refuses with `503` when the key is unset rather than risk charging a user for failed work.
+- **`POST /api/summaries/generate`** (Worker runtime) — generation *reserves* credits in a durable ledger *before* the paid LLM call, and only the admin client can settle or refund that reservation once the work succeeds or fails. The endpoint refuses with `503` when the key is unset rather than risk charging a user for failed work.
 
 All three need it, so it must be set locally **and** as a Worker secret in production.
 
@@ -249,7 +248,7 @@ The model is pinned in `src/lib/services/llm.ts` (`anthropic/claude-sonnet-5`). 
 
 ## Summary credits
 
-Each user has a small credit budget that guards the paid transcript/LLM pipeline. Every account starts with **5 credits**, a successful summary spends **1 credit**, and generation is blocked server-side at **0 credits** before any paid call is made. Refills are **manual-only** — there is no self-serve top-up.
+Each user has a small credit budget that guards the paid transcript/LLM pipeline. Every account starts with **5 credits**; a successful summary spends **1 credit**, or **2 credits** for a long video generated after the confirmation prompt. Generation is blocked server-side at **0 credits** before any paid call is made. Refills are **manual-only** — there is no self-serve top-up.
 
 To grant credits to a user by email (operator-only, offline):
 
@@ -258,7 +257,7 @@ npm run grant-credits -- <email> <amount>
 # e.g. npm run grant-credits -- user@example.com 5
 ```
 
-This script runs offline on your machine and reads the Supabase **service-role** key (which bypasses RLS) from `.env`. Set `SUPABASE_SERVICE_ROLE_KEY` there — the `service_role` key from `npx supabase status` (local) or the dashboard → **Settings → API**. See [Environment variables](#environment-variables) for the key's other consumer.
+This script runs offline on your machine and reads the Supabase **service-role** key (which bypasses RLS) from `.env`. Set `SUPABASE_SERVICE_ROLE_KEY` there — the `service_role` key from `npx supabase status` (local) or the dashboard → **Settings → API**. See [Environment variables](#environment-variables) for the key's other consumers.
 
 ## Deployment
 
@@ -286,7 +285,7 @@ npx wrangler secret put OPENROUTER_API_KEY
 npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
 ```
 
-`SUPABASE_SERVICE_ROLE_KEY` is required in production: `POST /api/account/delete` needs it to remove the `auth.users` record. Skip it and account deletion returns `503` — the rest of the app keeps working, so the gap is easy to miss.
+`SUPABASE_SERVICE_ROLE_KEY` is required in production: `POST /api/account/delete` needs it to remove the `auth.users` record, and `POST /api/summaries/generate` needs it to reserve/refund credits around the paid call. Skip it and both endpoints return `503` (account deletion and summary generation are unavailable) — auth and browsing keep working, so the gap is easy to miss.
 
 Worker secrets are configured on Cloudflare, not injected by the deploy pipeline — adding a key to GitHub alone will not make it available at runtime.
 

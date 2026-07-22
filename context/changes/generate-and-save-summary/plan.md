@@ -330,7 +330,7 @@ The user-facing surface: a React island on `/dashboard` that drives the endpoint
 
 **Intent**: A client island owning the full generate interaction — inputs, request, loading, result, errors, confirmation, and the live credit count. Styled to match the existing custom cosmic theme (reuse `Button` / the auth form field patterns).
 
-**Contract**: Props `{ initialCredits: number | null }`. Local state: `url`, `character` (`"informational" | "educational"`, default informational), `allowLong` (default false), request status, `summary`/`cost`, error message, a `confirm` state (`{ cost, transcriptLength }` from a 409), and `credits` (seeded from `initialCredits`, updated to `creditsRemaining` on success). Client-side URL validation reuses `extractYoutubeId` (pure import) to enable/disable submit; submit is also disabled while loading or when `credits` is 0/null. POSTs `{ url, character, allowLong }` to `/api/summaries/generate`. Response handling:
+**Contract**: Props `{ initialCredits: number | null }`. Local state: `url`, `character` (`"informational" | "educational"`, default informational), `allowLong` (default false), request status, `summary`/`cost`, error message, a `confirm` state (`{ cost, transcriptLength, url, character }` from a 409 — the URL/character are the exact inputs the quote was priced for, so "Generate anyway" replays them rather than the live form), and `credits` (seeded from `initialCredits`, updated to `creditsRemaining` on success). Client-side URL validation reuses `extractYoutubeId` (pure import) to enable/disable submit; submit is also disabled while loading or when `credits` is `0`. A `null` balance means the display read failed, **not** that the user is broke — generation stays enabled and the endpoint answers 402 if credits truly ran out (F5). POSTs `{ url, character, allowLong }` to `/api/summaries/generate`. Response handling:
 - `200` → render summary (`whitespace-pre-wrap`), set `credits = creditsRemaining`, note credits spent.
 - `409` → enter confirm state; show "This is a long video (~N chars). Generating costs {cost} credits." with a **"Generate anyway ({cost} credits)"** button that resubmits with `allowLong: true`; disable that button when `credits < cost` with a "not enough credits" note.
 - `402` → credits message; `413` → "This video is too long to summarize." (F5); `422` → "No transcript is available for this video."; `502` → "The transcript or summarization service failed. Please try again."; `503` → "Summary generation isn't configured."; `500` → "Something went wrong saving your summary. Please try again." (retryable — persistence failure, F7); `400`/`401` → validation / "Your session expired — sign in again."
@@ -493,6 +493,19 @@ Per the roadmap's Module-3 deferral, S-01 uses **manual verification only** (no 
 7. **Upstream error**: temporarily break a key → 502 message, no spend, no crash.
 8. **Invalid URL**: paste a non-YouTube URL → blocked with a message.
 9. **Copy**: unset a key → English notice banner.
+
+#### Post-review scenarios (added after the impl-review re-review fixes F9–F14)
+
+These exercise behavior that changed after the phases landed and are **not yet recorded** in the Progress section — run them against the amended build before release acceptance:
+
+10. **Markdown allow-list** (Phase 6): a summary containing an image/link/raw HTML renders with those elements stripped/unwrapped (text still shows), no network fetch to an untrusted URL.
+11. **Unknown balance** (F5 accepted): with the display balance read failing/unavailable (`null`), submission stays **enabled**; a truly-broke user is still stopped by the 402.
+12. **Lock contention 429** (F10): two concurrent generations for the same user → the second returns 429 ("already being generated").
+13. **Stale-lock takeover + ownership** (F10 lease): after a stale takeover, the displaced request's release is a no-op (`false`, logged) and the successor's lock survives; a third request stays blocked until the successor releases.
+14. **In-flight confirmation race** (F11): submit video A, edit inputs to B while A is loading; A's late 409 does **not** install a quote for B, and "Generate anyway" (if shown) generates only the quoted request — never B without its own confirmation.
+15. **Empty transcript** (F13): a video whose transcript is whitespace/empty → 422 "unavailable", **no** credit reserved, no LLM call.
+16. **Refund-failure handling** (F9 ledger): force a post-debit failure (break the LLM/persist path) → the reservation is refunded; if the refund itself fails, the row stays `reserved` (recoverable via the reconciliation query), never a silent charge.
+17. **Error-message accuracy** (F14): a pre-save infrastructure 500 (e.g. lock/balance/reserve failure) shows the generic "Something went wrong" message, distinct from the persistence "saving your summary" 500.
 
 ## Performance Considerations
 

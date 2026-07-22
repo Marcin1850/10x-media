@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { Link2, Sparkles, CircleAlert } from "lucide-react";
 import Markdown from "react-markdown";
 import type { Components } from "react-markdown";
@@ -15,6 +15,10 @@ interface Props {
 interface ConfirmState {
   cost: number;
   transcriptLength: number;
+  // The exact inputs this quote was priced for. "Generate anyway" replays these, never the live form,
+  // so a late 409 arriving after the user edited the form can't consent to a different video.
+  url: string;
+  character: ChannelCharacter;
 }
 
 interface SuccessState {
@@ -68,7 +72,10 @@ function messageForStatus(status: number, serverError?: string): string {
     case 503:
       return "Summary generation isn't configured.";
     case 500:
-      return "Something went wrong saving your summary. Please try again.";
+      // Several distinct server-side 500s exist (pre-save infrastructure failures vs. a persistence
+      // failure), each with its own message. Prefer the server's so a lock/balance/reserve failure
+      // doesn't misreport as a save failure; the generic fallback covers a non-JSON framework 500.
+      return serverError ?? "Something went wrong. Please try again.";
     case 401:
       return "Your session expired — sign in again.";
     case 400:
@@ -87,6 +94,10 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [credits, setCredits] = useState<number | null>(initialCredits);
+  // Monotonic id of the latest in-flight request. Bumped on every submit AND on every quote-relevant
+  // input change, so a response whose seq is stale is discarded instead of applied to inputs the user
+  // has since edited.
+  const requestSeq = useRef(0);
 
   const urlIsValid = extractYoutubeId(url) !== null;
   // `null` means the display-only balance read failed or was unavailable — not that the user is broke.
@@ -95,7 +106,8 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
   const noCredits = credits !== null && credits <= 0;
   const submitDisabled = loading || !urlIsValid || noCredits;
 
-  async function generate(withAllowLong: boolean) {
+  async function generate(withAllowLong: boolean, submittedUrl: string, submittedCharacter: ChannelCharacter) {
+    const seq = (requestSeq.current += 1);
     setLoading(true);
     setError(null);
 
@@ -104,15 +116,24 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
       response = await fetch("/api/summaries/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, character, allowLong: withAllowLong }),
+        body: JSON.stringify({ url: submittedUrl, character: submittedCharacter, allowLong: withAllowLong }),
       });
     } catch {
-      setError("Network error — please try again.");
+      // Only surface the error if this is still the current request; a superseded one just clears loading.
+      if (seq === requestSeq.current) setError("Network error — please try again.");
       setLoading(false);
       return;
     }
 
     const data: unknown = await response.json().catch(() => ({}));
+
+    // The inputs this request was priced for are no longer current (newer submit or an edited field),
+    // so its outcome can't be applied to what the user now sees — drop it, including any late 409.
+    if (seq !== requestSeq.current) {
+      setLoading(false);
+      return;
+    }
+
     const payload = (data ?? {}) as {
       summary?: string;
       cost?: number;
@@ -131,7 +152,12 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
     }
 
     if (response.status === 409 && payload.requiresConfirmation) {
-      setConfirm({ cost: payload.cost ?? 2, transcriptLength: payload.transcriptLength ?? 0 });
+      setConfirm({
+        cost: payload.cost ?? 2,
+        transcriptLength: payload.transcriptLength ?? 0,
+        url: submittedUrl,
+        character: submittedCharacter,
+      });
       setResult(null);
       setLoading(false);
       return;
@@ -156,7 +182,7 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
     if (submitDisabled) return;
     setResult(null);
     setConfirm(null);
-    void generate(allowLong);
+    void generate(allowLong, url, character);
   }
 
   const confirmTooExpensive = confirm !== null && credits !== null && credits < confirm.cost;
@@ -179,7 +205,9 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
           onChange={(v) => {
             setUrl(v);
             // The long-video quote was priced for the previous inputs — drop it so a changed
-            // video can't be generated at 2 credits on an earlier video's confirmation.
+            // video can't be generated at 2 credits on an earlier video's confirmation, and
+            // invalidate any in-flight request so its late response can't reinstate that quote.
+            requestSeq.current += 1;
             setConfirm(null);
           }}
           placeholder="https://www.youtube.com/watch?v=..."
@@ -207,6 +235,7 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
                     checked={selected}
                     onChange={() => {
                       setCharacter(option.value);
+                      requestSeq.current += 1;
                       setConfirm(null);
                     }}
                     className="sr-only"
@@ -225,6 +254,7 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
             checked={allowLong}
             onChange={(e) => {
               setAllowLong(e.target.checked);
+              requestSeq.current += 1;
             }}
             className="size-4 rounded border-white/20 bg-white/10 accent-purple-500"
           />
@@ -278,7 +308,8 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
             type="button"
             disabled={loading || confirmTooExpensive}
             onClick={() => {
-              void generate(true);
+              // Replay the exact inputs this quote was priced for, not the live form.
+              void generate(true, confirm.url, confirm.character);
             }}
             className="w-full rounded-lg bg-amber-600 px-4 py-2 font-medium text-white transition-colors hover:bg-amber-500"
           >

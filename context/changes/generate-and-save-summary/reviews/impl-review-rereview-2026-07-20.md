@@ -32,7 +32,12 @@ For Phases 1-7, 17 automated/manual Progress items are checked and 16 manual acc
 
 ## Findings
 
-### F1 - Failed-work credit compensation is still not durable
+> **Finding IDs continue from `impl-review.md`.** That earlier report ended at F8, so this re-review
+> numbers its findings **F9–F15**. A bare `F1`–`F8` below therefore refers to a finding in
+> `impl-review.md`; `F9`+ refers to this report. (Plan-stage findings in `plan-review.md` are a
+> separate series and are not cross-referenced here.)
+
+### F9 - Failed-work credit compensation is still not durable
 
 - **Severity**: ! WARNING
 - **Impact**: H HIGH - architectural stakes; think carefully before deciding
@@ -54,7 +59,7 @@ For Phases 1-7, 17 automated/manual Progress items are checked and 16 manual acc
   - **Not** done (was the finding's own blind spot): no reconciliation worker, no retention policy. Recoverability is in place; automating the sweep is a separate change.
   - Expand-only per repo convention — `spend_credit`, `spend_credits`, `refund_credits` all stay until the Phase 8 contract migration, which was widened from one drop to all three (`plan.md` Phase 8 + §Migration Notes updated).
 
-### F2 - Stale lock recovery can release a newer request's lock
+### F10 - Stale lock recovery can release a newer request's lock
 
 - **Severity**: ! WARNING
 - **Impact**: M MEDIUM - real tradeoff; pause to reason through it
@@ -76,7 +81,7 @@ For Phases 1-7, 17 automated/manual Progress items are checked and 16 manual acc
   - Expand-only per repo convention — Phase 8's contract migration widened from three drops to five (`plan.md` Phase 8 + §Migration Notes + Progress 8.x updated).
   - **Not** done: no bounded external-call deadline / lease renewal. The 600s stale window is still empirical (the finding's own blind spot), but a wrong guess is now merely a wasted takeover, not a correctness bug.
 
-### F3 - The confirmation fix still has an in-flight stale-response race
+### F11 - The confirmation fix still has an in-flight stale-response race
 
 - **Severity**: ! WARNING
 - **Impact**: M MEDIUM - real tradeoff; pause to reason through it
@@ -93,9 +98,13 @@ For Phases 1-7, 17 automated/manual Progress items are checked and 16 manual acc
   - Tradeoff: The user cannot edit the form during a potentially long transcript request; `FormField` needs disabled-state support.
   - Confidence: HIGH - no input mutation means the late 409 still matches the displayed inputs.
   - Blind spot: Future programmatic input changes must also respect the lockout.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A — quote bound to submitted input snapshot + stale-response discard.
+  - `GenerateSummaryForm.tsx`: added a `requestSeq` ref (via `useRef`) that is bumped on every submit and on every quote-relevant input change (URL, character, `allowLong`). `generate` now takes the submitted `url`/`character` explicitly and captures `seq` at call time; after the fetch resolves it drops the outcome (clearing loading, surfacing no error/confirm) when `seq !== requestSeq.current`, so a late 409 for superseded inputs never installs a quote.
+  - `ConfirmState` now carries the `url`/`character` it was priced for; "Generate anyway" replays `confirm.url`/`confirm.character` rather than the live form, so consent always matches the quoted request even in the residual case where a confirm is displayed.
+  - No concurrent requests are possible (submit + "Generate anyway" are both disabled while loading), so clearing loading in the stale-drop path can never orphan another in-flight request.
+  - Lint clean (`eslint src/components/summaries/GenerateSummaryForm.tsx`).
 
-### F4 - Plan and README contracts remain stale after the fixes
+### F12 - Plan and README contracts remain stale after the fixes
 
 - **Severity**: ! WARNING
 - **Impact**: L LOW - quick decision; fix is obvious and narrowly scoped
@@ -103,9 +112,11 @@ For Phases 1-7, 17 automated/manual Progress items are checked and 16 manual acc
 - **Location**: `context/changes/generate-and-save-summary/plan.md:333`; `README.md:109`
 - **Detail**: The plan still says a null balance disables submission, despite the accepted F5 behavior. README says the service-role key is for account deletion/operator scripts, says it has "two" consumers before listing three, says every successful summary costs one credit, and later says the rest of the app works without the key even though generation returns 503. These are direct contradictions of the shipped variable-cost and preflight behavior.
 - **Fix**: Update the Phase 6 contract and consolidate README service-role/credit documentation around the shipped three-consumer, 1-or-2-credit behavior.
-- **Decision**: PENDING
+- **Decision**: FIXED.
+  - `plan.md` Phase 6 contract: `confirm` state documented as `{ cost, transcriptLength, url, character }` (F11), and the submit-disable rule corrected — disabled at `credits === 0`; a `null` balance keeps generation enabled (F5).
+  - `README.md`: env-var table lists the service-role key's three uses (account deletion, summary generation, operator scripts); "two consumers" → "three consumers"; the generate bullet now says it *reserves* credits in a durable ledger (F9) and settles/refunds via the admin client; "the key's other consumer" → "consumers"; Summary-credits section now states 1 credit (or 2 for a confirmed long video); the Deployment note now says both `account/delete` and `summaries/generate` return 503 without the key, while auth/browsing keep working.
 
-### F5 - Empty transcript strings can be summarized and charged
+### F13 - Empty transcript strings can be summarized and charged
 
 - **Severity**: i OBSERVATION
 - **Impact**: L LOW - quick decision; fix is obvious and narrowly scoped
@@ -113,9 +124,9 @@ For Phases 1-7, 17 automated/manual Progress items are checked and 16 manual acc
 - **Location**: `src/pages/api/summaries/generate.ts:148`; `src/lib/services/transcript.ts:36`
 - **Detail**: The transcript service accepts any string, including whitespace/empty content, as `ok: true`. The endpoint checks only `transcript.ok`, prices the empty content at one credit, and calls the LLM. A generic non-empty model response could then be persisted and charged despite the no-transcript contract.
 - **Fix**: Treat `transcript.content.trim().length === 0` as unavailable and return 422 before cost/debit.
-- **Decision**: PENDING
+- **Decision**: FIXED. `generate.ts`: added a `transcript.content.trim().length === 0` guard immediately after the `!transcript.ok` check — returns the same 422 "Transcript unavailable" before `transcriptLength`/`summaryCost` or any reservation, so an empty/whitespace transcript never reaches the priced debit or the LLM call.
 
-### F6 - Pre-save infrastructure failures use an unstable or misleading 500 path
+### F14 - Pre-save infrastructure failures use an unstable or misleading 500 path
 
 - **Severity**: i OBSERVATION
 - **Impact**: L LOW - quick decision; fix is obvious and narrowly scoped
@@ -123,9 +134,12 @@ For Phases 1-7, 17 automated/manual Progress items are checked and 16 manual acc
 - **Location**: `src/pages/api/summaries/generate.ts:68`; `src/pages/api/summaries/generate.ts:133`; `src/components/summaries/GenerateSummaryForm.tsx:70`
 - **Detail**: Lock acquisition failure returns 500 before any save, while a rejected initial `getBalance` call escapes the endpoint's JSON response contract. The client maps every 500 to "Something went wrong saving your summary," which is inaccurate for both failures and can hide a non-JSON framework response.
 - **Fix**: Catch/log the initial balance failure and return stable structured error codes/messages; map preflight/infrastructure failures separately from persistence failures in the client.
-- **Decision**: PENDING
+- **Decision**: FIXED.
+  - `generate.ts`: the initial `getBalance` (which throws on a DB error) is now wrapped in try/catch — logs and returns a structured JSON `500` with the generic "Something went wrong. Please try again." instead of letting the rejection escape into a non-JSON framework 500. The lock-acquire and reserve 500s already send that same generic message, distinct from persistence's "saving your summary" 500.
+  - `GenerateSummaryForm.tsx`: `messageForStatus(500, serverError)` now returns `serverError ?? "Something went wrong. Please try again."` — a pre-save infrastructure/preflight 500 reads with the server's generic message, only the persistence path says "saving your summary," and a non-JSON framework 500 falls back to the generic (not the misleading save message).
+  - Lint clean (`eslint` on both files).
 
-### F7 - Manual acceptance evidence remains pending after behavior-changing fixes
+### F15 - Manual acceptance evidence remains pending after behavior-changing fixes
 
 - **Severity**: i OBSERVATION
 - **Impact**: M MEDIUM - real tradeoff; pause to reason through it
@@ -137,4 +151,4 @@ For Phases 1-7, 17 automated/manual Progress items are checked and 16 manual acc
   - Tradeoff: Requires authenticated fixtures, controlled balances/keys, long/empty/no-transcript cases, concurrent requests, and two browsers.
   - Confidence: HIGH - the pending rows and newly changed behavior are directly observable.
   - Blind spot: This review did not mutate production data or intentionally break live credentials to manufacture evidence.
-- **Decision**: PENDING
+- **Decision**: ACCEPTED as a pending pre-release manual-testing gate. The manual matrix cannot be executed in this review environment (needs a running app, authenticated fixtures, controlled balances/keys, long/empty/no-transcript videos, concurrent requests, and two browsers). The new post-review scenarios (Markdown allow-list, unknown balance, 429 contention, stale-lock takeover/ownership, in-flight confirmation race, empty transcript, refund-failure handling, error-message accuracy) were added to `plan.md` → Testing Strategy as items 10–17. The 16 Phase 1–7 manual Progress rows and these scenarios remain the operator's release gate; automated gates (lint, build, migrations, audit) all pass.

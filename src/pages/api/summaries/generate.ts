@@ -133,8 +133,18 @@ async function runGeneration({
   // the atomic debit below. createClient returns supabase-js's default untyped client; this codebase
   // has no generated Database types yet, so passing it where the service expects its explicit shapes
   // is a real, unavoidable `any` gap (not a fixable unsafe-argument).
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-  const balance = await getBalance(supabase, userId);
+  let balance: number | null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+    balance = await getBalance(supabase, userId);
+  } catch (error) {
+    // getBalance throws on a DB error. Without this catch the rejection escapes the handler and the
+    // framework returns a non-JSON 500, breaking the endpoint's structured-error contract. Return a
+    // stable JSON 500 with a generic (non-persistence) message instead — nothing has been saved yet.
+    // eslint-disable-next-line no-console
+    console.error("getBalance failed:", error);
+    return Response.json({ error: "Something went wrong. Please try again." }, { status: 500 });
+  }
   if (balance === null || balance <= 0) {
     return Response.json({ error: "You have no summary credits left" }, { status: 402 });
   }
@@ -150,6 +160,12 @@ async function runGeneration({
     return Response.json({ error: "The transcript service failed. Please try again." }, { status: 502 });
   }
   if (!transcript.ok) {
+    return Response.json({ error: "Transcript unavailable for this video" }, { status: 422 });
+  }
+  // A whitespace-only (or empty) transcript is effectively "no transcript": summarizing it would
+  // charge a credit for a generic model reply built from nothing. Reject it as unavailable, before
+  // any cost is priced or a credit reserved.
+  if (transcript.content.trim().length === 0) {
     return Response.json({ error: "Transcript unavailable for this video" }, { status: 422 });
   }
 
