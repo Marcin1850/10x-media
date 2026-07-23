@@ -130,3 +130,36 @@ export async function saveTranscriptQuote(
     console.error("saveTranscriptQuote failed:", cause);
   }
 }
+
+/**
+ * Drops the cached quote for (user, video, character) once the summary that used it is durably saved
+ * (F24). The confirmation round-trip the cache exists to serve is over at that point, so keeping up to
+ * 200k characters of third-party transcript for the rest of the TTL buys nothing.
+ *
+ * Called only AFTER a successful persist, never on a failure path: a failed attempt still wants the
+ * quote so its retry reuses the fetch instead of paying Supadata again. Best-effort and never throws —
+ * a leftover row expires on its own and is swept by the bounded prune, which must not turn a delivered,
+ * already-charged summary into an error response.
+ */
+export async function discardTranscriptQuote(
+  admin: SupabaseClient,
+  userId: string,
+  youtubeId: string,
+  character: string,
+): Promise<void> {
+  try {
+    const { error } = (await admin.rpc("discard_transcript_quote", {
+      target_user: userId,
+      p_youtube_id: youtubeId,
+      p_character: character,
+    })) as { error: { message: string } | null };
+
+    if (error) {
+      // eslint-disable-next-line no-console
+      console.error(`discardTranscriptQuote: ${error.message}`);
+    }
+  } catch (cause) {
+    // eslint-disable-next-line no-console
+    console.error("discardTranscriptQuote failed:", cause);
+  }
+}

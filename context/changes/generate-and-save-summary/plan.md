@@ -35,12 +35,12 @@ Verify: sign in, generate a normal video (1 credit spent, Polish summary shown, 
 - **Browsing** the summary list (S-02) or a summary **detail/permalink** page — the result is shown transiently inline; it is persisted and S-02 will surface it.
 - **Deleting** summaries (S-03).
 - Full **design-system** restyle (S-06) — the form matches the existing custom cosmic theme; polish comes later.
-- **No schema change to `summaries`** — we do not store per-summary credit cost, and `videos.title`/`thumbnail_url` stay null (no metadata fetch).
+- ~~**No schema change to `summaries`** — we do not store per-summary credit cost, and `videos.title`/`thumbnail_url` stay null (no metadata fetch).~~ **Amended (impl-review F16)**: `summaries.reservation_id` was added in `20260722120000` — a nullable, unique link to the `credit_reservations` row that paid for the summary, composite-FK'd to `(id, user_id)` so the link is DB-validated as same-user. It is billing provenance (what makes reconciliation and F22 replay possible), not a per-summary cost display: there is still no credit-cost column, and `videos.title`/`thumbnail_url` stay null.
 - **Token-accurate** cost measurement — character count is the proxy (see Cost policy).
 - ~~**Markdown rendering** of summaries — plain text with preserved line breaks.~~ **Amended in Phase 7**: summaries are now authored as Markdown and rendered with `react-markdown` in the dashboard island (themed `components` map, HTML escaped by default). Pulled in at the user's request during the Phase 7 manual-quality pass — S-06 concerns app design, not summary content formatting.
 - **Streaming** responses or structured LLM output.
 - **Tests / test tooling** — manual verification only (roadmap defers testing to Module 3).
-- Any change to **F-01's** existing columns or RLS.
+- Any change to **F-01's** existing columns or RLS. (Still holds after the amendment above: `summaries.reservation_id` is an *added* nullable column — no existing column, constraint, or policy was altered.)
 
 ## Implementation Approach
 
@@ -48,10 +48,20 @@ Build backend-first in curl-verifiable increments, then the UI. Isolate the cros
 
 ## Critical Implementation Details
 
-- **Migration immutability + expand/contract** (F3): the credit migrations are live on cloud and must not be edited. This slice's migration is **expand-only** — it *adds* `spend_credits`/`refund_credits` and leaves the old `spend_credit()` in place. Dropping `spend_credit()` in the same migration would open a deploy window (DB-first breaks the old Worker; Worker-first calls a not-yet-created RPC), so the drop is deferred to a **contract migration (Phase 8)** run after the new Worker is live.
-- **Up-front gate ordering**: the minimum-1-credit balance *read* gate stays **before** `fetchTranscript` so a zero-balance user never triggers a paid Supadata/OpenRouter call.
-- **Debit before paid LLM work; refund on failure** (this replaces the probe's persist-then-best-effort-spend contract — see F1): after the transcript length is known and any 409 confirmation is resolved, `spend_credits(cost)` runs as an **atomic reservation** — its row-level `UPDATE … WHERE balance >= cost` is the concurrency serialization point, so parallel requests sharing one stale balance read cannot all overspend (the losers get the `-1` sentinel → 402). Only after a successful debit does the paid `summarize` call run. If `summarize` **or** the persist step fails, `refund_credits(cost)` releases the debit and the request returns 502/500 — the user is never charged for failed work. There is no persist-then-best-effort-spend and no "return 200 despite a failed spend." A race-losing request may still have paid the cheaper transcript fetch — the same accepted tradeoff as the confirm-path double fetch.
-- **Double transcript fetch on confirm**: when a long video hits the 409 gate, the transcript was already fetched; the "Generate anyway" resubmit fetches it again. Accepted MVP tradeoff (usually a fast inline fetch; a rare Whisper re-trigger is the edge). The up-front toggle avoids it entirely for users who know a video is long.
+> **Amended 2026-07-23 (impl-review F25).** The bullets below are the **current, normative** contract, resynchronized with the accepted post-review fixes F1–F24. The primitives the original plan named — a bare `spend_credits`/`refund_credits` pair, a single expand migration, an accepted double transcript fetch, plain-text output — were superseded during implementation. Superseded behavior is kept only as the labeled *Superseded* history under each bullet, so Phases 2–6 and Phase 8 read against one source of truth.
+
+- **Migration immutability + expand/contract** (F3): live migrations are never edited; every change is a new forward migration, and every one of them is **expand-only** — the superseded function is left in place so the running Worker keeps working until the new one is deployed. Nine forward migrations now chain this way: `20260719120000` (variable spend) → `20260720133000` (generation locks) → `20260720160000` (reservation ledger) → `20260720170000` (owner-scoped lease) → `20260722120000` (summary↔reservation link + reconcile) → `20260722130000` (transcript spend guards) → `20260723120000` (atomic persist+settle) → `20260723130000` (idempotency key) → `20260723140000` (quote lifecycle). Every drop is deferred to the single deploy-gated **contract migration (Phase 8)**.
+- **Up-front gate ordering**: unchanged — the minimum-1-credit balance *read* gate stays **before** any paid Supadata/OpenRouter call, so a zero-balance user never triggers one. It is a gate, not a serialization point; the atomic debit below is.
+- **One generation in flight per user** (impl-review F4/F10): the endpoint holds an owner-scoped **generation lease** around the whole pipeline — `acquire_generation_lease` returns an opaque lease id, and `release_generation_lease` (in a `finally`) verifies that id before releasing. Without it, concurrent requests would each pay for their own transcript fetch before the atomic debit rejected all but the affordable ones. The lease id is what makes stale-lock takeover safe: a displaced request's release is a logged no-op instead of unlocking a successor that is still running. Contention → `429`.
+- **Debit before paid LLM work, as a durable reservation** (F1, extended by impl-review F9/F16/F22): after the transcript length is known and any 409 confirmation is resolved, the debit runs through **`begin_generation(target_user, request, amount)`** — service-role only — which in ONE transaction claims the client's request key and opens a `credit_reservations` row in `reserved`. Its row-level `UPDATE … WHERE balance >= cost` is the concurrency serialization point, so parallel requests sharing one stale balance read cannot all overspend (losers come back `insufficient` → 402). Only after a successful debit does the paid `summarize` call run; on any failure past it, `refund_reservation` releases the debit (best-effort, idempotent, never throws) and the request returns 502/500. A row left `reserved` is a durable, queryable debt rather than a silently charged user — `reconcile_reservation()` is the recovery path. A race-losing request may still have paid the cheaper transcript fetch (bounded by the rate limit below).
+  - *Superseded*: the bare `spend_credits(cost)` / `refund_credits(user, amount)` pair. A bare refund could neither survive its own failure (nothing recorded the debt) nor be safely retried (nothing distinguished a retry from a second credit), which is why the ledger replaced it.
+- **Persist and settle in one transaction** (impl-review F23): the summary insert and the settlement are a single service-role RPC, **`persist_summary()`**, which locks the `reserved` row, upserts the video, inserts the linked summary, and marks the reservation `settled` — atomically. A rollback therefore persists nothing, so refunding is unambiguously correct, and a later owner-initiated summary delete cannot rewrite the billing outcome. `summarize()` carries an explicit `AbortSignal.timeout(300_000)` deadline, chosen to sit under the 600s lease window (after the transcript poll's ~240s worst case) and far below the one-hour reconciliation sweep.
+  - *Superseded*: an RLS-client insert followed by a best-effort settle. `settleReservation` is gone from `credits.ts`; the `settle_reservation()` RPC remains in the database as an operator recovery tool only.
+- **Idempotent retries** (impl-review F22): the request carries an optional client-generated `requestId` (UUID). A partial unique index on `credit_reservations (user_id, request_id) where request_id is not null and status <> 'refunded'` makes a repeat POST detectable, and `begin_generation` answers `reserved` / `fresh` / `replay` / `in_progress` / `unavailable` / `insufficient`. A **replay** returns the original summary verbatim — no second charge, no second OpenRouter call, no second row. The endpoint asks the identity question twice: a cheap probe (`amount: null`) *before* the paid transcript fetch, and again atomically at the debit, which is what actually decides. A null key skips deduplication entirely, which is what keeps the migration expand-only for a cached pre-F22 client.
+- **Paid transcript fetches are guarded, not repeated** (impl-review F17/F24): every genuine paid fetch first passes a per-user rate limit (`record_transcript_attempt`, 10 attempts / 10 min) that fails **closed** on a DB error and returns `429` when capped. A long video's 409 caches the transcript as a short-lived **quote** (`save_transcript_quote`, 10-min TTL) that the `allowLong` retry reuses, so confirmation costs nothing extra. A quote dies at the earliest of: consumed (`discard_transcript_quote`, called once the summary commits), superseded (exact-key expired delete), pruned (`prune_transcript_quotes`, bounded, driven from both quote RPCs so the table is self-limiting with no scheduled job), or cascaded on account deletion.
+  - *Superseded*: "**Double transcript fetch on confirm** — when a long video hits the 409 gate the transcript was already fetched, and the 'Generate anyway' resubmit fetches it again. Accepted MVP tradeoff." A re-fetch now happens only when the quote is missing or expired.
+- **Empty transcripts are unavailable** (impl-review F13): a whitespace-only or empty transcript returns the same `422` as a missing one — before pricing, before any debit, before the LLM call.
+- **Summaries render as Markdown behind an allow-list** (impl-review F2): LLM output is untrusted (transcript content can steer it), so the island renders it with `react-markdown` restricted to `SUMMARY_ALLOWED_ELEMENTS` plus `unwrapDisallowed`. `img`/`a` cannot render (no attacker-controlled fetch or navigation target) and raw HTML is escaped by react-markdown's default, so no extra sanitizer is needed.
 
 ---
 
@@ -99,6 +109,8 @@ Standardize the only Polish *chrome* to English so the app is consistent with th
 ### Overview
 
 Add an atomic `spend_credits(amount)` RPC so a generation can cost more than 1 credit, retire the fixed `spend_credit()`, and route the credits service through the new function.
+
+> **Amended 2026-07-23 (impl-review F25).** This phase landed as written (`23d59cc`) and its migration is immutable, so the SQL below stays as the historical record of what shipped. It is **no longer the live contract**: `spend_credits`/`refund_credits` were superseded by the F9 reservation ledger (`20260720160000`) and then by F22's `begin_generation` on the generate path. The current shape of the two code files this phase touched is recorded under items 2 and 3; the superseded RPCs are dropped in Phase 8.
 
 ### Changes Required:
 
@@ -169,7 +181,14 @@ grant execute on function public.refund_credits(uuid, integer) to service_role;
 
 **Intent**: Let `spendCredit` spend N credits via the new RPC, defaulting to 1; keep the `-1` insufficient-sentinel handling and `SpendResult` shape unchanged. Add a `refundCredits` that reverses a debit on a failed generation via the **admin** client.
 
-**Contract**: `spendCredit(supabase, amount = 1)` calls `.rpc("spend_credits", { amount })`. Same `{ ok, balance }` return shape, but on the `-1` insufficient sentinel it **re-reads the caller's actual balance via `getBalance`** for `{ ok: false, balance }` instead of hard-coding `0` (F4) — otherwise a 2-credit spend at balance 1 would report 0 and the 402 "you have &lt;balance&gt;" message would be wrong. New `refundCredits(admin, userId, amount)` (admin = `createAdminClient()` result) calls `.rpc("refund_credits", { target_user: userId, amount })`; it is a best-effort compensating action — on error (including a null admin client when the service-role key is unset) it logs and resolves without throwing, so it never masks the original generation failure being returned to the user.
+**Contract (superseded — what this phase shipped)**: `spendCredit(supabase, amount = 1)` calls `.rpc("spend_credits", { amount })`. Same `{ ok, balance }` return shape, but on the `-1` insufficient sentinel it **re-reads the caller's actual balance via `getBalance`** for `{ ok: false, balance }` instead of hard-coding `0` (F4) — otherwise a 2-credit spend at balance 1 would report 0 and the 402 "you have &lt;balance&gt;" message would be wrong. New `refundCredits(admin, userId, amount)` (admin = `createAdminClient()` result) calls `.rpc("refund_credits", { target_user: userId, amount })`; it is a best-effort compensating action — on error (including a null admin client when the service-role key is unset) it logs and resolves without throwing, so it never masks the original generation failure being returned to the user.
+
+**Contract (current, after F9/F22/F23)**: `credits.ts` exports four functions, and `spendCredit`/`refundCredits` are gone.
+- `getBalance(supabase, userId?)` — unchanged; RLS-scoped when `userId` is omitted, `null` when no row exists.
+- `reserveCredits(supabase, amount = 1)` → `reserve_credits()`; opens a `reserved` ledger row and returns `{ ok, balance, reservationId }` discriminated on `ok`, still re-reading the real balance on the `-1` sentinel (F4 preserved). **Superseded on the generate path by `beginGeneration`** and retained only for the expand/contract window — removed with its RPC in Phase 8.
+- `beginGeneration(admin, { userId, requestId, amount })` → `begin_generation()`; the idempotent debit (F22). `amount: null` probes without charging. Returns the discriminated `BeginGenerationResult` (`reserved` / `fresh` / `replay` / `inProgress` / `unavailable` / `insufficient`); `replay` carries the original summary, ids, cost, and balance. Admin client only — it debits an explicit user and reads back their summary.
+- `refundReservation(admin, userId, reservationId)` → `refund_reservation()`; reverses a debit after failed work. Idempotent (only refunds a row still `reserved`), best-effort, and **never throws** — a transport-level rejection is caught too, so it can never mask the generation failure being returned. Returns `false` when the debit was not reversed, and logs a `CREDIT_LEAK` marker; the row stays `reserved` and is recoverable via `reconcile_reservation()`.
+- There is deliberately **no** `settleReservation`: settling is now inside `persistSummaryAndSettle`'s transaction (F23).
 
 #### 3. Function type update
 
@@ -177,7 +196,9 @@ grant execute on function public.refund_credits(uuid, integer) to service_role;
 
 **Intent**: Update the local `AppDatabase` Functions map to the new RPCs.
 
-**Contract**: Replace `spend_credit: { Args: Record<string, never>; Returns: number }` with `spend_credits: { Args: { amount?: number }; Returns: number }` and add `refund_credits: { Args: { target_user: string; amount: number }; Returns: undefined }`.
+**Contract (superseded — what this phase shipped)**: Replace `spend_credit: { Args: Record<string, never>; Returns: number }` with `spend_credits: { Args: { amount?: number }; Returns: number }` and add `refund_credits: { Args: { target_user: string; amount: number }; Returns: undefined }`.
+
+**Contract (current)**: the `Functions` map declares `reserve_credits`, `begin_generation`, `settle_reservation`, `refund_reservation`, and `persist_summary` — the table-returning ones typed as one-element arrays, which is how PostgREST delivers them. `spend_credits` / `refund_credits` remain only under a "legacy, kept for the expand/contract window" comment and are removed together with `reserve_credits` in Phase 8. `SummaryRow`/`SummaryInsert` also carry `reservation_id: string | null` (F16). `summaries.ts` additionally owns the persistence entry point `persistSummaryAndSettle` (F23) — see Phase 4.
 
 ### Success Criteria:
 
@@ -246,13 +267,27 @@ Promote the probe to the production generation endpoint: rename the file, spend 
 
 **Intent**: Compute the cost from transcript length, then **debit before the paid LLM call** and **refund on any downstream failure** (F1). Wrap the external calls so Supadata/OpenRouter failures return a clean 502 instead of an unhandled 500, and wrap persistence so a post-debit failure refunds and returns a stable 500 (F7). Preserve only the up-front minimum-1 *read* gate ordering; the best-effort post-save spend is removed.
 
-**Contract**: Flow (Phase 5 inserts the 409 confirmation between steps 3 and 4):
-1. Up-front `getBalance` min-1 read gate before any paid call (`402` at 0) — unchanged.
+**Contract (superseded — the flow as originally planned)**: Phase 5 inserts the 409 confirmation between steps 3 and 4.
+1. Up-front `getBalance` min-1 read gate before any paid call (`402` at 0).
 2. `fetchTranscript` in try/catch → `502 { error }`; the unavailable branch stays `422`.
-3. `const cost = summaryCost(transcript.content.length)`. **Hard-cap gate (F5)**: if `transcript.content.length > HARD_MAX_TRANSCRIPT_CHARS` → `413 { error }` ("This video's transcript is too long to summarize.") — before any 409, debit, or LLM call. This is what actually bounds worst-case token cost/latency; `summaryCost` only prices.
-4. **Atomic debit**: `spendCredit(supabase, cost)`. On the insufficient sentinel → `402` (`"You need <cost> credits for this video; you have <balance>"`, balance re-read per F4). This debit — not a pre-read `balance < cost` compare — is the authoritative, race-safe cost gate.
-5. In try/catch: `summarize` (failure → `502`) then persist the video+summary (failure → stable `500 { error }`, F7). **On any throw in this block, call `refundCredits(admin, userId, cost)` before returning** so the user isn't charged for failed work.
-6. `200` — success response gains `cost` and `transcriptLength`: `{ summary, model, videoId, summaryId, creditsRemaining, cost, transcriptLength }`, where `creditsRemaining` is the balance returned by the successful debit.
+3. `const cost = summaryCost(transcript.content.length)`. **Hard-cap gate (F5)**: `413` above `HARD_MAX_TRANSCRIPT_CHARS`, before any 409, debit, or LLM call.
+4. **Atomic debit**: `spendCredit(supabase, cost)`; insufficient sentinel → `402`.
+5. In try/catch: `summarize` (→ `502`) then persist (→ stable `500`, F7); on any throw, `refundCredits(admin, userId, cost)` first.
+6. `200 { summary, model, videoId, summaryId, creditsRemaining, cost, transcriptLength }`.
+
+**Contract (current, after F4/F9/F10/F13/F17/F22/F23/F24)**: the endpoint is `POST /api/summaries/generate`, `prerender = false`, zod-validated (`url`, `character`, `allowLong`, optional `requestId: z.uuid()`). Preflight requires both provider keys **and** the admin client (`503` otherwise) — without the service-role key the refund path could not run at all, so a failure would silently leave the user charged. Then `401` unauthenticated, `400` on invalid input. The pipeline proper:
+
+0. **Generation lease**: `acquireGenerationLease(admin, userId)` before any paid work; `null` → `429`. An RPC failure → `500`. Everything below runs inside a `try`/`finally` that releases the lease with its lease id on every exit path.
+1. **Idempotency probe** (F22, only when `requestId` is present): `beginGeneration(admin, { userId, requestId, amount: null })`. `replay` → `200` with the original summary; `inProgress` → `429`; `unavailable` → `409` ("start a new generation"); anything else falls through. Runs **before** the paid fetch because the work cannot be priced until the transcript exists, so deferring to the debit would pay Supadata for a transcript it then discards. Fails **closed** (`500`) — proceeding on an unknown idempotency state is the double-charge this guard exists to prevent.
+2. **Balance read gate**: `getBalance` → `402` at `null`/0; a throw → stable `500` with the generic (non-persistence) message (F14).
+3. **Transcript acquisition** (F17): on `allowLong`, try `getTranscriptQuote` first — a hit skips both the rate limit and the paid fetch. On a miss, `recordTranscriptAttempt` (fails **closed** → `500`; capped → `429`), then `fetchTranscript` in try/catch → `502`; `!ok` → `422`; whitespace-only content → the same `422` (F13), before pricing or any debit.
+4. `transcriptLength = content.length`; `cost = summaryCost(transcriptLength)`. **Hard-cap gate (F5)**: above `HARD_MAX_TRANSCRIPT_CHARS` → `413`, before any 409, debit, or LLM call. This is what bounds worst-case token cost/latency; `summaryCost` only prices.
+5. **409 confirmation gate** (Phase 5): `cost > 1 && !allowLong` → `saveTranscriptQuote` then `409 { error, requiresConfirmation: true, cost, transcriptLength }` — no debit, no refund needed.
+6. **Atomic idempotent debit**: `beginGeneration(admin, { userId, requestId, amount: cost })`. The same three repeat outcomes as step 1 are mapped identically (shared helper), `insufficient` → `402` (`"You need <cost> credits for this video; you have <balance>"`, actual balance per F4), `reserved` yields `{ reservationId, balance }`. A `fresh` outcome from a debiting call is a contract violation and throws. This debit — not a pre-read compare — is the authoritative, race-safe cost **and** identity gate; the step-1 probe is only an early exit on a possibly-stale read.
+7. `summarize` (with its 300s deadline) — on failure: `refundReservation`, then `502`.
+8. `persistSummaryAndSettle(admin, {...reservationId})` — one transaction writing video + linked summary and settling the reservation (F23). A throw → `refundReservation` then `500` with the retryable "saving your summary" message (F7). `ok: false` (the reservation was already resolved by a sweep) → fail closed with the same `500` and **no** refund, since the row is already resolved.
+9. `discardTranscriptQuote` on the success path only, guarded on `allowLong` — the only path that can have written a quote (F24). Best-effort; never turns a delivered, charged summary into an error.
+10. `200 { summary, model, videoId, summaryId, creditsRemaining, cost, transcriptLength }`. The replay `200` of step 1/6 omits `transcriptLength` — that is a property of the fetch, not of the saved summary, and the client only uses it on the confirmation path.
 
 Log real errors server-side; never leak internals in the `error` field.
 
@@ -297,7 +332,9 @@ Add the opt-in for the higher cost: an `allowLong` request flag plus a 409 "conf
 
 **Intent**: Accept `allowLong` in the request; when the transcript is long and `allowLong` is not set, return a distinct confirmation response *before* summarizing (no LLM call, no spend) so the client can ask the user to confirm the 2-credit cost.
 
-**Contract**: `probeSchema` (now the generate schema) gains `allowLong: z.boolean().optional().default(false)`. The 409 is checked **after computing `cost` (step 3) and before the atomic debit (step 4)**, so a confirmation-required response never debits and never needs a refund: `if (cost > 1 && !allowLong)` → `409 { error, requiresConfirmation: true, cost, transcriptLength }`. When `allowLong` is true, a long video proceeds to the debit, where the insufficient sentinel still yields `402`. A short video ignores `allowLong` and always costs 1.
+**Contract**: `probeSchema` (now the generate schema) gains `allowLong: z.boolean().optional().default(false)`. The 409 is checked **after computing `cost` and before the atomic debit**, so a confirmation-required response never debits and never needs a refund: `if (cost > 1 && !allowLong)` → `409 { error, requiresConfirmation: true, cost, transcriptLength }`. When `allowLong` is true, a long video proceeds to the debit, where an insufficient balance still yields `402`. A short video ignores `allowLong` and always costs 1.
+
+> **Amended 2026-07-23 (impl-review F17/F24).** The 409 now also **caches the transcript it already paid for** (`saveTranscriptQuote`, 10-min TTL) immediately before returning, and the `allowLong` retry reads that quote first — so the confirmation round-trip no longer pays Supadata twice and consumes no rate-limit token. The quote is discarded once the resulting summary commits. `allowLong` is therefore both the consent flag and the cache-read switch: it is the only path that can have written a quote, which is why the read and the discard are both guarded on it.
 
 ### Success Criteria:
 
@@ -331,10 +368,16 @@ The user-facing surface: a React island on `/dashboard` that drives the endpoint
 **Intent**: A client island owning the full generate interaction — inputs, request, loading, result, errors, confirmation, and the live credit count. Styled to match the existing custom cosmic theme (reuse `Button` / the auth form field patterns).
 
 **Contract**: Props `{ initialCredits: number | null }`. Local state: `url`, `character` (`"informational" | "educational"`, default informational), `allowLong` (default false), request status, `summary`/`cost`, error message, a `confirm` state (`{ cost, transcriptLength, url, character }` from a 409 — the URL/character are the exact inputs the quote was priced for, so "Generate anyway" replays them rather than the live form), and `credits` (seeded from `initialCredits`, updated to `creditsRemaining` on success). Client-side URL validation reuses `extractYoutubeId` (pure import) to enable/disable submit; submit is also disabled while loading or when `credits` is `0`. A `null` balance means the display read failed, **not** that the user is broke — generation stays enabled and the endpoint answers 402 if credits truly ran out (F5). POSTs `{ url, character, allowLong }` to `/api/summaries/generate`. Response handling:
-- `200` → render summary (`whitespace-pre-wrap`), set `credits = creditsRemaining`, note credits spent.
+- `200` → render summary, set `credits = creditsRemaining`, note credits spent. ~~(`whitespace-pre-wrap`)~~ **Amended (impl-review F2 / Phase 7)**: rendered with `react-markdown` through a themed `components` map, restricted to `SUMMARY_ALLOWED_ELEMENTS` (`p, ul, ol, li, strong, em, h2, h3, code`) with `unwrapDisallowed`, so untrusted LLM output cannot emit `img`/`a` and raw HTML stays escaped. **Amended (impl-review F18)**: a `response.ok` outcome is applied **before** the stale-sequence guard — a saved, charged summary is never discarded because the form was edited mid-flight — and `SuccessState` carries the submitted `url`, rendered on the result card so a result that no longer matches the live form is unambiguous.
 - `409` → enter confirm state; show "This is a long video (~N chars). Generating costs {cost} credits." with a **"Generate anyway ({cost} credits)"** button that resubmits with `allowLong: true`; disable that button when `credits < cost` with a "not enough credits" note.
 - `402` → credits message; `413` → "This video is too long to summarize." (F5); `422` → "No transcript is available for this video."; `502` → "The transcript or summarization service failed. Please try again."; `503` → "Summary generation isn't configured."; `500` → prefer the server-supplied `error` so a pre-save infrastructure failure (lock/balance/reserve) keeps its own message; fall back to a generic "Something went wrong. Please try again." only for a non-JSON framework 500 — a persistence failure supplies the retryable "saving your summary" message from the server (F7, F14); `400`/`401` → validation / "Your session expired — sign in again."
 Inputs are preserved across errors for retry.
+
+> **Amended 2026-07-23 (impl-review F11/F20/F22/F26).** The island gained four things the original contract does not describe:
+> - **Stale-response discard (F11)**: a monotonic `requestSeq` ref, bumped on every submit *and* on every quote-relevant input change. Advisory outcomes (409/402/errors) whose seq is stale are dropped, so a late 409 for video A can never install a quote for video B. Successful (paid) responses are exempt — see the F18 amendment above.
+> - **Idempotency key (F22)**: a `pendingRequest` ref holding `{ key, url, character }`. Each submit sends `requestId` — reusing the held key only when `url`+`character` match, otherwise minting a fresh `crypto.randomUUID()`. The key is retained across a **network error only** (the sole ambiguous outcome, where the request may have been delivered and its reply lost) and cleared on *any* HTTP response, so the next submit is a genuinely new operation.
+> - **Inline URL validation (F20)**: a non-empty unparseable URL shows "Enter a valid YouTube video URL." on the field rather than only silently disabling submit; an empty field stays clean, matching the auth forms.
+> - **`429` mapping**: the endpoint returns 429 for three distinct causes — generation-lease contention, a repeat request whose original attempt is still running (F22), and the transcript-attempt rate cap (F17) — each with its own server message. `messageForStatus` currently ignores `serverError` for 429 and always renders the lock-contention wording; see impl-review F26.
 
 #### 2. Character selector + toggle controls
 
@@ -408,19 +451,22 @@ Each prompt is **layered** so one output serves both jobs: one or two framing se
 
 ---
 
-## Phase 8: Contract migration — drop the five superseded RPCs
+## Phase 8: Contract migration — drop the six superseded RPCs
 
 ### Overview
 
-The expand/contract close-out. Three generations of credit RPC and two generations of generation-lock RPC now coexist, each left in place for the same deploy-window reason, and this phase drops all of them in one migration:
+The expand/contract close-out. Four generations of credit RPC and two generations of generation-lock RPC now coexist, each left in place for the same deploy-window reason, and this phase drops all of them in one migration:
 
 | Function | Added | Superseded by | Why it is still there |
 | --- | --- | --- | --- |
 | `spend_credit()` | `20260712175240` | `spend_credits(amount)` | Phase 2 expand-only |
 | `spend_credits(integer)` | `20260719120000` | `reserve_credits(amount)` | F1 ledger expand-only |
 | `refund_credits(uuid, integer)` | `20260719120000` | `refund_reservation(uuid, uuid)` | F1 ledger expand-only |
+| `reserve_credits(integer)` | `20260720160000` | `begin_generation(uuid, uuid, integer)` | F22 idempotency expand-only |
 | `acquire_generation_lock(uuid, integer)` | `20260720133000` | `acquire_generation_lease(uuid, integer)` | F2 lease expand-only |
 | `release_generation_lock(uuid)` | `20260720133000` | `release_generation_lease(uuid, uuid)` | F2 lease expand-only |
+
+> **Amended 2026-07-23 (impl-review F22/F25).** `reserve_credits(integer)` joined the list: `begin_generation()` superseded it on the generate path, leaving it with no caller. Unlike the other five it is still *referenced* in code — `reserveCredits` in `credits.ts` and its entry in `AppDatabase["public"]["Functions"]` — so this phase must delete that dead wrapper along with the RPC, or the drop leaves an exported function that calls a non-existent RPC. `settle_reservation()` is **not** dropped: F23 removed its wrapper from `credits.ts`, but the RPC is deliberately retained as an operator-side recovery tool alongside `reconcile_reservation()`.
 
 They are dropped **together** because they share one precondition (the phases 1–7 Worker is live), so splitting them across migrations would buy nothing and leave dead SECURITY DEFINER functions in the schema for longer.
 
@@ -434,7 +480,7 @@ They are dropped **together** because they share one precondition (the phases 1�
 
 **File**: `supabase/migrations/<YYYYMMDDHHmmss>_drop_legacy_rpcs.sql`
 
-**Intent**: Remove all five superseded RPCs. `drop function if exists` keeps the migration idempotent and safe to re-run.
+**Intent**: Remove all six superseded RPCs. `drop function if exists` keeps the migration idempotent and safe to re-run.
 
 **Contract**:
 
@@ -442,21 +488,31 @@ They are dropped **together** because they share one precondition (the phases 1�
 -- Contract half of the expand/contract chains opened in S-01 (Phase 8).
 -- Safe only after the phases 1-7 Worker is live on cloud (see plan §Migration Notes).
 --
--- spend_credit  -> spend_credits (20260719120000) -> reserve_credits (20260720160000)
+-- spend_credit -> spend_credits (20260719120000) -> reserve_credits (20260720160000)
+--                                                -> begin_generation (20260723130000)
 -- refund_credits (20260719120000)                 -> refund_reservation (20260720160000)
 -- acquire/release_generation_lock (20260720133000) -> ..._generation_lease (20260720170000)
 --
--- All five are SECURITY DEFINER and unreferenced by the shipped Worker; refund_credits in
+-- All six are SECURITY DEFINER and unreferenced by the shipped Worker; refund_credits in
 -- particular credits an arbitrary user by amount with no reservation to validate against, and
 -- release_generation_lock releases by user_id alone — the ownerless release F2 replaced.
+-- settle_reservation() is intentionally NOT dropped: it has no wrapper since F23 but is kept
+-- as an operator recovery tool, alongside reconcile_reservation().
 drop function if exists public.spend_credit();
 drop function if exists public.spend_credits(integer);
 drop function if exists public.refund_credits(uuid, integer);
+drop function if exists public.reserve_credits(integer);
 drop function if exists public.acquire_generation_lock(uuid, integer);
 drop function if exists public.release_generation_lock(uuid);
 ```
 
-No other file changes — the code switches already happened in Phase 2 (`spend_credits`), the F1 fix (`reserve_credits`), and the F2 fix (`acquire_generation_lease`).
+#### 2. Remove the dead `reserveCredits` wrapper
+
+**Files**: `src/lib/services/credits.ts`, `src/lib/services/summaries.ts`
+
+**Intent**: `reserve_credits` is the one drop that still has code pointing at it. Deleting the RPC without the wrapper would leave an exported function calling something that no longer exists.
+
+**Contract**: Delete `reserveCredits` and the `ReserveResult` type from `credits.ts` (and `INSUFFICIENT_SENTINEL` if it becomes unused), and remove the `reserve_credits`, `spend_credits`, and `refund_credits` entries from `AppDatabase["public"]["Functions"]` in `summaries.ts`. No behavior change — `generate.ts` has called `beginGeneration` since F22. The other five drops need no code change: those switches already happened in Phase 2 (`spend_credits`), the F1 fix (`reserve_credits`), and the F2 fix (`acquire_generation_lease`).
 
 ### Success Criteria:
 
@@ -465,14 +521,15 @@ No other file changes — the code switches already happened in Phase 2 (`spend_
 - Migration applies cleanly: `npx supabase migration up`
 - Type checking passes: `npm run build`
 - Linting passes: `npm run lint`
-- No stale references (PowerShell): `Get-ChildItem -Recurse -File src supabase/migrations | Select-String "spend_credit\b|spend_credits|refund_credits|generation_lock\("` returns nothing outside the drop migration itself and the historical migrations that define them (`20260712175240`, `20260719120000`, `20260720133000`).
-- `AppDatabase["public"]["Functions"]` in `src/lib/services/summaries.ts` no longer declares `spend_credits` / `refund_credits` (their "legacy, kept for the expand/contract window" entries are removed with the drop).
+- No stale references (PowerShell): `Get-ChildItem -Recurse -File src supabase/migrations | Select-String "spend_credit\b|spend_credits|refund_credits|reserve_credits|generation_lock\("` returns nothing outside the drop migration itself and the historical migrations that define them (`20260712175240`, `20260719120000`, `20260720133000`, `20260720160000`).
+- `AppDatabase["public"]["Functions"]` in `src/lib/services/summaries.ts` no longer declares `spend_credits` / `refund_credits` / `reserve_credits` (their "legacy, kept for the expand/contract window" entries are removed with the drop), and `reserveCredits` is gone from `credits.ts`.
 
 #### Manual Verification:
 
-- **Precondition**: confirm the cloud Worker in production is the build calling `reserve_credits` and `acquire_generation_lease` (not `spend_credit`/`spend_credits`/`acquire_generation_lock`) before applying to cloud.
-- After the migration, each of `select public.spend_credit();`, `select public.spend_credits(1);`, `select public.refund_credits('<uuid>', 1);`, `select public.acquire_generation_lock('<uuid>');`, and `select public.release_generation_lock('<uuid>');` errors with `function ... does not exist`.
-- A normal and a long generation still succeed end-to-end (they use `reserve_credits`), and a forced failure still refunds (via `refund_reservation`), confirming nothing regressed.
+- **Precondition**: confirm the cloud Worker in production is the build calling `begin_generation` + `persist_summary` and `acquire_generation_lease` (not `spend_credit`/`spend_credits`/`reserve_credits`/`acquire_generation_lock`) before applying to cloud.
+- After the migration, each of `select public.spend_credit();`, `select public.spend_credits(1);`, `select public.refund_credits('<uuid>', 1);`, `select public.reserve_credits(1);`, `select public.acquire_generation_lock('<uuid>');`, and `select public.release_generation_lock('<uuid>');` errors with `function ... does not exist`.
+- `select public.settle_reservation('<uuid>','<uuid>');` and `select public.reconcile_reservation(...)` still exist — they are the retained operator recovery tools, not part of the drop.
+- A normal and a long generation still succeed end-to-end (they use `begin_generation` + `persist_summary`), and a forced failure still refunds (via `refund_reservation`), confirming nothing regressed.
 
 **Implementation Note**: This is the roadmap's former `S-01-fu` (`drop-spend-credit-contract`), folded in as the closing phase and widened to cover the F1 ledger's two additional legacy functions. It is gated on deployment, so it lands in a separate commit/PR after phases 1–7 ship — sequence it after the Worker is live rather than bundling the drops into the pre-deploy work.
 
@@ -494,7 +551,7 @@ Per the roadmap's Module-3 deferral, S-01 uses **manual verification only** (no 
 8. **Invalid URL**: paste a non-YouTube URL → blocked with a message.
 9. **Copy**: unset a key → English notice banner.
 
-#### Post-review scenarios (added after the impl-review re-review fixes F9–F14)
+#### Post-review scenarios (added after the impl-review re-review fixes F9–F24)
 
 These exercise behavior that changed after the phases landed and are **not yet recorded** in the Progress section — run them against the amended build before release acceptance:
 
@@ -506,10 +563,17 @@ These exercise behavior that changed after the phases landed and are **not yet r
 15. **Empty transcript** (F13): a video whose transcript is whitespace/empty → 422 "unavailable", **no** credit reserved, no LLM call.
 16. **Refund-failure handling** (F9 ledger): force a post-debit failure (break the LLM/persist path) → the reservation is refunded; if the refund itself fails, the row stays `reserved` (recoverable via the reconciliation query), never a silent charge.
 17. **Error-message accuracy** (F14): a pre-save infrastructure 500 (e.g. lock/balance/reserve failure) shows the generic "Something went wrong" message, distinct from the persistence "saving your summary" 500.
+18. **Reconciliation classification** (F16): a `reserved` row *with* a linked summary is settled by `reconcile_reservation()`, one *without* is refunded — and a delivered summary can no longer be misclassified, since F23 settles it inside the writing transaction.
+19. **Transcript rate cap** (F17): more than 10 paid transcript fetches inside 10 minutes for one user → `429` with the cooldown message, before any Supadata call; a `record_transcript_attempt` DB failure fails **closed** (500), never open.
+20. **Quote reuse on confirm** (F17): a long video's 409 followed by "Generate anyway" performs **one** Supadata fetch total and consumes one rate-limit token, not two.
+21. **Atomic persist + settle** (F23): force a persist failure after a successful `summarize` → no summary row, reservation refunded, `500` with the "saving your summary" message; on success the reservation is `settled` in the same transaction that wrote the summary, and deleting that summary afterwards does **not** change the billing outcome.
+22. **Idempotent retry** (F22): repeat a POST with the same `requestId` after a delivered generation → `200` replaying the original summary with **no** second charge and **no** second `summaries` row; repeat while the first is still running → `429`; omit `requestId` entirely (pre-F22 client) → normal, undeduplicated behavior.
+23. **Quote lifecycle** (F24): a quote is gone after the generation that used it commits; an abandoned, never-revisited expired quote is drained by a later unrelated `save_transcript_quote`; a live (unexpired) quote is never pruned.
+24. **LLM deadline** (F23): a `summarize` call exceeding 300s aborts → refund + `502`, well before the generation lease's stale window and the one-hour reconciliation sweep.
 
 ## Performance Considerations
 
-The transcript fetch (possibly a polled Whisper job) dominates latency; the UI must show a loading state and tolerate multi-second waits. The 40k-char threshold only sets the 1→2 credit *price*; worst-case LLM token cost/latency is bounded by the `HARD_MAX_TRANSCRIPT_CHARS` reject gate (F5), which returns 413 before the LLM call for pathologically long transcripts. The confirm path re-fetches the transcript (accepted tradeoff). No new N+1 or hot-path concerns; volumes are MVP-small.
+The transcript fetch (possibly a polled Whisper job) dominates latency; the UI must show a loading state and tolerate multi-second waits. The 40k-char threshold only sets the 1→2 credit *price*; worst-case LLM token cost/latency is bounded by the `HARD_MAX_TRANSCRIPT_CHARS` reject gate (F5), which returns 413 before the LLM call for pathologically long transcripts, and by `summarize()`'s 300s abort deadline (F23). ~~The confirm path re-fetches the transcript (accepted tradeoff).~~ **Amended (F17)**: the confirm path reuses the cached quote, so it re-fetches only on a quote miss/expiry; paid fetches are additionally capped per user (10 / 10 min). Worst-case request latency is bounded by the 300s LLM deadline on top of the transcript poll's ~240s, both under the 600s generation-lease stale window. No new N+1 or hot-path concerns; volumes are MVP-small.
 
 ## Migration Notes
 
@@ -518,7 +582,12 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 1. **Expand (this slice)**: one forward migration adds `spend_credits` + `refund_credits` and **leaves `spend_credit()` in place**. `credits.ts` is switched to `spend_credits` in the same phase. Deploy order is now safe in both directions: the DB has both functions, so the old Worker (still calling `spend_credit`) and the new Worker (calling `spend_credits`) each work. Apply locally with `npx supabase migration up`; push to cloud before/with the Worker deploy.
 2. **Expand (F1 ledger, `20260720160000_credit_reservations.sql`)**: adds the `credit_reservations` table plus `reserve_credits` / `settle_reservation` / `refund_reservation`, and **leaves `spend_credits` and `refund_credits` in place** for the same reason step 1 left `spend_credit()`. Both orders stay safe: the DB carries old and new functions, so the previous Worker and the reservation-aware Worker each work throughout rollout.
 3. **Expand (F2 lease, `20260720170000_generation_lock_lease.sql`)**: adds `generation_locks.lock_id` plus `acquire_generation_lease` / `release_generation_lease`, and **leaves `acquire_generation_lock` / `release_generation_lock` in place** for the same reason. The new column is defaulted, so the legacy acquire keeps writing valid rows during the overlap window.
-4. **Contract (Phase 8, after the new Worker is live)**: one later migration drops **all five** superseded functions together — `spend_credit()`, `spend_credits(integer)`, `refund_credits(uuid, integer)`, `acquire_generation_lock(uuid, integer)`, `release_generation_lock(uuid)` — since they share the single precondition "the phases 1–7 Worker is live". Gated on deployment because dropping any of them alongside its expand migration would open a deploy window: DB-first breaks the still-running Worker, Worker-first calls an RPC not yet created. For `refund_credits` that breakage is silent (failures were logged and swallowed), which is why it waits for the gate rather than going early. Folded in from the former roadmap `S-01-fu` (`drop-spend-credit-contract`) and widened to the full set; see Phase 8.
+4. **Expand (F16 link, `20260722120000_link_summary_to_reservation.sql`)**: adds the nullable `summaries.reservation_id` (unique, composite FK to `credit_reservations (id, user_id)`) and `reconcile_reservation()`, which settles linked reservations and refunds only unlinked ones. Nullable, so rows written by the previous Worker stay valid; the old migration's refund-everything runbook is redirected to `reconcile_reservation`.
+5. **Expand (F17 guards, `20260722130000_transcript_spend_guards.sql`)**: adds `transcript_attempts` / `transcript_quotes` with `record_transcript_attempt`, `get_transcript_quote`, `save_transcript_quote` — all new, definer-only, service-role-granted tables and functions, so nothing existing changes shape.
+6. **Expand (F23 atomic persist, `20260723120000_atomic_persist_summary.sql`)**: adds `persist_summary()` (lock reservation → upsert video → insert linked summary → settle, in one transaction). `settle_reservation()` and `reconcile_reservation()` are deliberately left **unchanged** so they still classify rows written by the pre-F23 Worker during rollout — which is why no one-time classification pass is needed.
+7. **Expand (F22 idempotency, `20260723130000_idempotent_generation.sql`)**: adds the nullable `credit_reservations.request_id`, a **partial** unique index (`request_id is not null and status <> 'refunded'`), and `begin_generation()`. Partial in both directions on purpose: keyless/pre-F22 rows are outside the constraint (so this is safe to apply ahead of the Worker that writes keys), and a refund releases the key (so a retry after genuinely failed work can actually re-run). `reserve_credits()` is untouched; `begin_generation` with a null `request` behaves exactly like it.
+8. **Expand (F24 lifecycle, `20260723140000_transcript_quote_lifecycle.sql`)**: adds `discard_transcript_quote()` and the bounded `prune_transcript_quotes(max_rows default 100)`, and replaces `save_transcript_quote` / `get_transcript_quote` **without changing their signatures, return types, or result semantics** — so the deployed pre-F24 Worker keeps working. Because rows are created only by `save_transcript_quote` and every such call drains up to `max_rows` expired rows, the table is self-limiting with no scheduled job required (the function is granted to `service_role` so pg_cron *may* call it; nothing depends on that).
+9. **Contract (Phase 8, after the new Worker is live)**: one later migration drops **all six** superseded functions together — `spend_credit()`, `spend_credits(integer)`, `refund_credits(uuid, integer)`, `reserve_credits(integer)`, `acquire_generation_lock(uuid, integer)`, `release_generation_lock(uuid)` — since they share the single precondition "the phases 1–7 Worker is live". Gated on deployment because dropping any of them alongside its expand migration would open a deploy window: DB-first breaks the still-running Worker, Worker-first calls an RPC not yet created. For `refund_credits` that breakage is silent (failures were logged and swallowed), which is why it waits for the gate rather than going early. Folded in from the former roadmap `S-01-fu` (`drop-spend-credit-contract`) and widened to the full set; see Phase 8.
 
 ## References
 
@@ -617,18 +686,19 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 
 - [x] 7.3 Informational → Polish key-facts list; educational → Polish learning-overview (Polish output from English prompts) — af3bea3
 
-### Phase 8: Contract migration — drop the five superseded RPCs
+### Phase 8: Contract migration — drop the six superseded RPCs
 
-> Gated: apply to cloud only after the phases 1–7 Worker is live (calls `reserve_credits` + `acquire_generation_lease`).
+> Gated: apply to cloud only after the phases 1–7 Worker is live (calls `begin_generation` + `persist_summary` + `acquire_generation_lease`).
 
 #### Automated
 
 - [ ] 8.1 Migration applies cleanly: `npx supabase migration up`
 - [ ] 8.2 Type checking passes: `npm run build`
 - [ ] 8.3 Linting passes: `npm run lint`
-- [ ] 8.4 No stale `spend_credit(` / `generation_lock(` references outside the drop migration and the migrations that define them
+- [ ] 8.4 No stale `spend_credit(` / `reserve_credits` / `generation_lock(` references outside the drop migration and the migrations that define them; `reserveCredits` removed from `credits.ts`
 
 #### Manual
 
 - [ ] 8.5 Cloud Worker confirmed on the phases 1–7 build before applying to cloud
 - [ ] 8.6 `select public.spend_credit();` errors (function no longer exists); normal + long generation still succeed
+- [ ] 8.7 `settle_reservation` / `reconcile_reservation` still exist (retained operator recovery tools)

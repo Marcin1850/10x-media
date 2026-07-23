@@ -13,8 +13,14 @@ import type { AppSupabaseClient } from "@/lib/services/summaries";
  * `20260720160000_credit_reservations.sql`.
  *
  * Reads and `reserve_credits` are RLS/`auth.uid()`-scoped to the caller's own row and can only lower
- * a balance. `settleReservation` and `refundReservation` take an explicit user id and RAISE balances,
- * so they run only via the service-role admin client.
+ * a balance. `beginGeneration` and `refundReservation` take an explicit user id — the first replays
+ * another attempt's summary, the second RAISES a balance — so both run only via the service-role
+ * admin client.
+ *
+ * There is deliberately no `settleReservation` here. Settling used to be a best-effort call made after
+ * the summary was persisted, which is exactly the gap F23 closed: the charge is now decided inside the
+ * same transaction that writes the summary (`persistSummaryAndSettle` in `services/summaries.ts`). The
+ * `settle_reservation()` RPC itself remains in the database as an operator-side recovery tool.
  */
 
 /** `reserve_credits()` returns this in `new_balance` when there was nothing to spend (missing row or insufficient balance). */
@@ -80,44 +86,148 @@ export async function reserveCredits(supabase: AppSupabaseClient, amount = 1): P
 }
 
 /**
+ * The outcome of an idempotent generation start. Discriminated on `outcome` so each branch carries
+ * exactly the fields it can supply:
+ *
+ * - `reserved`    — a new operation: the balance is debited and `reservationId` must be settled (by
+ *                   `persistSummaryAndSettle`) or refunded on every exit path past this point.
+ * - `fresh`       — probe only: no prior attempt on this key, so the caller may do the expensive work.
+ * - `replay`      — this request key already produced a summary. NOTHING was written or charged; the
+ *                   caller returns the original result verbatim and never calls the LLM.
+ * - `inProgress`  — another attempt on this key is still running.
+ * - `unavailable` — this key's debit was closed without producing a summary. Neither replayable nor
+ *                   re-runnable; the caller must start a new operation.
+ * - `insufficient`— not enough credits; `balance` is the caller's actual, unchanged balance.
+ */
+export type BeginGenerationResult =
+  | { outcome: "reserved"; reservationId: string; balance: number }
+  | { outcome: "fresh" }
+  | {
+      outcome: "replay";
+      reservationId: string;
+      balance: number;
+      cost: number;
+      summaryId: string;
+      videoId: string;
+      content: string;
+      model: string | null;
+    }
+  | { outcome: "inProgress" }
+  | { outcome: "unavailable" }
+  | { outcome: "insufficient"; balance: number };
+
+export interface BeginGenerationParams {
+  userId: string;
+  /**
+   * Client-generated key identifying ONE user-initiated generation, repeated verbatim when the client
+   * retries after an ambiguous failure. `null` disables deduplication for this call — the expand-only
+   * fallback for a cached client that predates F22, which behaves exactly like a bare reserve.
+   */
+  requestId: string | null;
+  /**
+   * Credits to debit, or `null` to PROBE — answer the identity question without charging. The endpoint
+   * probes before the paid transcript fetch (it cannot price the work until it has the transcript, and
+   * re-fetching one just to throw it away is duplicate provider spend) and debits for real afterwards.
+   */
+  amount: number | null;
+}
+
+/**
+ * Opens a debit for a generation, or recognises the request as a repeat of one already done (F22).
+ *
+ * This supersedes `reserveCredits` on the generate path. The endpoint debits before the paid LLM call
+ * and appends a summary after it, so before this existed an ambiguous retry — request delivered, reply
+ * lost — started a genuinely second operation: second reservation, second OpenRouter call, second
+ * summary row. The reservation ledger could not help, because at its level of description two
+ * generations really did happen. Idempotency has to sit above it, keyed by an identity the client owns
+ * and repeats.
+ *
+ * Deciding "new or repeat?" and acting on it must be one transaction or two concurrent duplicates both
+ * decide "new" — hence a single RPC rather than a read followed by `reserveCredits`. Takes the ADMIN
+ * client: the RPC debits on an explicit user's behalf and reads back that user's summary to replay it,
+ * so it is service_role only. Throws only on a genuine DB error.
+ */
+export async function beginGeneration(
+  admin: SupabaseClient,
+  { userId, requestId, amount }: BeginGenerationParams,
+): Promise<BeginGenerationResult> {
+  // The admin client is supabase-js's untyped default (this repo has no generated Database types), so
+  // narrow the RPC result at the boundary rather than destructuring `any` — same as persistSummaryAndSettle.
+  const { data, error } = (await admin.rpc("begin_generation", {
+    target_user: userId,
+    request: requestId,
+    amount,
+  })) as {
+    data:
+      | {
+          outcome: string;
+          reservation_id: string | null;
+          new_balance: number | null;
+          summary_id: string | null;
+          video_id: string | null;
+          content: string | null;
+          model: string | null;
+          cost: number | null;
+        }[]
+      | null;
+    error: { message: string } | null;
+  };
+
+  if (error) {
+    throw new Error(`Failed to begin generation: ${error.message}`);
+  }
+
+  // `returns table(...)` arrives as a one-element array. An empty one would mean the RPC contract
+  // changed under us and must not be read as a silent success — same guard as reserveCredits.
+  if (!data || data.length === 0) {
+    throw new Error("Failed to begin generation: begin_generation returned no row");
+  }
+  const row = data[0];
+
+  switch (row.outcome) {
+    case "reserved": {
+      // A debit without its id is unrecoverable — nothing could later settle or refund it. Treat the
+      // contract violation as an error rather than returning a reservation the caller cannot close.
+      if (!row.reservation_id || row.new_balance === null) {
+        throw new Error("Failed to begin generation: balance was debited without a reservation id");
+      }
+      return { outcome: "reserved", reservationId: row.reservation_id, balance: row.new_balance };
+    }
+    case "replay": {
+      if (!row.reservation_id || !row.summary_id || !row.video_id || row.content === null) {
+        throw new Error("Failed to begin generation: replay returned without a summary");
+      }
+      return {
+        outcome: "replay",
+        reservationId: row.reservation_id,
+        // A missing credits row reads as zero, matching reserveCredits' insufficient path.
+        balance: row.new_balance ?? 0,
+        cost: row.cost ?? 1,
+        summaryId: row.summary_id,
+        videoId: row.video_id,
+        content: row.content,
+        model: row.model,
+      };
+    }
+    case "fresh":
+      return { outcome: "fresh" };
+    case "in_progress":
+      return { outcome: "inProgress" };
+    case "unavailable":
+      return { outcome: "unavailable" };
+    case "insufficient":
+      return { outcome: "insufficient", balance: row.new_balance ?? 0 };
+    default:
+      throw new Error(`Failed to begin generation: unknown outcome '${row.outcome}'`);
+  }
+}
+
+/**
  * Log marker for a debit that could not be resolved. Unlike the previous bare-refund design this is
  * no longer the only trace — the reservation row stays `reserved` in the ledger, so the debt is
  * recoverable by the reconciliation query even if this log line is lost.
  */
 const CREDIT_LEAK = "CREDIT_LEAK";
-
-/**
- * Closes a reservation after a SUCCESSFUL generation: the user keeps paying for work they received.
- * Best-effort — a failure here leaves the row `reserved`, which the reconciliation sweep would treat
- * as an unresolved debit, so it logs loudly. It must never throw: the summary is already persisted
- * and returning an error for a bookkeeping failure would be worse than the stale row.
- */
-export async function settleReservation(
-  admin: SupabaseClient,
-  userId: string,
-  reservationId: string,
-): Promise<boolean> {
-  // The try/catch is what makes "never throws" true rather than aspirational: supabase-js resolves
-  // RPC errors into `error`, but a transport-level failure still rejects the promise.
-  try {
-    const { data, error } = (await admin.rpc("settle_reservation", {
-      target_user: userId,
-      reservation: reservationId,
-    })) as { data: boolean | null; error: { message: string } | null };
-
-    if (error) {
-      // eslint-disable-next-line no-console
-      console.error(`${CREDIT_LEAK}: failed to settle reservation ${reservationId} for ${userId}: ${error.message}`);
-      return false;
-    }
-
-    return data === true;
-  } catch (cause) {
-    // eslint-disable-next-line no-console
-    console.error(`${CREDIT_LEAK}: failed to settle reservation ${reservationId} for ${userId}:`, cause);
-    return false;
-  }
-}
 
 /**
  * Reverses a debit after a FAILED generation. Raises a balance, so it runs via the service-role admin
@@ -137,8 +247,9 @@ export async function refundReservation(
 ): Promise<boolean> {
   const recoverable = "row remains 'reserved' and is recoverable via the reconciliation query";
 
-  // See settleReservation: a transport-level failure rejects rather than populating `error`, and this
-  // runs on the failure path where an extra throw would mask the real generation error.
+  // supabase-js resolves RPC errors into `error`, but a transport-level failure still REJECTS the
+  // promise — and this runs on the failure path, where an extra throw would mask the real generation
+  // error. The try/catch is what makes "never throws" true rather than aspirational.
   try {
     const { data, error } = (await admin.rpc("refund_reservation", {
       target_user: userId,

@@ -7,13 +7,18 @@ import { fetchTranscript } from "@/lib/services/transcript";
 import { summarize } from "@/lib/services/llm";
 import {
   extractYoutubeId,
-  upsertVideoAndAppendSummary,
+  persistSummaryAndSettle,
   summaryCost,
   HARD_MAX_TRANSCRIPT_CHARS,
 } from "@/lib/services/summaries";
-import { getBalance, reserveCredits, settleReservation, refundReservation } from "@/lib/services/credits";
+import { getBalance, beginGeneration, refundReservation } from "@/lib/services/credits";
 import { acquireGenerationLease, releaseGenerationLease } from "@/lib/services/generation-lock";
-import { recordTranscriptAttempt, getTranscriptQuote, saveTranscriptQuote } from "@/lib/services/transcript-guard";
+import {
+  recordTranscriptAttempt,
+  getTranscriptQuote,
+  saveTranscriptQuote,
+  discardTranscriptQuote,
+} from "@/lib/services/transcript-guard";
 import type { TranscriptResolvedVia } from "@/types";
 
 export const prerender = false;
@@ -24,6 +29,10 @@ const generateSchema = z.object({
   }),
   character: z.enum(["informational", "educational"]),
   allowLong: z.boolean().optional().default(false),
+  // Identifies ONE user-initiated generation, repeated verbatim when the client retries after an
+  // ambiguous failure (request delivered, reply lost). Optional so a cached client that predates F22
+  // still works: absent means no deduplication, which is exactly the pre-F22 behaviour.
+  requestId: z.uuid().optional(),
 });
 
 export const POST: APIRoute = async (context) => {
@@ -49,7 +58,7 @@ export const POST: APIRoute = async (context) => {
   if (!parsed.success) {
     return Response.json({ error: z.prettifyError(parsed.error) }, { status: 400 });
   }
-  const { url, character, allowLong } = parsed.data;
+  const { url, character, allowLong, requestId } = parsed.data;
   const youtubeId = extractYoutubeId(url);
   if (!youtubeId) {
     return Response.json({ error: "url must be a valid YouTube video URL" }, { status: 400 });
@@ -94,6 +103,7 @@ export const POST: APIRoute = async (context) => {
       youtubeId,
       character,
       allowLong,
+      requestId: requestId ?? null,
       supadataKey: SUPADATA_API_KEY,
       openrouterKey: OPENROUTER_API_KEY,
     });
@@ -110,9 +120,48 @@ interface GenerationInput {
   youtubeId: string;
   character: "informational" | "educational";
   allowLong: boolean;
+  /** Client-owned identity for ONE generation, repeated on retry. `null` when the client predates F22. */
+  requestId: string | null;
   /** Passed in rather than re-read from `astro:env`: the POST preflight already proved both non-null. */
   supadataKey: string;
   openrouterKey: string;
+}
+
+/**
+ * Turns the three "this request key is not new" outcomes into their response, or `null` when the
+ * caller should carry on generating (F22). Shared by the probe and the debit, which ask the same
+ * question at different points, so a repeat request gets the same answer whichever one catches it.
+ *
+ * `replay` is a 200: the first attempt succeeded and was paid for, so the retry must end where that
+ * attempt ended — same summary, same ids, no second charge and no second OpenRouter call. It carries
+ * no `transcriptLength`; that is a property of the fetch, not of the saved summary, and the client
+ * only uses it on the long-video confirmation path.
+ */
+function respondToRepeatedRequest(result: Awaited<ReturnType<typeof beginGeneration>>): Response | null {
+  switch (result.outcome) {
+    case "replay":
+      return Response.json({
+        summary: result.content,
+        model: result.model,
+        videoId: result.videoId,
+        summaryId: result.summaryId,
+        creditsRemaining: result.balance,
+        cost: result.cost,
+      });
+    case "inProgress":
+      // Backstops the per-user generation lease: the lease can be released by a stale sweep while the
+      // original attempt is still running, and it does not span Worker isolates the way the ledger does.
+      return Response.json(
+        { error: "This summary is already being generated. Wait for it to finish." },
+        { status: 429 },
+      );
+    case "unavailable":
+      // The key's debit was closed without a summary — only an operator-side settle produces this.
+      // Neither replayable nor safe to re-run against a closed charge; the client must start over.
+      return Response.json({ error: "This request was already processed. Start a new generation." }, { status: 409 });
+    default:
+      return null;
+  }
 }
 
 /**
@@ -127,9 +176,32 @@ async function runGeneration({
   youtubeId,
   character,
   allowLong,
+  requestId,
   supadataKey,
   openrouterKey,
 }: GenerationInput): Promise<Response> {
+  // Idempotency probe (F22). A retry after an ambiguous failure — request delivered, reply lost —
+  // repeats the same request key, and this is where that repeat ends. Run BEFORE the paid transcript
+  // fetch: the endpoint cannot price the work until it has the transcript, so waiting until the debit
+  // below to notice a replay would pay Supadata for a transcript it is about to discard. Nothing is
+  // charged here; the debit call further down re-asks the same question atomically and is what
+  // actually decides.
+  if (requestId !== null) {
+    let probe: Awaited<ReturnType<typeof beginGeneration>>;
+    try {
+      probe = await beginGeneration(admin, { userId, requestId, amount: null });
+    } catch (error) {
+      // Fail closed. Proceeding on an unknown idempotency state is precisely the double-charge this
+      // guard exists to prevent, and nothing has been debited or fetched yet.
+      // eslint-disable-next-line no-console
+      console.error("begin_generation probe failed:", error);
+      return Response.json({ error: "Something went wrong. Please try again." }, { status: 500 });
+    }
+
+    const settled = respondToRepeatedRequest(probe);
+    if (settled) return settled;
+  }
+
   // Up-front credit gate: read the caller's balance and block at zero *before* any paid Supadata/
   // OpenRouter call. This is a minimum-1 read gate only — the authoritative, race-safe cost gate is
   // the atomic debit below. createClient returns supabase-js's default untyped client; this codebase
@@ -233,30 +305,42 @@ async function runGeneration({
 
   // Atomic debit BEFORE the paid LLM call, opened as a reservation. The RPC's row-level
   // `UPDATE … WHERE balance >= cost` is the concurrency serialization point, so parallel requests
-  // sharing one stale balance read cannot all overspend (losers get the -1 sentinel → 402). This
+  // sharing one stale balance read cannot all overspend (losers get `insufficient` → 402). This
   // debit, not a pre-read compare, is the authoritative cost gate.
   //
   // The reservation is what makes the compensation below durable: every exit path past this point
   // must either settle it (success) or refund it (failure). A row left `reserved` is a recorded,
   // recoverable debt rather than a silently charged user.
+  //
+  // It also CLAIMS the request key in the same transaction (F22), which is what makes the identity
+  // check race-safe: the probe above is an early-exit optimisation on a stale read, so two concurrent
+  // duplicates can both pass it. Only one can leave here with a debit — the other blocks on the row
+  // lock and comes back as `replay`/`in_progress`. A null key skips deduplication entirely, matching
+  // the pre-F22 behaviour for a cached client.
   let creditsRemaining: number;
   let reservationId: string;
   try {
-    // Same untyped-client gap as the getBalance call above: createClient returns supabase-js's
-    // default untyped client and this codebase has no generated Database types yet.
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-    const reserved = await reserveCredits(supabase, cost);
-    if (!reserved.ok) {
+    const reserved = await beginGeneration(admin, { userId, requestId, amount: cost });
+
+    const settled = respondToRepeatedRequest(reserved);
+    if (settled) return settled;
+
+    if (reserved.outcome === "insufficient") {
       return Response.json(
         { error: `You need ${cost} credits for this video; you have ${reserved.balance}` },
         { status: 402 },
       );
     }
+    // `fresh` is a probe-only outcome and cannot come back from a debiting call; treating it as an
+    // error keeps the exhaustive narrowing honest instead of silently generating without a debit.
+    if (reserved.outcome !== "reserved") {
+      throw new Error(`begin_generation returned '${reserved.outcome}' for a debiting call`);
+    }
     creditsRemaining = reserved.balance;
     reservationId = reserved.reservationId;
   } catch (error) {
     // eslint-disable-next-line no-console
-    console.error("reserve_credits failed:", error);
+    console.error("begin_generation failed:", error);
     return Response.json({ error: "Something went wrong. Please try again." }, { status: 500 });
   }
 
@@ -273,13 +357,16 @@ async function runGeneration({
     return Response.json({ error: "The summarization service failed. Please try again." }, { status: 502 });
   }
 
-  // Persist alone stays inside the refunding try/catch. Settling deliberately sits OUTSIDE it: a
-  // throw from bookkeeping must never reach a catch that refunds a generation the user actually
-  // received, which would hand back credits for delivered work.
-  let persisted: Awaited<ReturnType<typeof upsertVideoAndAppendSummary>>;
+  // Persist AND settle in ONE transaction (F23). These used to be two calls — an RLS-client insert
+  // followed by a best-effort settle — which left the ledger indistinguishable from failed work for
+  // the whole duration of the LLM call above, so the one-hour reconciliation sweep could refund a
+  // request that was still running while its insert later succeeded anyway. The linked summary was
+  // mutable evidence besides: owners may delete their own summaries. Deciding the charge inside the
+  // transaction that writes the summary removes both windows — a throw here means the rollback
+  // persisted nothing, so refunding is unambiguously correct.
+  let persisted: Awaited<ReturnType<typeof persistSummaryAndSettle>>;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-    persisted = await upsertVideoAndAppendSummary(supabase, {
+    persisted = await persistSummaryAndSettle(admin, {
       userId,
       url,
       youtubeId,
@@ -287,9 +374,6 @@ async function runGeneration({
       content: summary.text,
       model: summary.model,
       resolvedVia,
-      // Durable link so reconciliation can tell this delivered summary apart from failed work if the
-      // best-effort settle below is lost — a `reserved` row with a linked summary is settled, not
-      // refunded (F16).
       reservationId,
     });
   } catch (error) {
@@ -299,10 +383,24 @@ async function runGeneration({
     return Response.json({ error: "Something went wrong saving your summary. Please try again." }, { status: 500 });
   }
 
-  // The summary is persisted and the user received the work, so the debit stands. Settling is
-  // best-effort bookkeeping that closes the ledger row so reconciliation doesn't later mistake this
-  // successful generation for an unresolved debt. A failure here must not fail the response.
-  await settleReservation(admin, userId, reservationId);
+  // The reservation was already resolved — a reconciliation sweep closed it while this request ran, so
+  // the debit is reversed and nothing was written. Fail closed rather than return a summary with no
+  // row behind it. No refund: the row is already resolved, and refundReservation would be a no-op.
+  // summarize()'s explicit deadline is what keeps this unreachable in practice.
+  if (!persisted.ok) {
+    // eslint-disable-next-line no-console
+    console.error(`persist summary skipped: reservation ${reservationId} for ${userId} was ${persisted.reason}`);
+    return Response.json({ error: "Something went wrong saving your summary. Please try again." }, { status: 500 });
+  }
+
+  // The quote has served its purpose (F24): the confirmation round-trip it was cached for ended in a
+  // committed summary, so the transcript body is dropped now rather than lingering for the rest of its
+  // TTL — or forever, if this key is never looked up again. Only on the success path; a failed attempt
+  // keeps its quote so the retry reuses the fetch it already paid for. Guarded on `allowLong` because
+  // that is the only path that can have written one (a short video never reaches the 409 that saves it).
+  if (allowLong) {
+    await discardTranscriptQuote(admin, userId, youtubeId, character);
+  }
 
   return Response.json({
     summary: summary.text,

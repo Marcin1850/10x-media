@@ -66,7 +66,10 @@ const summaryMarkdownComponents: Components = {
 function messageForStatus(status: number, serverError?: string): string {
   switch (status) {
     case 429:
-      return "A summary is already being generated. Wait for it to finish before starting another.";
+      // Three distinct causes answer 429 (generation lease, idempotent in-progress replay, transcript
+      // rate cap), each with its own server message. Prefer the server's so a cooldown doesn't
+      // misreport as lock contention; the fallback covers a non-JSON 429.
+      return serverError ?? "A summary is already being generated. Wait for it to finish before starting another.";
     case 413:
       return "This video is too long to summarize.";
     case 422:
@@ -102,6 +105,13 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
   // input change, so a response whose seq is stale is discarded instead of applied to inputs the user
   // has since edited.
   const requestSeq = useRef(0);
+  // The server-side idempotency key for the attempt currently being retried, with the inputs it was
+  // minted for. Held ONLY across a network error — the one failure where the request may have been
+  // delivered and its reply lost, so a resubmit would otherwise charge and summarize a second time.
+  // Any HTTP response, success or error, is a known outcome and clears it, making the next submit a
+  // genuinely new operation. Bound to url+character so a retry after the user edits the form mints a
+  // fresh key instead of replaying the previous video's summary.
+  const pendingRequest = useRef<{ key: string; url: string; character: ChannelCharacter } | null>(null);
 
   const urlIsValid = extractYoutubeId(url) !== null;
   // Only flag a non-empty URL that fails to parse — an empty field shows no error, matching the
@@ -118,19 +128,38 @@ export default function GenerateSummaryForm({ initialCredits }: Props) {
     setLoading(true);
     setError(null);
 
+    // Reuse the key only when retrying the same inputs after an ambiguous failure; otherwise this is a
+    // new operation and gets a new key. `crypto.randomUUID` needs a secure context, which localhost
+    // and the deployed HTTPS origin both are.
+    const pending = pendingRequest.current;
+    const requestId =
+      pending?.url === submittedUrl && pending.character === submittedCharacter ? pending.key : crypto.randomUUID();
+    pendingRequest.current = { key: requestId, url: submittedUrl, character: submittedCharacter };
+
     let response: Response;
     try {
       response = await fetch("/api/summaries/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: submittedUrl, character: submittedCharacter, allowLong: withAllowLong }),
+        body: JSON.stringify({
+          url: submittedUrl,
+          character: submittedCharacter,
+          allowLong: withAllowLong,
+          requestId,
+        }),
       });
     } catch {
+      // The ONLY path that keeps the key: the request may have been delivered and charged, so the
+      // resubmit this error invites must be recognisable as the same operation.
       // Only surface the error if this is still the current request; a superseded one just clears loading.
       if (seq === requestSeq.current) setError("Network error — please try again.");
       setLoading(false);
       return;
     }
+
+    // A response — of any status — means the server reached a decision, so there is nothing ambiguous
+    // left to deduplicate. Release the key before branching so every path below starts clean.
+    pendingRequest.current = null;
 
     const data: unknown = await response.json().catch(() => ({}));
 

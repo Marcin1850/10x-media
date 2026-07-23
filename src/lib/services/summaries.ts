@@ -70,8 +70,36 @@ export interface AppDatabase {
         Args: { amount?: number };
         Returns: { reservation_id: string | null; new_balance: number }[];
       };
+      /** Table-returning, so PostgREST sends a one-element array. Which columns are non-null depends on `outcome`. */
+      begin_generation: {
+        Args: { target_user: string; request: string | null; amount: number | null };
+        Returns: {
+          outcome: string;
+          reservation_id: string | null;
+          new_balance: number | null;
+          summary_id: string | null;
+          video_id: string | null;
+          content: string | null;
+          model: string | null;
+          cost: number | null;
+        }[];
+      };
       settle_reservation: { Args: { target_user: string; reservation: string }; Returns: boolean };
       refund_reservation: { Args: { target_user: string; reservation: string }; Returns: boolean };
+      /** Table-returning, so PostgREST sends a one-element array. Ids are null on the `not_reserved` outcome. */
+      persist_summary: {
+        Args: {
+          target_user: string;
+          reservation: string;
+          p_url: string;
+          p_youtube_id: string;
+          p_character: string;
+          p_content: string;
+          p_model: string | null;
+          p_resolved_via: string | null;
+        };
+        Returns: { outcome: string; video_id: string | null; summary_id: string | null }[];
+      };
       /** Legacy, kept for the expand/contract window only — dropped in the Phase 8 contract migration. */
       spend_credits: { Args: { amount?: number }; Returns: number };
       refund_credits: { Args: { target_user: string; amount: number }; Returns: undefined };
@@ -129,7 +157,7 @@ export function extractYoutubeId(url: string): string | null {
   return id && YOUTUBE_ID_PATTERN.test(id) ? id : null;
 }
 
-export interface AppendSummaryParams {
+export interface PersistSummaryParams {
   userId: string;
   url: string;
   youtubeId: string;
@@ -137,56 +165,70 @@ export interface AppendSummaryParams {
   content: string;
   model: string | null;
   resolvedVia: TranscriptResolvedVia | null;
-  /**
-   * The reservation that paid for this summary. Persisted on the row (not a bookkeeping side call) so
-   * the ledger has durable proof the work was delivered: reconciliation settles a `reserved` row that
-   * produced a linked summary and refunds only the ones with none (F16).
-   */
+  /** The reservation that paid for this summary. Persisted on the row AND closed in the same transaction (F23). */
   reservationId: string;
 }
 
-export interface AppendSummaryResult {
-  videoId: string;
-  summaryId: string;
-}
+/**
+ * Discriminated on `ok` so a successful persist always carries both ids. `ok: false` is not an error:
+ * it means the reservation was no longer open (a reconciliation sweep resolved it while the LLM call
+ * ran), so nothing was written and the caller must fail closed rather than return an unsaved summary.
+ */
+export type PersistSummaryResult = { ok: true; videoId: string; summaryId: string } | { ok: false; reason: string };
 
-/** Gets-or-creates the `videos` row for (user_id, youtube_id), then appends a new `summaries` row. Never replaces an existing summary. */
-export async function upsertVideoAndAppendSummary(
-  supabase: AppSupabaseClient,
-  { userId, url, youtubeId, character, content, model, resolvedVia, reservationId }: AppendSummaryParams,
-): Promise<AppendSummaryResult> {
-  const { data: video, error: videoError } = await supabase
-    .from("videos")
-    .upsert({ user_id: userId, url, youtube_id: youtubeId }, { onConflict: "user_id,youtube_id" })
-    .select("id")
-    .single();
+/**
+ * Writes the video + summary and settles the paying reservation in ONE transaction, via the
+ * `persist_summary()` RPC.
+ *
+ * This replaces the previous "insert with the RLS client, then settle best-effort" pair (F23). Those
+ * were separate transactions, so between the reserve and the insert the ledger was indistinguishable
+ * from failed work — the one-hour reconciliation sweep could refund a request that was still running,
+ * and the later insert would still succeed because the FK validates ownership, not status. The linked
+ * summary was mutable evidence besides: owners may delete their own summaries under existing RLS.
+ * Deciding the charge inside the writing transaction removes both failure modes.
+ *
+ * Takes the ADMIN client: the RPC closes a ledger row and writes on an explicit user's behalf, so it
+ * is service_role only, like settle/refund. Throws on a genuine DB error — the caller refunds, which
+ * is correct because a rollback leaves nothing persisted.
+ */
+export async function persistSummaryAndSettle(
+  admin: SupabaseClient,
+  { userId, url, youtubeId, character, content, model, resolvedVia, reservationId }: PersistSummaryParams,
+): Promise<PersistSummaryResult> {
+  // The admin client is supabase-js's untyped default (this repo has no generated Database types), so
+  // narrow the RPC result at the boundary rather than destructuring `any` — same as transcript-guard.
+  const { data, error } = (await admin.rpc("persist_summary", {
+    target_user: userId,
+    reservation: reservationId,
+    p_url: url,
+    p_youtube_id: youtubeId,
+    p_character: character,
+    p_content: content,
+    p_model: model,
+    p_resolved_via: resolvedVia,
+  })) as {
+    data: { outcome: string; video_id: string | null; summary_id: string | null }[] | null;
+    error: { message: string } | null;
+  };
 
-  // .single() returns a non-null `error` whenever `data` is falsy at runtime, even though its
-  // declared type omits that branch (a known postgrest-js typing gap) — this guard is real.
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-  if (videoError || !video) {
-    throw new Error(`Failed to get-or-create video: ${videoError.message}`);
+  if (error) {
+    throw new Error(`Failed to persist summary: ${error.message}`);
   }
 
-  const { data: summary, error: summaryError } = await supabase
-    .from("summaries")
-    .insert({
-      user_id: userId,
-      video_id: video.id,
-      character,
-      content,
-      model,
-      resolved_via: resolvedVia,
-      reservation_id: reservationId,
-    })
-    .select("id")
-    .single();
+  // `returns table(...)` arrives as a one-element array. An empty one would mean the RPC contract
+  // changed under us and must not be read as a silent success — same guard as reserveCredits.
+  if (!data || data.length === 0) {
+    throw new Error("Failed to persist summary: persist_summary returned no row");
+  }
+  const row = data[0];
 
-  // Same postgrest-js typing gap as above — real runtime guard, not a redundant check.
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-  if (summaryError || !summary) {
-    throw new Error(`Failed to insert summary: ${summaryError.message}`);
+  if (row.outcome !== "persisted" && row.outcome !== "already_persisted") {
+    return { ok: false, reason: row.outcome };
   }
 
-  return { videoId: video.id, summaryId: summary.id };
+  if (!row.video_id || !row.summary_id) {
+    throw new Error(`Failed to persist summary: outcome '${row.outcome}' returned without ids`);
+  }
+
+  return { ok: true, videoId: row.video_id, summaryId: row.summary_id };
 }

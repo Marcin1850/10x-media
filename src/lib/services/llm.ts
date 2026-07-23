@@ -66,6 +66,20 @@ Rules:
 - Clear, approachable, didactic tone.`,
 };
 
+/**
+ * Wall-clock deadline for the OpenRouter call (F23). Cloudflare imposes no duration limit on an
+ * HTTP-triggered Worker — only CPU time is capped, and waiting on a subrequest is not CPU time — so
+ * without this a hung provider connection has nothing bounding it. Two things downstream assume it is
+ * bounded: the generation lease's 600s stale window (a request that outlives it is swept and can run
+ * concurrently with its successor) and the one-hour reconciliation sweep (which would refund a
+ * reservation whose work is still in flight).
+ *
+ * 300s sits under the lease window with ~60s of margin after the transcript job poll's ~240s worst
+ * case. An abort throws, so it routes into the endpoint's existing refund + 502 path — the user is
+ * never charged for a summary that timed out.
+ */
+const SUMMARY_TIMEOUT_MS = 300_000;
+
 export interface SummarizeResult {
   text: string;
   model: string;
@@ -79,6 +93,7 @@ export async function summarize(
     model: getSummaryModel(apiKey),
     system: SYSTEM_PROMPTS[character],
     prompt: transcript,
+    abortSignal: AbortSignal.timeout(SUMMARY_TIMEOUT_MS),
   });
 
   // A resolved call is not necessarily a usable summary. Throwing here routes into the endpoint's
