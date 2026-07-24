@@ -609,7 +609,7 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 
 #### Manual
 
-- [ ] 1.3 Notice banner renders entirely in English with a key unset
+- [x] 1.3 Notice banner renders entirely in English with a key unset — manual e2e 2026-07-24
 
 ### Phase 2: DB — variable-cost credit spend
 
@@ -621,9 +621,9 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 
 #### Manual
 
-- [ ] 2.4 `spend_credits(2)` lowers balance by 2 / returns new balance; over-spend returns -1 and no change
-- [ ] 2.5 `spend_credits` not executable by `anon` (least privilege holds)
-- [ ] 2.6 `refund_credits` executable only by `service_role` (denied for `authenticated`/`anon`)
+- [x] 2.4 `spend_credits(2)` lowers balance by 2 / returns new balance; over-spend returns -1 and no change — manual e2e 2026-07-23
+- [x] 2.5 `spend_credits` not executable by `anon` (least privilege holds) — manual e2e 2026-07-23
+- [x] 2.6 `refund_credits` executable only by `service_role` (denied for `authenticated`/`anon`) — manual e2e 2026-07-23
 
 ### Phase 3: Cost policy
 
@@ -642,10 +642,10 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 
 #### Manual
 
-- [ ] 4.4 Normal video → 200, Polish summary, `cost: 1`, balance −1, row written
-- [ ] 4.5 Long video → 200, `cost: 2`, balance −2
-- [ ] 4.6 Transcript over `HARD_MAX_TRANSCRIPT_CHARS` → 413 before any debit/LLM call, spends nothing
-- [ ] 4.7 No-transcript → 422; forced upstream error → 502 (not 500), balance net-unchanged (debit then refund)
+- [x] 4.4 Normal video → 200, Polish summary, `cost: 1`, balance −1, row written — manual e2e 2026-07-23
+- [x] 4.5 Long video → 200, `cost: 2`, balance −2 — manual e2e 2026-07-23
+- [x] 4.6 Transcript over `HARD_MAX_TRANSCRIPT_CHARS` → 413 before any debit/LLM call, spends nothing — manual e2e 2026-07-24 (forced via a 200,001-char injected `transcript_quotes` row reused on `allowLong:true`; 413, balance/reservations/summaries all unchanged)
+- [x] 4.7 No-transcript → 422; forced upstream error → 502 (not 500), balance net-unchanged (debit then refund) — manual e2e 2026-07-24 (502-half: debit reserved then `refunded`, balance net-unchanged; no-transcript 422 half: forced via a temporary, reverted fixture-scoped `fetchTranscript` mock — `ok:false` sentinel → 422 before any debit)
 
 ### Phase 5: Long-video confirmation gate
 
@@ -656,9 +656,9 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 
 #### Manual
 
-- [ ] 5.3 Long video without `allowLong` → 409 `requiresConfirmation`, `cost: 2`, no spend
-- [ ] 5.4 Retry with `allowLong: true` → 200, balance −2
-- [ ] 5.5 1-credit user → 409 then 402 (`need 2, have 1`) on the `allowLong` retry
+- [x] 5.3 Long video without `allowLong` → 409 `requiresConfirmation`, `cost: 2`, no spend — manual e2e 2026-07-23
+- [x] 5.4 Retry with `allowLong: true` → 200, balance −2 — manual e2e 2026-07-23
+- [x] 5.5 1-credit user → 409 then 402 (`need 2, have 1`) on the `allowLong` retry — manual e2e 2026-07-23
 
 ### Phase 6: UI — dashboard generation form
 
@@ -669,11 +669,11 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 
 #### Manual
 
-- [ ] 6.3 Valid URL + character + submit → loading → Polish summary inline; credit count −1
-- [ ] 6.4 Invalid URL blocked with a message
-- [ ] 6.5 Long video → confirmation → "Generate anyway (2 credits)" → count −2
-- [ ] 6.6 0 credits blocked; no-transcript shows message and spends nothing
-- [ ] 6.7 Verified on latest Chrome and Firefox
+- [x] 6.3 Valid URL + character + submit → loading → Polish summary inline; credit count −1 — manual e2e 2026-07-23
+- [x] 6.4 Invalid URL blocked with a message — manual e2e 2026-07-23
+- [x] 6.5 Long video → confirmation → "Generate anyway (2 credits)" → count −2 — manual e2e 2026-07-23
+- [x] 6.6 0 credits blocked; no-transcript shows message and spends nothing — manual e2e 2026-07-24 (0-credits: 2026-07-23; no-transcript half: form submit of a sentinel `ok:false` id → red "No transcript is available for this video." banner, badge unchanged, DB net-unchanged, via the reverted fixture-scoped mock)
+- [x] 6.7 Verified on latest Chrome and Firefox — Chrome: manual e2e 2026-07-23; Firefox: manual pass by user 2026-07-24 (passed)
 
 ### Phase 7: Prompt engineering
 
