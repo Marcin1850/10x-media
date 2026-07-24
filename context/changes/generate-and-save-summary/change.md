@@ -1,11 +1,26 @@
 ---
 change_id: generate-and-save-summary
 title: Generate and save a video summary
-status: impl_reviewed
+status: deployed
 created: 2026-07-18
 updated: 2026-07-24
 archived_at: null
 ---
+
+## Deployment
+
+Phases 1–7 are **live in production** as of 2026-07-24.
+
+- Merged `generate-and-save-summary` → `master` (fast-forward, `99adfea..f415f12`);
+  GitHub Actions CI + deploy jobs both green, Worker deployed to Cloudflare via
+  `wrangler deploy`.
+- The 9 expand migrations (`20260719120000` … `20260723140000`) were applied to the
+  production Supabase project (`ukbptccdffiigkdekzcn`) with `supabase db push` **before**
+  the Worker deploy; `supabase migration list --linked` reports prod fully in sync.
+- **Remaining**: Phase 8 (contract migration dropping the six superseded RPCs) was gated
+  on the phases 1–7 Worker being live — that gate is now satisfied, so Phase 8 is
+  **unblocked but not yet done**. See `plan.md` §Phase 8 / Progress. The change is not
+  ready to `/10x-archive` until Phase 8 ships.
 
 ## Notes
 

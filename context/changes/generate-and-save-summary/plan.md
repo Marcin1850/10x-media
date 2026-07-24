@@ -600,6 +600,13 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
+> **Deployment (2026-07-24):** Phases 1–7 are live in production. `generate-and-save-summary`
+> fast-forwarded into `master` (`99adfea..f415f12`); CI + deploy both green (Worker deployed via
+> `wrangler deploy`). The 9 expand migrations (`20260719120000` … `20260723140000`) were applied to
+> prod Supabase (`ukbptccdffiigkdekzcn`) with `supabase db push` **before** the Worker deploy; prod
+> reports fully in sync. This satisfies Phase 8's precondition (phases 1–7 Worker live) — Phase 8 is
+> now **unblocked but not yet started** (migration file not created; steps 8.1–8.7 pending).
+
 ### Phase 1: Existing UI copy → English
 
 #### Automated
@@ -689,6 +696,7 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 ### Phase 8: Contract migration — drop the six superseded RPCs
 
 > Gated: apply to cloud only after the phases 1–7 Worker is live (calls `begin_generation` + `persist_summary` + `acquire_generation_lease`).
+> **Gate satisfied 2026-07-24** — phases 1–7 Worker is live in production. This phase is now actionable; migration not yet created.
 
 #### Automated
 
