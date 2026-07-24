@@ -9,7 +9,7 @@ archived_at: null
 
 ## Deployment
 
-Phases 1–7 are **live in production** as of 2026-07-24.
+All 8 phases are **live in production** as of 2026-07-24.
 
 - Merged `generate-and-save-summary` → `master` (fast-forward, `99adfea..f415f12`);
   GitHub Actions CI + deploy jobs both green, Worker deployed to Cloudflare via
@@ -18,13 +18,18 @@ Phases 1–7 are **live in production** as of 2026-07-24.
   production Supabase project (`ukbptccdffiigkdekzcn`) with `supabase db push` **before**
   the Worker deploy; `supabase migration list --linked` reports prod fully in sync.
 - **Phase 8** (contract migration `20260724120000_drop_legacy_rpcs.sql` dropping the six
-  superseded RPCs) is **implemented and committed** (`9085d03`): migration applied + verified
-  locally (all six functions gone; `settle_reservation` / `reconcile_reservation` retained),
-  build + lint green, dead `reserveCredits` wrapper and its `AppDatabase` Function entries
-  removed. **Remaining before `/10x-archive`**: push the drop to prod Supabase
-  (`supabase db push`) once merged, then run the cloud manual checks (plan.md Progress 8.5–8.7)
-  — legacy RPCs error `does not exist`, normal + long generation still succeed, operator
-  recovery tools intact.
+  superseded RPCs) is **live in production** as of 2026-07-24. Implemented in `9085d03`
+  (migration + removal of the dead `reserveCredits` wrapper and its `AppDatabase` Function
+  entries), merged fast-forward to `master` (`f415f12..a3c67d1`), Worker redeployed via CI
+  run 30128397834 (`ci` + `deploy` green), then `supabase db push --linked` applied the drop;
+  `migration list --linked` reports local/remote in sync.
+- Cloud verification (plan.md Progress 8.5–8.7, all closed): the deployed Worker never called
+  any dropped RPC — `reserveCredits` had no call site; a production `supabase db dump` shows
+  all six functions absent (definitions and grants); `settle_reservation` and
+  `reconcile_reservation` remain, `service_role`-only. The live normal/long generation smoke
+  test was **accepted without re-execution** — the drops are structurally verified and the
+  generation path is covered by `reviews/manual-e2e-2026-07-23.md`.
+- S-01 is complete and ready for `/10x-archive`.
 
 ## Notes
 

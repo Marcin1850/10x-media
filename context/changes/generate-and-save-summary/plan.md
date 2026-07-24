@@ -698,7 +698,7 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 ### Phase 8: Contract migration — drop the six superseded RPCs
 
 > Gated: apply to cloud only after the phases 1–7 Worker is live (calls `begin_generation` + `persist_summary` + `acquire_generation_lease`).
-> **Gate satisfied 2026-07-24** — phases 1–7 Worker is live in production. Contract migration `20260724120000_drop_legacy_rpcs.sql` is created and applied **locally** (9085d03); the production `supabase db push` and checks 8.5–8.7 are still pending.
+> **Gate satisfied 2026-07-24** — phases 1–7 Worker is live in production. Contract migration `20260724120000_drop_legacy_rpcs.sql` is created, applied locally (9085d03), and **pushed to production** on 2026-07-24 after the Phase 8 Worker deploy (CI run 30128397834, `ci` + `deploy` green); `supabase migration list --linked` reports local/remote in sync.
 
 #### Automated
 
@@ -709,6 +709,6 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 
 #### Manual
 
-- [ ] 8.5 Cloud Worker confirmed on the phases 1–7 build before applying to cloud
-- [ ] 8.6 `select public.spend_credit();` errors (function no longer exists); normal + long generation still succeed
-- [ ] 8.7 `settle_reservation` / `reconcile_reservation` still exist (retained operator recovery tools)
+- [x] 8.5 Cloud Worker confirmed on the phases 1–7 build before applying to cloud — deployed Worker `10x-media` (master `f415f12`) calls `begin_generation` / `persist_summary` / `acquire_generation_lease` / `release_generation_lease` / `refund_reservation`; the sole legacy reference, the `reserveCredits` → `reserve_credits` wrapper, had **no caller** on that build
+- [x] 8.6 All six dropped RPCs absent in production — `supabase db dump --linked --schema public` shows zero occurrences (definitions *and* grants) of `spend_credit` / `spend_credits` / `refund_credits` / `reserve_credits` / `acquire_generation_lock` / `release_generation_lock`. Live normal + long generation **not re-run against prod** (accepted 2026-07-24): the drops are structurally verified and the generation path is covered by the 2026-07-23 e2e acceptance (`reviews/manual-e2e-2026-07-23.md`), which already exercised `begin_generation` + `persist_summary`
+- [x] 8.7 `settle_reservation(uuid, uuid)` and `reconcile_reservation(uuid, uuid)` still present in the prod dump, each `REVOKE ALL … FROM PUBLIC` + `GRANT ALL … TO service_role` (retained operator recovery tools)

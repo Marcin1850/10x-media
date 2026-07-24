@@ -6,6 +6,7 @@
 - **Date**: 2026-07-24
 - **Verdict**: APPROVED
 - **Findings**: 0 critical, 1 warning, 1 observation
+- **Triage**: complete 2026-07-24 — F1 fixed, F2 fixed (production push + 8.5–8.7 closed)
 
 ## Verdicts
 
@@ -13,10 +14,10 @@
 |-----------|---------|
 | Plan Adherence | PASS |
 | Scope Discipline | PASS |
-| Safety & Quality | WARNING |
+| Safety & Quality | PASS (was WARNING — F1 fixed in triage) |
 | Architecture | PASS |
 | Pattern Consistency | PASS |
-| Success Criteria | WARNING |
+| Success Criteria | PASS (was WARNING — 8.5–8.7 closed in triage) |
 
 ## Findings
 
@@ -42,7 +43,7 @@
   - Tradeoff: Requires an authorized production database change and end-to-end smoke checks.
   - Confidence: HIGH — these are the plan's explicit remaining acceptance steps.
   - Blind spot: Production state was not mutated or queried during this review.
-- **Decision**: PENDING
+- **Decision**: FIXED — production push completed during triage on 2026-07-24. Branch merged fast-forward to `master` (`f415f12..a3c67d1`), CI run 30128397834 green on both `ci` and `deploy`, then `supabase db push --linked` applied `20260724120000_drop_legacy_rpcs.sql`; `migration list --linked` now reports local/remote in sync. 8.5 and 8.7 verified in full; 8.6's RPC-absence half verified against a live `supabase db dump --linked --schema public`. The live normal/long generation run was **accepted without re-execution** at the user's decision — the drops are structurally verified and the generation path is covered by `reviews/manual-e2e-2026-07-23.md`.
 
 ## Verification Evidence
 
@@ -57,6 +58,14 @@
 
 ### Manual
 
-- 8.5 — PENDING: reconfirm the production Worker build immediately before the cloud database push.
-- 8.6 — PENDING: verify all retired RPCs are absent and normal/long generation still succeeds in production.
-- 8.7 — PENDING: verify `settle_reservation` and `reconcile_reservation` remain available as operator recovery tools.
+All three closed during triage on 2026-07-24, after the merge to `master` and the CI deploy.
+
+- 8.5 — PASS. Deployed Worker `10x-media` (Cloudflare, `modified_on` 2026-07-24T14:49Z ≈ master `f415f12`) calls `begin_generation`, `persist_summary`, `acquire_generation_lease`, `release_generation_lease`, `refund_reservation`. The only legacy reference on that build was the `reserveCredits` wrapper at `credits.ts:62`; `git grep reserveCredits master -- src` returned its own definition and comments only — no call site — so no live code path could reach `reserve_credits`.
+- 8.6 — PASS (RPC absence) / ACCEPTED (generation run). `supabase db dump --linked --schema public` against production lists exactly 14 `public` functions, none of them `spend_credit`, `spend_credits`, `refund_credits`, `reserve_credits`, `acquire_generation_lock`, or `release_generation_lock` — zero occurrences including grant statements. The live normal + long generation was not re-run against production (user decision): the drops are structurally verified from the dump, and the generation path is covered by `manual-e2e-2026-07-23.md`, which exercised `begin_generation` + `persist_summary`.
+- 8.7 — PASS. The prod dump retains `settle_reservation("target_user" uuid, "reservation" uuid)` and `reconcile_reservation("target_user" uuid, "reservation" uuid)`, each with `REVOKE ALL … FROM PUBLIC` followed by `GRANT ALL … TO service_role` — operator recovery surface intact and not exposed to `authenticated`.
+
+### Production push
+
+- Merge: `f415f12..a3c67d1` fast-forward to `master`, pushed to origin.
+- Worker deploy: GitHub Actions run 30128397834 — `ci` ✓ 1m3s, `deploy` ✓ 1m5s.
+- Migration: `supabase db push --linked` applied `20260724120000_drop_legacy_rpcs.sql`; `supabase migration list --linked` reports `20260724120000` present locally **and** remotely, with no other drift.
