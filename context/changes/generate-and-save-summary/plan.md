@@ -472,7 +472,7 @@ They are dropped **together** because they share one precondition (the phases 1�
 
 **Why this is not cosmetic.** Each is `SECURITY DEFINER`, running as `postgres`. `spend_credit`/`spend_credits` are granted to `authenticated`; `refund_credits` raises balances on an explicit `target_user`. `20260714140000` makes exactly this argument: an unused definer function is latent blast radius waiting for someone to extend it. `refund_credits` is the sharpest case — it credits an arbitrary user by amount, with no reservation to check against, so it is precisely the primitive the F1 ledger exists to remove. `release_generation_lock` is the same class of hazard for the lock: it releases by `user_id` alone, which is exactly the ownerless release the F2 lease replaced.
 
-**Deploy-ordering gate (do this phase LAST, after deploy).** This migration must run **only after the phases 1–7 Worker is live on cloud** — i.e. the deployed Worker calls `reserve_credits`/`settle_reservation`/`refund_reservation` and `acquire_generation_lease`/`release_generation_lease`, and none of the five legacy functions. Running the drop while an older Worker still serves traffic reopens exactly the deploy window §Migration Notes avoids: DB-first would break it mid-generation, and for `refund_credits` that break is **silent** — `refundCredits` logged and swallowed failures, so an in-flight failed generation would leave the user charged with no error surfaced. A dropped `release_generation_lock` is likewise silent (release is best-effort), leaving the user locked out for one stale window.
+**Deploy-ordering gate (do this phase LAST, after deploy).** This migration must run **only after the phases 1–7 Worker is live on cloud** — i.e. the deployed Worker calls `begin_generation`/`persist_summary`/`refund_reservation` and `acquire_generation_lease`/`release_generation_lease`, and none of the six legacy functions. Running the drop while an older Worker still serves traffic reopens exactly the deploy window §Migration Notes avoids: DB-first would break it mid-generation, and for `refund_credits` that break is **silent** — `refundCredits` logged and swallowed failures, so an in-flight failed generation would leave the user charged with no error surfaced. A dropped `release_generation_lock` is likewise silent (release is best-effort), leaving the user locked out for one stale window.
 
 ### Changes Required:
 
@@ -698,7 +698,7 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 ### Phase 8: Contract migration — drop the six superseded RPCs
 
 > Gated: apply to cloud only after the phases 1–7 Worker is live (calls `begin_generation` + `persist_summary` + `acquire_generation_lease`).
-> **Gate satisfied 2026-07-24** — phases 1–7 Worker is live in production. This phase is now actionable; migration not yet created.
+> **Gate satisfied 2026-07-24** — phases 1–7 Worker is live in production. Contract migration `20260724120000_drop_legacy_rpcs.sql` is created and applied **locally** (9085d03); the production `supabase db push` and checks 8.5–8.7 are still pending.
 
 #### Automated
 

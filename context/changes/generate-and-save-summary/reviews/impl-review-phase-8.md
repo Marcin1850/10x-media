@@ -28,7 +28,7 @@
 - **Location**: context/changes/generate-and-save-summary/plan.md:475
 - **Detail**: The Phase 8 deploy-order paragraph says the live Worker calls `reserve_credits` and `settle_reservation`, although Phase 8 drops `reserve_credits` and the shipped runtime uses `begin_generation` plus atomic `persist_summary`. The correct precondition appears later at line 529. The Progress note at line 701 also says the migration is "not yet created" after commit `9085d03` created and locally applied it. These stale sentences conflict with the correct gate and could mislead the still-pending production rollout. Before this review, `change.md` also used `status: deployed` while Phase 8 remained local-only; the mandatory review stamp has normalized that lifecycle field to `impl_reviewed`.
 - **Fix**: Update the two stale plan sentences to name `begin_generation`, `persist_summary`, and the lease RPCs, and state that the contract migration is implemented locally but awaits the production push and checks.
-- **Decision**: PENDING
+- **Decision**: FIXED — plan.md:475 now names `begin_generation`/`persist_summary`/`refund_reservation` + the lease RPCs and says "six legacy functions" (was "five", stale since the 2026-07-23 amendment added `reserve_credits`); plan.md:701 now records migration `20260724120000_drop_legacy_rpcs.sql` as created + applied locally (9085d03) with the production push and 8.5–8.7 still pending.
 
 ### F2 — Production verification remains pending
 
