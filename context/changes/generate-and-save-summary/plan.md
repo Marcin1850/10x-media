@@ -604,8 +604,10 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 > fast-forwarded into `master` (`99adfea..f415f12`); CI + deploy both green (Worker deployed via
 > `wrangler deploy`). The 9 expand migrations (`20260719120000` … `20260723140000`) were applied to
 > prod Supabase (`ukbptccdffiigkdekzcn`) with `supabase db push` **before** the Worker deploy; prod
-> reports fully in sync. This satisfies Phase 8's precondition (phases 1–7 Worker live) — Phase 8 is
-> now **unblocked but not yet started** (migration file not created; steps 8.1–8.7 pending).
+> reports fully in sync. This satisfies Phase 8's precondition (phases 1–7 Worker live). **Phase 8
+> automated steps 8.1–8.4 are done** (`9085d03`): `20260724120000_drop_legacy_rpcs.sql` applied +
+> verified locally, build/lint green, dead `reserveCredits` removed. **Steps 8.5–8.7 (cloud manual)
+> remain** — push the drop to prod (`supabase db push`) after merge, then verify against cloud.
 
 ### Phase 1: Existing UI copy → English
 
@@ -700,10 +702,10 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 
 #### Automated
 
-- [x] 8.1 Migration applies cleanly: `npx supabase migration up`
-- [x] 8.2 Type checking passes: `npm run build`
-- [x] 8.3 Linting passes: `npm run lint`
-- [x] 8.4 No stale `spend_credit(` / `reserve_credits` / `generation_lock(` references outside the drop migration and the migrations that define them; `reserveCredits` removed from `credits.ts`
+- [x] 8.1 Migration applies cleanly: `npx supabase migration up` — 9085d03
+- [x] 8.2 Type checking passes: `npm run build` — 9085d03
+- [x] 8.3 Linting passes: `npm run lint` — 9085d03
+- [x] 8.4 No stale `spend_credit(` / `reserve_credits` / `generation_lock(` references outside the drop migration and the migrations that define them; `reserveCredits` removed from `credits.ts` — 9085d03
 
 #### Manual
 

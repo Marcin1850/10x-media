@@ -17,10 +17,14 @@ Phases 1–7 are **live in production** as of 2026-07-24.
 - The 9 expand migrations (`20260719120000` … `20260723140000`) were applied to the
   production Supabase project (`ukbptccdffiigkdekzcn`) with `supabase db push` **before**
   the Worker deploy; `supabase migration list --linked` reports prod fully in sync.
-- **Remaining**: Phase 8 (contract migration dropping the six superseded RPCs) was gated
-  on the phases 1–7 Worker being live — that gate is now satisfied, so Phase 8 is
-  **unblocked but not yet done**. See `plan.md` §Phase 8 / Progress. The change is not
-  ready to `/10x-archive` until Phase 8 ships.
+- **Phase 8** (contract migration `20260724120000_drop_legacy_rpcs.sql` dropping the six
+  superseded RPCs) is **implemented and committed** (`9085d03`): migration applied + verified
+  locally (all six functions gone; `settle_reservation` / `reconcile_reservation` retained),
+  build + lint green, dead `reserveCredits` wrapper and its `AppDatabase` Function entries
+  removed. **Remaining before `/10x-archive`**: push the drop to prod Supabase
+  (`supabase db push`) once merged, then run the cloud manual checks (plan.md Progress 8.5–8.7)
+  — legacy RPCs error `does not exist`, normal + long generation still succeed, operator
+  recovery tools intact.
 
 ## Notes
 
