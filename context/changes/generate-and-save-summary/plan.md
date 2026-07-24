@@ -700,10 +700,10 @@ The transcript fetch (possibly a polled Whisper job) dominates latency; the UI m
 
 #### Automated
 
-- [ ] 8.1 Migration applies cleanly: `npx supabase migration up`
-- [ ] 8.2 Type checking passes: `npm run build`
-- [ ] 8.3 Linting passes: `npm run lint`
-- [ ] 8.4 No stale `spend_credit(` / `reserve_credits` / `generation_lock(` references outside the drop migration and the migrations that define them; `reserveCredits` removed from `credits.ts`
+- [x] 8.1 Migration applies cleanly: `npx supabase migration up`
+- [x] 8.2 Type checking passes: `npm run build`
+- [x] 8.3 Linting passes: `npm run lint`
+- [x] 8.4 No stale `spend_credit(` / `reserve_credits` / `generation_lock(` references outside the drop migration and the migrations that define them; `reserveCredits` removed from `credits.ts`
 
 #### Manual
 

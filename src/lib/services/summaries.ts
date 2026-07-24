@@ -65,11 +65,6 @@ export interface AppDatabase {
     };
     Views: Record<never, never>;
     Functions: {
-      /** Table-returning, so PostgREST sends a one-element array. `reservation_id` is null on the -1 sentinel. */
-      reserve_credits: {
-        Args: { amount?: number };
-        Returns: { reservation_id: string | null; new_balance: number }[];
-      };
       /** Table-returning, so PostgREST sends a one-element array. Which columns are non-null depends on `outcome`. */
       begin_generation: {
         Args: { target_user: string; request: string | null; amount: number | null };
@@ -100,9 +95,6 @@ export interface AppDatabase {
         };
         Returns: { outcome: string; video_id: string | null; summary_id: string | null }[];
       };
-      /** Legacy, kept for the expand/contract window only — dropped in the Phase 8 contract migration. */
-      spend_credits: { Args: { amount?: number }; Returns: number };
-      refund_credits: { Args: { target_user: string; amount: number }; Returns: undefined };
     };
   };
 }

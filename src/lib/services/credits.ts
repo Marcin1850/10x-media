@@ -12,19 +12,15 @@ import type { AppSupabaseClient } from "@/lib/services/summaries";
  * durable, queryable record of a user owed credits. See the reconciliation query in
  * `20260720160000_credit_reservations.sql`.
  *
- * Reads and `reserve_credits` are RLS/`auth.uid()`-scoped to the caller's own row and can only lower
- * a balance. `beginGeneration` and `refundReservation` take an explicit user id — the first replays
- * another attempt's summary, the second RAISES a balance — so both run only via the service-role
- * admin client.
+ * Balance reads are RLS/`auth.uid()`-scoped to the caller's own row and can only observe it.
+ * `beginGeneration` and `refundReservation` take an explicit user id — the first replays another
+ * attempt's summary, the second RAISES a balance — so both run only via the service-role admin client.
  *
  * There is deliberately no `settleReservation` here. Settling used to be a best-effort call made after
  * the summary was persisted, which is exactly the gap F23 closed: the charge is now decided inside the
  * same transaction that writes the summary (`persistSummaryAndSettle` in `services/summaries.ts`). The
  * `settle_reservation()` RPC itself remains in the database as an operator-side recovery tool.
  */
-
-/** `reserve_credits()` returns this in `new_balance` when there was nothing to spend (missing row or insufficient balance). */
-const INSUFFICIENT_SENTINEL = -1;
 
 /**
  * Reads the caller's current balance. When `userId` is omitted the read is scoped by RLS
@@ -39,50 +35,6 @@ export async function getBalance(supabase: AppSupabaseClient, userId?: string): 
   }
 
   return data?.balance ?? null;
-}
-
-/**
- * Discriminated on `ok` so callers narrow to a non-null `reservationId` without a redundant check:
- * a successful debit ALWAYS carries the id needed to settle or refund it.
- *
- * `balance` is the new balance after a successful reserve; on insufficient, the caller's actual
- * (unchanged) balance. `ok: false` means insufficient / missing row — never an exception.
- */
-export type ReserveResult =
-  | { ok: true; balance: number; reservationId: string }
-  | { ok: false; balance: number; reservationId: null };
-
-/**
- * Atomically debits `amount` credits (default 1) from the caller's own balance and opens a matching
- * ledger row, in one transaction, via the `reserve_credits()` RPC. On the insufficient sentinel it
- * re-reads the caller's actual balance so callers can report "you have <balance>" accurately (a
- * 2-credit spend at balance 1 must not report 0). Throws only on a genuine DB error.
- */
-export async function reserveCredits(supabase: AppSupabaseClient, amount = 1): Promise<ReserveResult> {
-  const { data, error } = await supabase.rpc("reserve_credits", { amount });
-
-  if (error) {
-    throw new Error(`Failed to reserve credits: ${error.message}`);
-  }
-
-  // `returns table(...)` arrives as a one-element array. The declared type says non-empty, but that
-  // is our own hand-written shape, not a generated one — an empty array would mean the RPC contract
-  // changed under us, and must not be read as a silent success. Length-checked rather than
-  // `data?.[0]` so the guard survives the type saying it can't happen.
-  if (data.length === 0) {
-    throw new Error("Failed to reserve credits: reserve_credits returned no row");
-  }
-  const row = data[0];
-
-  if (row.new_balance === INSUFFICIENT_SENTINEL) {
-    return { ok: false, balance: (await getBalance(supabase)) ?? 0, reservationId: null };
-  }
-
-  if (!row.reservation_id) {
-    throw new Error("Failed to reserve credits: balance was debited without a reservation id");
-  }
-
-  return { ok: true, balance: row.new_balance, reservationId: row.reservation_id };
 }
 
 /**
@@ -178,7 +130,7 @@ export async function beginGeneration(
   }
 
   // `returns table(...)` arrives as a one-element array. An empty one would mean the RPC contract
-  // changed under us and must not be read as a silent success — same guard as reserveCredits.
+  // changed under us and must not be read as a silent success — same guard as persistSummaryAndSettle.
   if (!data || data.length === 0) {
     throw new Error("Failed to begin generation: begin_generation returned no row");
   }
@@ -200,7 +152,7 @@ export async function beginGeneration(
       return {
         outcome: "replay",
         reservationId: row.reservation_id,
-        // A missing credits row reads as zero, matching reserveCredits' insufficient path.
+        // A missing credits row reads as zero, matching the `insufficient` outcome below.
         balance: row.new_balance ?? 0,
         cost: row.cost ?? 1,
         summaryId: row.summary_id,
