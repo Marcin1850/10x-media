@@ -24,3 +24,10 @@ outright — it is the one setting that can ask for a machine-translated track �
 instead of a paid one-off. Language is diagnostic only, never rendered; a card labelled
 "language" would be false exactly when auto-translated tracks exist. See `plan-brief.md`
 §Key Decisions.
+
+**Plan review triaged (2026-07-25):** 7 findings — 6 fixed in the plan, 1 accepted. Accepted:
+the `persist_summary` hard-swap keeps its deployment window (F1), judged a non-issue at this
+stage rather than worth an expand/contract pair. The largest fix widened scope slightly: F6 turned
+into a breaking rename of the empty, unread `videos.thumbnail_url` to
+`thumbnail_url_reported`, taken now because the column has no readers and never will be
+cheaper to rename. See `reviews/plan-review.md` for every decision.

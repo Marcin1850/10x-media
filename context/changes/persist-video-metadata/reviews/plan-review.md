@@ -6,6 +6,8 @@
 - **Date**: 2026-07-25
 - **Verdict**: REVISE
 - **Findings**: 1 critical, 3 warnings, 3 observations
+- **Triage**: complete 2026-07-25 — 6 fixed, 1 accepted
+- **Verdict after fixes**: SOUND (F1 accepted as a known, deliberate operational risk)
 - **Addendum**: 2026-07-25 — targeted re-check of thumbnail storage (F5–F7)
 
 ## Verdicts
@@ -45,7 +47,7 @@ The skill's referenced `.claude/skills/10x-plan-review/references/progress-forma
   - Tradeoff: Adds a renamed contract and later cleanup work.
   - Confidence: HIGH — both deployment states remain independently valid.
   - Blind spot: Operational tooling referencing the old RPC should be checked before removal.
-- **Decision**: PENDING
+- **Decision**: ACCEPTED — deploy window judged a non-issue at this stage. The incomplete-rollback half of this finding is addressed anyway via F6's Migration Notes edit (the rename must be reversed alongside the function).
 
 ### F2 — Transport failure is missing from verification
 
@@ -59,7 +61,7 @@ The skill's referenced `.claude/skills/10x-plan-review/references/progress-forma
   - Tradeoff: Requires a small injection seam or focused test mechanism.
   - Confidence: HIGH — the installed SDK and endpoint control flow were verified.
   - Blind spot: The SDK exposes no request signal, so a cancellable timeout may require direct fetch or a non-cancelling deadline.
-- **Decision**: PENDING
+- **Decision**: FIXED — outer catch boundary + `forbidden` removed from the retry policy (not in the SDK enum), defensive call-site fallback, and a new transport-rejection verification step (3.6).
 
 ### F3 — Desired end state contradicts the accepted long-video path
 
@@ -69,7 +71,7 @@ The skill's referenced `.claude/skills/10x-plan-review/references/progress-forma
 - **Location**: Desired End State, Key Discoveries, out-of-scope boundaries
 - **Detail**: The Desired End State says every successful generation has nulls only when Supadata lacks data or metadata fails. The plan later accepts null language columns on every cached `allowLong` generation because the quote stores no language fields, and explicitly excludes widening that cache. The code confirms the cache holds only content and `resolvedVia` at `src/lib/services/transcript-guard.ts:50-53`.
 - **Fix**: Qualify the Desired End State as applying to fresh-transcript generations and name cached long-video confirmation as the accepted language-null exception.
-- **Decision**: PENDING
+- **Decision**: FIXED — Desired End State qualified to the fresh-transcript path; cached `allowLong` named as the accepted language-null exception.
 
 ### F4 — Phase 3 miscounts descriptive fields
 
@@ -79,7 +81,7 @@ The skill's referenced `.claude/skills/10x-plan-review/references/progress-forma
 - **Location**: Phase 3 overview and manual failure criterion
 - **Detail**: Phase 3 twice says “four” descriptive metadata fields, but its contract maps five: title, thumbnail, channel, duration, and publication date.
 - **Fix**: Replace “four” with “five” in the Phase 3 overview and forced-failure criterion.
-- **Decision**: PENDING
+- **Decision**: FIXED — “four” corrected to “five” in the Phase 3 overview and the forced-failure criterion.
 
 ---
 
@@ -91,6 +93,8 @@ Scope: what the slice persists as a thumbnail (URL vs. binary), whether the imag
 
 - **URL, not binary — correct as planned.** `plan.md:41` already excludes a storage copy. A binary copy would require a Supabase Storage bucket with its own RLS, a fetch + upload after the paid LLM call (2 more subrequests against the budget tracked at `plan.md:75`), and a change to S-04 erasure — `user_id`'s `on delete cascade` reaches table rows, not storage objects. Nothing in the MVP justifies that.
 - **`thumbnail_url` is self-descriptive — no rename.** The `_url` suffix answers the URL-vs-binary question at the schema level and is consistent with the sibling `videos.url`. The column predates this slice (F-01), so a rename is a breaking change to the table, the `Video` entity and the RPC signature for no gain.
+
+  > **Superseded at triage (2026-07-25).** This weighed the rename cost too high. Verified during triage: the column is null in every row and has **no readers** — only two type declarations (`src/types.ts:12`, `src/lib/services/summaries.ts:10`), no renderer. The breaking change therefore costs one `alter table ... rename column` plus two type lines, and this slice is the last moment it is free. The user accepted the break and chose `thumbnail_url_reported`, which also answers F6 at the schema level rather than only in plan prose. See F6's decision.
 
 The fetchability question surfaced three findings.
 
@@ -118,7 +122,7 @@ The fetchability question surfaced three findings.
   - Tradeoff: Caps every thumbnail at 480×360 even where `maxresdefault` exists.
   - Confidence: HIGH — `hqdefault` returned 200 for both probes, including the 2005 240p upload.
   - Blind spot: Assumes Supadata never returns a non-`i.ytimg.com` host for a YouTube video.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A — store as-is; low-resolution edge-case run added; S-02's `hqdefault` fallback for both null and 404 recorded in Migration Notes.
 
 ### F6 — Plan never records why a derivable value is stored
 
@@ -128,7 +132,7 @@ The fetchability question surfaced three findings.
 - **Location**: Phase 1 §Migration, `docs/supadata-metadata.md:40`
 - **Detail**: `thumbnail_url` is fully reconstructible from `youtube_id`, which `videos` already stores. Persisting it is still the right call — it arrives free in a metadata call made anyway and carries the best-available resolution rather than a fixed guess — but nothing in the plan says so, leaving a future reader to read the column as redundant.
 - **Fix**: Add one line to Phase 1's migration intent stating that the column is derivable but persisted because the value is free in a call already made and carries the best-available variant.
-- **Decision**: PENDING
+- **Decision**: FIXED (extended beyond the proposed fix) — user chose a breaking rename to `thumbnail_url_reported` over a plan-text note, since the column is empty and has no readers. Migration gains the rename plus a `comment on column` carrying the rationale.
 
 ### F7 — Reference doc names a column the plan forbids
 
@@ -138,4 +142,4 @@ The fetchability question surfaced three findings.
 - **Location**: `context/changes/persist-video-metadata/docs/supadata-metadata.md:44`
 - **Detail**: The field→column mapping table still lists `language text (new)`, while `plan.md:42` explicitly rules that column out in favour of `transcript_lang` / `transcript_available_langs` precisely so it cannot be mistaken for the video's spoken language. An implementer reading the referenced doc gets the rejected name.
 - **Fix**: Replace the `language text (new)` row with the two actual columns and their source (`Transcript.lang` / `Transcript.availableLangs`).
-- **Decision**: PENDING
+- **Decision**: FIXED — `language text (new)` replaced with `transcript_lang` / `transcript_available_langs` and their source fields. Vendor-transcribed sections untouched.

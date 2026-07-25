@@ -16,12 +16,14 @@ Populate `videos` with the descriptive metadata a saved summary needs to be reco
 
 ## Desired End State
 
-After a successful generation, the `videos` row for that YouTube ID carries `title`, `thumbnail_url`, `channel_name`, `duration_seconds`, `published_at`, `transcript_lang` and `transcript_available_langs` — with nulls only where Supadata genuinely had nothing or the metadata call failed. The transcript request no longer sends `lang`, so the returned track is whatever Supadata considers first-available rather than a Polish track that may be machine-translated. Nothing renders yet.
+After a successful generation **on the fresh-transcript path**, the `videos` row for that YouTube ID carries `title`, `thumbnail_url_reported`, `channel_name`, `duration_seconds`, `published_at`, `transcript_lang` and `transcript_available_langs` — with nulls only where Supadata genuinely had nothing or the metadata call failed.
+
+One accepted exception: a generation resumed from a cached quote (the `allowLong` confirmation path) always leaves `transcript_lang` and `transcript_available_langs` null, because the quote cache stores no language fields and widening it is explicitly out of scope. The five descriptive columns still populate on that path. The transcript request no longer sends `lang`, so the returned track is whatever Supadata considers first-available rather than a Polish track that may be machine-translated. Nothing renders yet.
 
 Verify with a real generation against a local Supabase stack, then:
 
 ```sql
-select title, thumbnail_url, channel_name, duration_seconds, published_at,
+select title, thumbnail_url_reported, channel_name, duration_seconds, published_at,
        transcript_lang, transcript_available_langs
 from public.videos order by created_at desc limit 1;
 ```
@@ -29,6 +31,7 @@ from public.videos order by created_at desc limit 1;
 ### Key Discoveries:
 
 - The RPC — not the insert code — is why `title`/`thumbnail_url` are dead (`20260723120000_atomic_persist_summary.sql:112-115`).
+- **`thumbnail_url` has never held a value and has no readers** — only two type declarations (`src/types.ts:12`, `src/lib/services/summaries.ts:10`). That makes renaming it to `thumbnail_url_reported` free *now* and expensive after S-02 renders it.
 - Widening a Postgres function's parameter list via `create or replace` produces a **second overload**, not a replacement, and PostgREST then has to disambiguate. Grants are signature-scoped too (`20260723120000_atomic_persist_summary.sql:136-139`).
 - `Metadata.media` is a union (`VideoMedia | ImageMedia | CarouselMedia | PostMedia`); only `VideoMedia` has `duration` and `thumbnailUrl`. `Metadata.title` is `string | null`.
 - **The long-video confirmation path has no transcript in hand.** `transcript_quotes` stores `transcript_content` + `resolved_via` only (`transcript-guard.ts:51-52`), so an `allowLong` resubmit has no `lang`/`availableLangs`. Accepted: those two columns are diagnostic, and null on that path is tolerable.
@@ -39,6 +42,7 @@ from public.videos order by created_at desc limit 1;
 - **No UI.** No changes to `GenerateSummaryForm.tsx`, no list page, no change to the generate endpoint's response body. S-02 owns rendering and must supply the null fallback.
 - **No backfill.** Existing `videos` rows keep null metadata. No operator script, no lazy fill.
 - **No storage copy of thumbnails** — the CDN URL is hotlinked.
+- **No repair of a dead thumbnail URL.** `thumbnail_url_reported` records what the vendor returned and is never rewritten to reflect whether it resolves. The `hqdefault` fallback is applied at render time by S-02 and never persisted — see §Migration Notes.
 - **No `language` column meaning "the video's spoken language".** That field is only obtainable from the YouTube Data API (`snippet.defaultAudioLanguage`), which needs a new key and quota. The two columns here are named `transcript_lang` / `transcript_available_langs` precisely so they cannot be mistaken for it.
 - **No cost guardrail.** `mode: "auto"` stays, `HARD_MAX_TRANSCRIPT_CHARS` stays, `summaryCost` stays. That is S-09.
 - **No widening of `save_transcript_quote`** to carry language through the confirmation path.
@@ -61,7 +65,8 @@ Phase 1 lands the schema and the widened RPC while passing nulls for every new f
 on conflict (user_id, youtube_id) do update set
   url = excluded.url,
   title = coalesce(excluded.title, videos.title),
-  thumbnail_url = coalesce(excluded.thumbnail_url, videos.thumbnail_url),
+  thumbnail_url_reported =
+    coalesce(excluded.thumbnail_url_reported, videos.thumbnail_url_reported),
   -- …same shape for channel_name, duration_seconds, published_at,
   --    transcript_lang, transcript_available_langs
 ```
@@ -70,7 +75,9 @@ Note the unqualified `videos.` prefix: inside `ON CONFLICT DO UPDATE` the insert
 
 **A malformed vendor value must not kill a paid generation.** `published_at` is `timestamptz` and `duration_seconds` is `integer`; a bad `createdAt` string or a non-finite `duration` from Supadata would abort the persist transaction, triggering a refund and discarding a summary that was already paid for. The metadata service must normalise before returning: parse `createdAt` and re-emit ISO, or null; round `duration` only when finite, else null. Never pass a raw vendor value into a typed column.
 
-**Retry only what is transient.** One retry, only for a network-level failure or `limit-exceeded` (the 1 req/s breach). `not-found`, `invalid-request`, `forbidden` and `unauthorized` are permanent — retrying them just appends latency to an already-completed generation. Space the retry past the rate-limit window (~1.2 s).
+**Retry only what is transient.** One retry, only for a network-level failure or `limit-exceeded` (the 1 req/s breach). `not-found`, `invalid-request`, `transcript-unavailable`, `internal-error`, `upgrade-required` and `unauthorized` are permanent — retrying them just appends latency to an already-completed generation. Space the retry past the rate-limit window (~1.2 s). The SDK's error union is exactly `invalid-request | internal-error | transcript-unavailable | not-found | unauthorized | upgrade-required | limit-exceeded` (`node_modules/@supadata/js/dist/index.d.ts:41-50`) — there is no `forbidden` code, so do not branch on one.
+
+**Totality is load-bearing, so the boundary must be outer, not typed.** The metadata call sits after the debit and the paid LLM call but *before* the persistence `try`/`catch` (`generate.ts:347-384`). Anything that escapes `fetchVideoMetadata()` therefore bypasses the immediate refund and leaves the reservation for later reconciliation. The catch must wrap the **entire** retry operation, not each typed branch: `SupadataError` is only what the SDK throws when it recognises the response — a DNS failure, a socket reset or a Workers subrequest cap surfaces as a raw rejection with no `error` field. Classify inside the catch (retry on `limit-exceeded` or a recognised transport rejection, return null on everything else including anything unrecognised), and never let the classifier itself throw on an unexpected shape.
 
 **Subrequest budget.** Cloudflare's free plan allows 50 subrequests per invocation; the transcript poll alone can use 13 (`transcript.ts:17`). Adding at most 2 more is comfortable, but the metadata call must stay outside any loop.
 
@@ -88,11 +95,26 @@ Add the five new columns, replace `persist_summary` with a signature that accept
 
 **File**: `supabase/migrations/20260725120000_video_metadata.sql`
 
-**Intent**: Add the metadata columns to `videos` and replace `persist_summary` so it can write them. Additive on the table (matching the `model` / `resolved_via` precedent); a hard swap on the function, because a differing parameter list would otherwise create a second overload.
+**Intent**: Add the metadata columns to `videos`, rename `thumbnail_url` to say what it actually holds, and replace `persist_summary` so it can write them all. Additive on the table (matching the `model` / `resolved_via` precedent); a hard swap on the function, because a differing parameter list would otherwise create a second overload.
 
 **Contract**: Five idempotent `alter table public.videos add column if not exists` statements — `channel_name text`, `duration_seconds integer`, `published_at timestamptz`, `transcript_lang text`, `transcript_available_langs text[]`. RLS untouched: the existing per-user `videos` policies cover new columns, and `user_id`'s `on delete cascade` already covers S-04 erasure.
 
-Then `drop function if exists public.persist_summary(uuid, uuid, text, text, text, text, text, text);` followed by a `create function` whose parameters are the existing eight plus `p_title text`, `p_thumbnail_url text`, `p_channel_name text`, `p_duration_seconds integer`, `p_published_at timestamptz`, `p_transcript_lang text`, `p_transcript_available_langs text[]`. The body is unchanged except for the `videos` upsert, which gains the new columns with the coalescing conflict clause from §Critical Implementation Details. Return type, outcome tags (`persisted` / `already_persisted` / `not_reserved`), the `for update` ledger lock, the replay guard and the settle are all preserved verbatim — this migration changes what the function writes, not how it decides.
+Then one `alter table public.videos rename column thumbnail_url to thumbnail_url_reported;`. The name states provenance rather than quality: the column records what the vendor last returned, and nothing in this system ever repairs it against whether the URL actually resolves. This is a breaking rename accepted deliberately: the column has been null in every row since F-01 created it, and its only references are two type declarations (`src/types.ts:12`, `src/lib/services/summaries.ts:10`) — nothing reads it, nothing renders it. This slice is the last moment the rename is free. Note that `rename column` has no `if not exists` form, so unlike the additions this statement is **not** idempotent; it is correct exactly once against a database that still has the old name.
+
+Document the column's rationale in the schema itself, so a future reader does not mistake a derivable value for a redundant one:
+
+```sql
+comment on column public.videos.thumbnail_url_reported is
+  'Thumbnail URL exactly as last reported by Supadata — a record of the vendor '
+  'response, never curated or repaired. Derivable from youtube_id, but persisted '
+  'because it arrives free in a metadata call already made and typically carries '
+  'a higher resolution than a fixed guess. NOT guaranteed to resolve: the vendor '
+  'returns maxresdefault.jpg, which is absent below 480p. Consumers fall back at '
+  'render time to https://i.ytimg.com/vi/<youtube_id>/hqdefault.jpg and must not '
+  'write that fallback back into this column.';
+```
+
+Then `drop function if exists public.persist_summary(uuid, uuid, text, text, text, text, text, text);` followed by a `create function` whose parameters are the existing eight plus `p_title text`, `p_thumbnail_url_reported text`, `p_channel_name text`, `p_duration_seconds integer`, `p_published_at timestamptz`, `p_transcript_lang text`, `p_transcript_available_langs text[]`. The body is unchanged except for the `videos` upsert, which gains the new columns with the coalescing conflict clause from §Critical Implementation Details. Return type, outcome tags (`persisted` / `already_persisted` / `not_reserved`), the `for update` ledger lock, the replay guard and the settle are all preserved verbatim — this migration changes what the function writes, not how it decides.
 
 Close with `revoke all … from public, anon, authenticated` and `grant execute … to service_role` naming the **new** signature in full. The old signature's grants disappear with the dropped function.
 
@@ -104,7 +126,7 @@ Close with `revoke all … from public, anon, authenticated` and `grant execute 
 
 **Intent**: Teach the typed RPC surface and the wrapper about the seven new parameters so callers can supply metadata.
 
-**Contract**: `AppDatabase["public"]["Functions"]["persist_summary"]["Args"]` gains the seven new keys with their TS types (`string | null`, `number | null`, `string[] | null`). `PersistSummaryParams` gains a single optional grouping — `metadata` for the five video-descriptive fields and `transcriptLang` / `transcriptAvailableLangs` for the two diagnostic ones — and `persistSummaryAndSettle` forwards them to the `rpc()` call, defaulting to null when absent. `VideoRow` in the same file gains the five new columns.
+**Contract**: `AppDatabase["public"]["Functions"]["persist_summary"]["Args"]` gains the seven new keys with their TS types (`string | null`, `number | null`, `string[] | null`), including `p_thumbnail_url_reported`. `PersistSummaryParams` gains a single optional grouping — `metadata` for the five video-descriptive fields and `transcriptLang` / `transcriptAvailableLangs` for the two diagnostic ones — and `persistSummaryAndSettle` forwards them to the `rpc()` call, defaulting to null when absent. `VideoRow` in the same file gains the five new columns **and** renames its `thumbnail_url` key to `thumbnail_url_reported` (line 10), tracking the migration.
 
 #### 3. Shared types
 
@@ -112,7 +134,7 @@ Close with `revoke all … from public, anon, authenticated` and `grant execute 
 
 **Intent**: Keep the exported `Video` entity in sync with the table so S-02 can consume it.
 
-**Contract**: `Video` gains `channel_name: string | null`, `duration_seconds: number | null`, `published_at: string | null`, `transcript_lang: string | null`, `transcript_available_langs: string[] | null`.
+**Contract**: `Video` gains `channel_name: string | null`, `duration_seconds: number | null`, `published_at: string | null`, `transcript_lang: string | null`, `transcript_available_langs: string[] | null`, and renames `thumbnail_url` to `thumbnail_url_reported: string | null` (line 12). Type-checked ESLint is what proves both renames are complete — there are no other consumers today, so a missed rename surfaces at build time rather than at runtime.
 
 ### Success Criteria:
 
@@ -125,7 +147,7 @@ Close with `revoke all … from public, anon, authenticated` and `grant execute 
 #### Manual Verification:
 
 - One real generation on the local stack still succeeds end-to-end and returns a summary
-- `select * from public.videos order by created_at desc limit 1` shows the five new columns present and null
+- `select * from public.videos order by created_at desc limit 1` shows the five new columns present and null, and `thumbnail_url_reported` in place of `thumbnail_url`; `\d+ public.videos` shows the rationale comment attached to the renamed column
 - `select proname, pronargs from pg_proc where proname = 'persist_summary'` returns exactly one row
 - `credit_reservations` shows the run's reservation as `settled`, confirming the swapped function still closes the ledger
 
@@ -183,7 +205,7 @@ Add a module-level threshold constant with a comment recording the reasoning: a 
 
 ### Overview
 
-Add the second Supadata call and populate the four remaining descriptive fields. Best-effort: any failure logs and persists nulls rather than discarding a summary that has already been paid for.
+Add the second Supadata call and populate the five remaining descriptive fields. Best-effort: any failure logs and persists nulls rather than discarding a summary that has already been paid for.
 
 ### Changes Required:
 
@@ -195,11 +217,11 @@ Add the second Supadata call and populate the four remaining descriptive fields.
 
 **Contract**: Export `VideoMetadata` — `{ title: string | null; thumbnailUrl: string | null; channelName: string | null; durationSeconds: number | null; publishedAt: string | null }` — and `fetchVideoMetadata({ url }: { url: string }, apiKey: string): Promise<VideoMetadata | null>`.
 
-Field mapping: `title` → `title`, `media.thumbnailUrl` → `thumbnailUrl`, `author.displayName` → `channelName`, `media.duration` → `durationSeconds`, `createdAt` → `publishedAt`. `media` is a union, so `duration` and `thumbnailUrl` are reachable only behind a `media.type === "video"` narrow; a non-video response yields nulls for those two while the others still populate.
+Field mapping: `title` → `title`, `media.thumbnailUrl` → `thumbnailUrl`, `author.displayName` → `channelName`, `media.duration` → `durationSeconds`, `createdAt` → `publishedAt`. The DTO field stays vendor-shaped as `thumbnailUrl`; it is the persist layer that maps it onto the `thumbnail_url_reported` column. `media` is a union, so `duration` and `thumbnailUrl` are reachable only behind a `media.type === "video"` narrow; a non-video response yields nulls for those two while the others still populate.
 
 Normalisation is mandatory before returning, per §Critical Implementation Details — `publishedAt` is re-emitted as ISO only if parseable, `durationSeconds` only if finite, otherwise null.
 
-Retry policy: one retry after ~1.2 s, and only when the failure is a network error or `SupadataError` with `error === "limit-exceeded"`. Every other `SupadataError` code returns null immediately. All exits are caught internally so the call site needs no `try`/`catch`; failures go to `console.error` with the URL.
+Retry policy: one retry after ~1.2 s, and only when the failure is a network error or `SupadataError` with `error === "limit-exceeded"`. Every other `SupadataError` code returns null immediately. Per §Critical Implementation Details the `try`/`catch` wraps the whole retry operation — including the second attempt and the classifier — so a raw transport rejection (no `error` field) is caught and mapped to null exactly like a structured one. Failures go to `console.error` with the URL.
 
 #### 2. Generation endpoint
 
@@ -207,7 +229,9 @@ Retry policy: one retry after ~1.2 s, and only when the failure is a network err
 
 **Intent**: Fetch metadata once the paid work has succeeded and hand it to the persist call.
 
-**Contract**: Between the `summarize()` block (ends line 358) and the `persistSummaryAndSettle` call, invoke `fetchVideoMetadata({ url }, supadataKey)` and pass the result — possibly null — into the persist params. Placement is load-bearing for three separate reasons, and the comment at the call site should say so: it keeps the two Supadata requests seconds apart on a 1 req/s plan; it means the 402/413/409 exit paths never spend a credit on a generation that does not happen; and it keeps the `allowLong` resubmit from paying for metadata twice. Do not move it earlier without revisiting all three — that relocation is S-09 lever B's job.
+**Contract**: Between the `summarize()` block (ends line 358) and the `persistSummaryAndSettle` call, invoke `fetchVideoMetadata({ url }, supadataKey)` and pass the result — possibly null — into the persist params. Wrap the call in a defensive `try`/`catch` that falls back to `null` even though the service is meant to be total: this is a decorative call sitting between the paid work and the persistence `try`/`catch`, so a regression that makes it throw would strand a reservation rather than lose a thumbnail. The redundancy is deliberate and the comment should say so.
+
+Placement is load-bearing for three separate reasons, and the comment at the call site should say so: it keeps the two Supadata requests seconds apart on a 1 req/s plan; it means the 402/413/409 exit paths never spend a credit on a generation that does not happen; and it keeps the `allowLong` resubmit from paying for metadata twice. Do not move it earlier without revisiting all three — that relocation is S-09 lever B's job.
 
 The endpoint's response body is unchanged.
 
@@ -221,8 +245,9 @@ The endpoint's response body is unchanged.
 #### Manual Verification:
 
 - A generation populates all seven fields; `duration_seconds` matches the real video length and `published_at` matches its upload date
-- The thumbnail URL loads in a browser
-- With `SUPADATA_API_KEY` temporarily pointed at an invalid key *after* the transcript is served from a cached quote, the generation still succeeds and persists nulls for the four metadata fields — proving the call is non-fatal
+- The thumbnail URL loads in a browser — checked on **two** videos: a modern HD upload and the old low-resolution one from §Edge cases. Supadata's documented shape is `maxresdefault.jpg`, which does not exist below 480p (probed 2026-07-25: `jNQXAC9IVRw` returns 404 for both `maxresdefault` and `sddefault`, 200 for `hqdefault`). A 404 on the low-res video is recorded, not fixed here
+- With `SUPADATA_API_KEY` temporarily pointed at an invalid key *after* the transcript is served from a cached quote, the generation still succeeds and persists nulls for the five metadata fields — proving the call is non-fatal
+- A *transport-level* rejection (not a `SupadataError`) is equally non-fatal: point the SDK's `baseUrl` at an unroutable host, or temporarily `throw new TypeError("fetch failed")` at the top of the metadata call, and confirm the generation still returns a summary, persists null metadata, and leaves `credit_reservations` `settled` rather than `reserved`
 - A second generation of the same video with the other `character` does not null out metadata captured by the first run
 - Supadata `GET /v1/me` shows `usedCredits` rising by exactly 2 for one native-transcript generation
 
@@ -292,6 +317,7 @@ There is no test framework in this repository, so the strategy is migration-leve
 ### Edge cases worth one deliberate run each:
 
 - A YouTube Short — confirms `media.type === "video"` still holds and `duration_seconds` is small but present
+- An old low-resolution video (e.g. `jNQXAC9IVRw`, a 2005 240p upload) — records whether Supadata hands back a `maxresdefault.jpg` that 404s or picks an existing variant itself. Open the persisted URL directly; a 404 here is the expected-and-tolerated outcome that S-02 must fall back from, not a Phase 3 failure
 - A video with a large translation pool — exercises the Phase 2 warning
 - The `allowLong` confirmation path — confirms the two language columns are null there and that this is the accepted behaviour, not a crash
 
@@ -303,10 +329,13 @@ The real cost is monetary, not latency: `/metadata` is a flat 1 credit, doubling
 
 ## Migration Notes
 
-- The `videos` column additions are `if not exists` and safe to re-run.
+- The `videos` column additions are `if not exists` and safe to re-run. The `thumbnail_url` → `thumbnail_url_reported` rename is **not** re-runnable — `alter table ... rename column` has no `if not exists` form and fails on a second application. Accepted because migrations are applied once and the column is empty everywhere.
+- The rename is a **breaking schema change**, taken deliberately while it is free: the column has held null in every row since F-01 and has no readers beyond two type declarations. Anything written against `videos.thumbnail_url` after this migration — S-02's renderer above all — must use the new name.
 - The `persist_summary` swap is **not** expand/contract and has a deployment-order dependency — see §Critical Implementation Details. It is the one step in this plan that cannot be applied ahead of the Worker.
-- Rollback: re-applying `20260723120000_atomic_persist_summary.sql` restores the eight-parameter function; the added columns can be left in place, since nothing reads them until S-02.
+- Rollback: re-applying `20260723120000_atomic_persist_summary.sql` restores the eight-parameter function; the added columns can be left in place, since nothing reads them until S-02. The rename must be reversed with it (`alter table public.videos rename column thumbnail_url_reported to thumbnail_url;`), because the restored eight-argument body inserts into `videos` by the old column name.
 - Existing rows are not backfilled. S-02 must render a null-metadata fallback regardless, because a failed metadata fetch produces the same shape on new rows.
+- **The fallback is render-time only — S-02 must not write it back.** `thumbnail_url_reported` is a record of the vendor response; the only writer is the persist path after a successful `/metadata` call, where `coalesce` lets a fresh non-null value replace the stored one. Repairing a dead URL in the database is explicitly rejected: the 404 is detected in the browser (`<img onerror>`), so a write-back would need a new authenticated endpoint and an `update` RLS policy on `videos` that do not exist, and it would persist a value (`hqdefault.jpg`) already derivable for free from `youtube_id` on every row.
+- **S-02's thumbnail fallback must cover two cases, not one: a null `thumbnail_url_reported` *and* a stored URL that 404s.** Supadata returns `maxresdefault.jpg`, which does not exist for videos never uploaded above 480p. In both cases the fallback is the derived `https://i.ytimg.com/vi/<youtube_id>/hqdefault.jpg` — `hqdefault` exists for every video (verified 2026-07-25 against a 2005 240p upload), needs no key, referrer or CORS, and `youtube_id` is on every `videos` row including the un-backfilled ones. Use `<img onerror>` or equivalent; this slice stores the vendor string unvalidated by design, so nothing upstream guarantees it resolves.
 
 ## References
 
@@ -332,7 +361,7 @@ The real cost is monetary, not latency: `/metadata` is a flat 1 credit, doubling
 #### Manual
 
 - [ ] 1.4 One real generation on the local stack still succeeds end-to-end
-- [ ] 1.5 The five new columns are present and null
+- [ ] 1.5 The five new columns are present and null, and `thumbnail_url` is renamed to `thumbnail_url_reported` with its rationale comment attached
 - [ ] 1.6 Exactly one `persist_summary` exists in `pg_proc`
 - [ ] 1.7 The run's reservation is `settled`
 
@@ -362,8 +391,9 @@ The real cost is monetary, not latency: `/metadata` is a flat 1 credit, doubling
 - [ ] 3.3 All seven fields populate with correct values
 - [ ] 3.4 The thumbnail URL loads in a browser
 - [ ] 3.5 A forced metadata failure still saves the summary with null metadata
-- [ ] 3.6 A second generation of the same video does not null out existing metadata
-- [ ] 3.7 `usedCredits` rises by exactly 2 for one native-transcript generation
+- [ ] 3.6 A transport-level rejection is equally non-fatal and leaves the reservation settled
+- [ ] 3.7 A second generation of the same video does not null out existing metadata
+- [ ] 3.8 `usedCredits` rises by exactly 2 for one native-transcript generation
 
 ### Phase 4: Production rollout
 

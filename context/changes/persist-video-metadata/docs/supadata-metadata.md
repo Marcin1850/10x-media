@@ -37,11 +37,14 @@ Source: `docs.supadata.ai/get-metadata`
 | Planned column | Source field | Notes |
 | --- | --- | --- |
 | `videos.title` (exists, never written) | `title` | Column created by F-01, dead until this slice |
-| `videos.thumbnail_url` (exists, never written) | `media.thumbnailUrl` | Hotlink the CDN URL for the MVP — no storage copy |
+| `videos.thumbnail_url_reported` (renamed from `thumbnail_url`, never written) | `media.thumbnailUrl` | Hotlink the CDN URL for the MVP — no storage copy. Renamed in this slice while the column is still empty; the vendor returns `maxresdefault.jpg`, which 404s below 480p, so consumers fall back to `hqdefault.jpg` |
 | `channel_name text` (new) | `author.displayName` | `additionalData.channelId` is also available if a stable key is ever wanted |
 | `duration_seconds integer` (new) | `media.duration` | Already **seconds** — no ISO-8601 duration parsing (unlike the YouTube Data API's `PT3M33S`) |
 | `published_at timestamptz` (new) | `createdAt` | ISO 8601 UTC |
-| `language text` (new) | — | **Not in this response.** Comes from the transcript call's `lang`; see `supadata-transcript.md` |
+| `transcript_lang text` (new) | — | **Not in this response.** From the transcript call's `Transcript.lang`; see `supadata-transcript.md` |
+| `transcript_available_langs text[]` (new) | — | **Not in this response.** From `Transcript.availableLangs`; diagnostic only |
+
+> Named `transcript_*` deliberately. `plan.md` rules out a bare `language` column so it cannot be read as the video's *spoken* language — that field is only obtainable from the YouTube Data API's `snippet.defaultAudioLanguage`, which is out of scope.
 
 Unused but available: `description`, `stats.*`, `tags`, `platform`, `type`. Out of scope for S-08.
 
