@@ -5,7 +5,8 @@
 - **Mode**: Deep
 - **Date**: 2026-07-25
 - **Verdict**: REVISE
-- **Findings**: 1 critical, 2 warnings, 1 observation
+- **Findings**: 1 critical, 3 warnings, 3 observations
+- **Addendum**: 2026-07-25 — targeted re-check of thumbnail storage (F5–F7)
 
 ## Verdicts
 
@@ -22,6 +23,8 @@
 9/9 existing paths ✓, 5/5 symbols ✓, 2/2 explicit new paths correctly absent ✓, brief↔plan ✓, Progress↔phases ✓.
 
 The skill's referenced `.claude/skills/10x-plan-review/references/progress-format.md` is absent. The Progress scan used the complete mechanical rules embedded in `SKILL.md`; the plan passes them.
+
+**Addendum grounding (2026-07-25, thumbnail re-check):** `thumbnail_url` confirmed present as `text` at `supabase/migrations/20260613145120_videos_and_summaries.sql:10`, `src/lib/services/summaries.ts:10`, `src/types.ts:12` ✓. Binary-storage exclusion confirmed at `plan.md:41` ✓. YouTube CDN variants probed live against `i.ytimg.com` ✓ (results in F5).
 
 ## Findings
 
@@ -76,4 +79,63 @@ The skill's referenced `.claude/skills/10x-plan-review/references/progress-forma
 - **Location**: Phase 3 overview and manual failure criterion
 - **Detail**: Phase 3 twice says “four” descriptive metadata fields, but its contract maps five: title, thumbnail, channel, duration, and publication date.
 - **Fix**: Replace “four” with “five” in the Phase 3 overview and forced-failure criterion.
+- **Decision**: PENDING
+
+---
+
+## Addendum — thumbnail storage re-check (2026-07-25)
+
+Scope: what the slice persists as a thumbnail (URL vs. binary), whether the image is fetchable from YouTube, and whether the column name is self-descriptive.
+
+**Two of the three questions resolve as no-change:**
+
+- **URL, not binary — correct as planned.** `plan.md:41` already excludes a storage copy. A binary copy would require a Supabase Storage bucket with its own RLS, a fetch + upload after the paid LLM call (2 more subrequests against the budget tracked at `plan.md:75`), and a change to S-04 erasure — `user_id`'s `on delete cascade` reaches table rows, not storage objects. Nothing in the MVP justifies that.
+- **`thumbnail_url` is self-descriptive — no rename.** The `_url` suffix answers the URL-vs-binary question at the schema level and is consistent with the sibling `videos.url`. The column predates this slice (F-01), so a rename is a breaking change to the table, the `Video` entity and the RPC signature for no gain.
+
+The fetchability question surfaced three findings.
+
+### F5 — Persisted thumbnail URL can 404; verification will not catch it
+
+- **Severity**: ⚠️ WARNING
+- **Impact**: 🔎 MEDIUM — real tradeoff; pause to reason through it
+- **Dimension**: Blind Spots
+- **Location**: Phase 3 (§Metadata service, manual criterion at `plan.md:224`), Migration Notes (`plan.md:309`)
+- **Detail**: Supadata's documented response returns `maxresdefault.jpg` (`docs/supadata-metadata.md:27`), which does not exist for videos never uploaded above 480p. Probed live against `i.ytimg.com` on 2026-07-25:
+
+  | video | maxresdefault | sddefault | hqdefault | mqdefault |
+  |---|---|---|---|---|
+  | `dQw4w9WgXcQ` (2009, HD) | 200 | 200 | 200 | 200 |
+  | `jNQXAC9IVRw` (2005, 240p) | **404** | **404** | 200 | 200 |
+
+  The plan persists the vendor string unvalidated. Phase 3's only check is "the thumbnail URL loads in a browser" on a single video, and Migration Notes tells S-02 to handle *null* metadata only — a live-but-dead URL renders as a broken image, which no planned fallback covers. Hotlinking itself is not a problem: `i.ytimg.com` needs no key, no referrer, and no CORS for `<img>`.
+- **Fix A ⭐ Recommended**: Store Supadata's URL as-is; add an old low-resolution video to Phase 3's deliberate edge-case runs (`plan.md:292-296`), and record in Migration Notes that S-02's fallback for **both** null and 404 is the derived `https://i.ytimg.com/vi/<youtube_id>/hqdefault.jpg`.
+  - Strength: Zero runtime cost, keeps the best-available resolution, and gives S-02 a real image instead of a placeholder even for the un-backfilled existing rows.
+  - Tradeoff: Correctness lands in S-02 rather than this slice; a broken row exists in the DB until rendered.
+  - Confidence: HIGH — CDN behaviour verified directly for both variants.
+  - Blind spot: Not confirmed that Supadata always passes `maxresdefault` through rather than picking the best existing variant itself; the edge-case run settles it.
+- **Fix B**: Normalise in `fetchVideoMetadata` — rewrite any `i.ytimg.com` URL to `hqdefault.jpg` before returning.
+  - Strength: Every stored URL is guaranteed to resolve; no downstream fallback logic needed.
+  - Tradeoff: Caps every thumbnail at 480×360 even where `maxresdefault` exists.
+  - Confidence: HIGH — `hqdefault` returned 200 for both probes, including the 2005 240p upload.
+  - Blind spot: Assumes Supadata never returns a non-`i.ytimg.com` host for a YouTube video.
+- **Decision**: PENDING
+
+### F6 — Plan never records why a derivable value is stored
+
+- **Severity**: 📝 OBSERVATION
+- **Impact**: 🏃 LOW — quick decision; fix is obvious and narrowly scoped
+- **Dimension**: Lean Execution
+- **Location**: Phase 1 §Migration, `docs/supadata-metadata.md:40`
+- **Detail**: `thumbnail_url` is fully reconstructible from `youtube_id`, which `videos` already stores. Persisting it is still the right call — it arrives free in a metadata call made anyway and carries the best-available resolution rather than a fixed guess — but nothing in the plan says so, leaving a future reader to read the column as redundant.
+- **Fix**: Add one line to Phase 1's migration intent stating that the column is derivable but persisted because the value is free in a call already made and carries the best-available variant.
+- **Decision**: PENDING
+
+### F7 — Reference doc names a column the plan forbids
+
+- **Severity**: 📝 OBSERVATION
+- **Impact**: 🏃 LOW — quick decision; fix is obvious and narrowly scoped
+- **Dimension**: Plan Completeness
+- **Location**: `context/changes/persist-video-metadata/docs/supadata-metadata.md:44`
+- **Detail**: The field→column mapping table still lists `language text (new)`, while `plan.md:42` explicitly rules that column out in favour of `transcript_lang` / `transcript_available_langs` precisely so it cannot be mistaken for the video's spoken language. An implementer reading the referenced doc gets the rejected name.
+- **Fix**: Replace the `language text (new)` row with the two actual columns and their source (`Transcript.lang` / `Transcript.availableLangs`).
 - **Decision**: PENDING
