@@ -354,9 +354,9 @@ The real cost is monetary, not latency: `/metadata` is a flat 1 credit, doubling
 
 #### Automated
 
-- [x] 1.1 Migration applies cleanly against a fresh local stack
-- [x] 1.2 Linting passes
-- [x] 1.3 Build passes
+- [x] 1.1 Migration applies cleanly against a fresh local stack — bd307b2
+- [x] 1.2 Linting passes — bd307b2
+- [x] 1.3 Build passes — bd307b2
 
 #### Manual
 
@@ -369,8 +369,8 @@ The real cost is monetary, not latency: `/metadata` is a flat 1 credit, doubling
 
 #### Automated
 
-- [ ] 2.1 Linting passes
-- [ ] 2.2 Build passes
+- [x] 2.1 Linting passes
+- [x] 2.2 Build passes
 
 #### Manual
 

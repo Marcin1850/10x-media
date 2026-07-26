@@ -228,6 +228,11 @@ async function runGeneration({
   // this a one-credit user could fetch transcript after transcript, sequentially, for free.
   let content: string;
   let resolvedVia: TranscriptResolvedVia | null;
+  // Diagnostic only (S-08): which caption track Supadata actually returned, and the pool it came
+  // from. Never rendered — a "language" label would be false exactly when auto-translated tracks
+  // are in play, which is the very question these columns exist to answer from real traffic.
+  let transcriptLang: string | null;
+  let transcriptAvailableLangs: string[] | null;
 
   // A confirmation retry (allowLong) reuses the transcript cached when the 409 was issued — no second
   // paid fetch and no rate-limit token consumed. Best-effort: a miss just falls through to a re-fetch.
@@ -235,6 +240,12 @@ async function runGeneration({
   if (cachedQuote) {
     content = cachedQuote.content;
     resolvedVia = cachedQuote.resolvedVia;
+    // Known and accepted, not an oversight: `transcript_quotes` stores the transcript body and
+    // `resolved_via` only, so a confirmation resubmit has no language fields to carry. Widening the
+    // quote cache is explicitly out of scope for S-08 — these two columns are diagnostic, and null
+    // on this one path is tolerable. The five descriptive columns still populate here.
+    transcriptLang = null;
+    transcriptAvailableLangs = null;
   } else {
     // A real paid fetch. Rate-limit it first; a genuine RPC failure fails the request CLOSED (500)
     // rather than proceed to the very unbounded fetch this guard exists to prevent.
@@ -257,7 +268,7 @@ async function runGeneration({
     // unavailable transcript returns ok:false → 422. Neither has debited a credit yet.
     let transcript: Awaited<ReturnType<typeof fetchTranscript>>;
     try {
-      transcript = await fetchTranscript({ url, lang: "pl" }, supadataKey);
+      transcript = await fetchTranscript({ url }, supadataKey);
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error("fetchTranscript failed:", error);
@@ -274,6 +285,8 @@ async function runGeneration({
     }
     content = transcript.content;
     resolvedVia = transcript.resolvedVia;
+    transcriptLang = transcript.lang;
+    transcriptAvailableLangs = transcript.availableLangs;
   }
 
   const transcriptLength = content.length;
@@ -375,6 +388,8 @@ async function runGeneration({
       model: summary.model,
       resolvedVia,
       reservationId,
+      transcriptLang,
+      transcriptAvailableLangs,
     });
   } catch (error) {
     // eslint-disable-next-line no-console
