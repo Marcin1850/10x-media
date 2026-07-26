@@ -7,7 +7,13 @@ interface VideoRow {
   url: string;
   youtube_id: string;
   title: string | null;
-  thumbnail_url: string | null;
+  /** What Supadata last reported, never repaired — may 404. Consumers fall back to the derived `hqdefault.jpg`. */
+  thumbnail_url_reported: string | null;
+  channel_name: string | null;
+  duration_seconds: number | null;
+  published_at: string | null;
+  transcript_lang: string | null;
+  transcript_available_langs: string[] | null;
   created_at: string;
 }
 
@@ -92,6 +98,13 @@ export interface AppDatabase {
           p_content: string;
           p_model: string | null;
           p_resolved_via: string | null;
+          p_title: string | null;
+          p_thumbnail_url_reported: string | null;
+          p_channel_name: string | null;
+          p_duration_seconds: number | null;
+          p_published_at: string | null;
+          p_transcript_lang: string | null;
+          p_transcript_available_langs: string[] | null;
         };
         Returns: { outcome: string; video_id: string | null; summary_id: string | null }[];
       };
@@ -159,6 +172,22 @@ export interface PersistSummaryParams {
   resolvedVia: TranscriptResolvedVia | null;
   /** The reservation that paid for this summary. Persisted on the row AND closed in the same transaction (F23). */
   reservationId: string;
+  /**
+   * Descriptive video metadata, best-effort — omitted or null when the Supadata metadata call
+   * failed. Structurally the `VideoMetadata` DTO. The RPC coalesces every field on conflict, so a
+   * failed fetch here can never erase metadata an earlier generation of the same video captured.
+   */
+  metadata?: {
+    title: string | null;
+    thumbnailUrl: string | null;
+    channelName: string | null;
+    durationSeconds: number | null;
+    publishedAt: string | null;
+  } | null;
+  /** Which caption track Supadata actually returned. Diagnostic only — null on the cached-quote path. */
+  transcriptLang?: string | null;
+  /** The whole caption-track pool the transcript came from. Diagnostic only — null on the cached-quote path. */
+  transcriptAvailableLangs?: string[] | null;
 }
 
 /**
@@ -185,7 +214,19 @@ export type PersistSummaryResult = { ok: true; videoId: string; summaryId: strin
  */
 export async function persistSummaryAndSettle(
   admin: SupabaseClient,
-  { userId, url, youtubeId, character, content, model, resolvedVia, reservationId }: PersistSummaryParams,
+  {
+    userId,
+    url,
+    youtubeId,
+    character,
+    content,
+    model,
+    resolvedVia,
+    reservationId,
+    metadata = null,
+    transcriptLang = null,
+    transcriptAvailableLangs = null,
+  }: PersistSummaryParams,
 ): Promise<PersistSummaryResult> {
   // The admin client is supabase-js's untyped default (this repo has no generated Database types), so
   // narrow the RPC result at the boundary rather than destructuring `any` — same as transcript-guard.
@@ -198,6 +239,16 @@ export async function persistSummaryAndSettle(
     p_content: content,
     p_model: model,
     p_resolved_via: resolvedVia,
+    // The DTO stays vendor-shaped (`thumbnailUrl`); this is the layer that maps it onto the
+    // `thumbnail_url_reported` column, whose name records that the value is what Supadata said —
+    // never repaired against whether it actually resolves.
+    p_title: metadata?.title ?? null,
+    p_thumbnail_url_reported: metadata?.thumbnailUrl ?? null,
+    p_channel_name: metadata?.channelName ?? null,
+    p_duration_seconds: metadata?.durationSeconds ?? null,
+    p_published_at: metadata?.publishedAt ?? null,
+    p_transcript_lang: transcriptLang,
+    p_transcript_available_langs: transcriptAvailableLangs,
   })) as {
     data: { outcome: string; video_id: string | null; summary_id: string | null }[] | null;
     error: { message: string } | null;

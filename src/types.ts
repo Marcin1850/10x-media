@@ -9,7 +9,20 @@ export interface Video {
   url: string;
   youtube_id: string;
   title: string | null;
-  thumbnail_url: string | null;
+  /**
+   * The thumbnail URL exactly as Supadata last reported it — never repaired. Supadata returns
+   * `maxresdefault.jpg`, which does not exist for videos never uploaded above 480p, so a renderer
+   * must fall back on BOTH null and a 404 to the derived
+   * `https://i.ytimg.com/vi/<youtube_id>/hqdefault.jpg`, and must never write that fallback back.
+   */
+  thumbnail_url_reported: string | null;
+  channel_name: string | null;
+  duration_seconds: number | null;
+  published_at: string | null;
+  /** Which caption track the transcript came from. Diagnostic only — NOT the video's spoken language. */
+  transcript_lang: string | null;
+  /** The caption-track pool that track was chosen from. Diagnostic only. */
+  transcript_available_langs: string[] | null;
   created_at: string;
 }
 
