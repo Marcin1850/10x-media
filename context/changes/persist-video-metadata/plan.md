@@ -383,8 +383,8 @@ The real cost is monetary, not latency: `/metadata` is a flat 1 credit, doubling
 
 #### Automated
 
-- [ ] 3.1 Linting passes
-- [ ] 3.2 Build passes
+- [x] 3.1 Linting passes
+- [x] 3.2 Build passes
 
 #### Manual
 

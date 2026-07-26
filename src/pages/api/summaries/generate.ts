@@ -4,6 +4,7 @@ import { SUPADATA_API_KEY, OPENROUTER_API_KEY } from "astro:env/server";
 import { createClient } from "@/lib/supabase";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { fetchTranscript } from "@/lib/services/transcript";
+import { fetchVideoMetadata } from "@/lib/services/metadata";
 import { summarize } from "@/lib/services/llm";
 import {
   extractYoutubeId,
@@ -370,6 +371,27 @@ async function runGeneration({
     return Response.json({ error: "The summarization service failed. Please try again." }, { status: 502 });
   }
 
+  // Descriptive metadata for the saved row (S-08). Decorative: a failure persists nulls rather than
+  // discarding a summary that has already been paid for.
+  //
+  // The placement is load-bearing for three separate reasons. It keeps the two Supadata requests
+  // seconds apart on a plan that allows 1 req/s; it means the 402/413/409 exit paths above never
+  // spend a credit on a generation that does not happen; and it keeps an `allowLong` resubmit from
+  // paying for metadata twice. Do not move it earlier without revisiting all three — relocating it
+  // is S-09 lever B's job, not a free tidy-up.
+  //
+  // fetchVideoMetadata is total by contract, so this `try` is redundant BY DESIGN: the call sits
+  // after the debit but before the persistence `try`/`catch` below, so a regression that made it
+  // throw would bypass the refund and strand a reservation for reconciliation — a durable ledger
+  // row traded for a thumbnail. The redundancy costs three lines.
+  let metadata: Awaited<ReturnType<typeof fetchVideoMetadata>> = null;
+  try {
+    metadata = await fetchVideoMetadata({ url }, supadataKey);
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("fetchVideoMetadata threw despite being total:", error);
+  }
+
   // Persist AND settle in ONE transaction (F23). These used to be two calls — an RLS-client insert
   // followed by a best-effort settle — which left the ledger indistinguishable from failed work for
   // the whole duration of the LLM call above, so the one-hour reconciliation sweep could refund a
@@ -388,6 +410,7 @@ async function runGeneration({
       model: summary.model,
       resolvedVia,
       reservationId,
+      metadata,
       transcriptLang,
       transcriptAvailableLangs,
     });
