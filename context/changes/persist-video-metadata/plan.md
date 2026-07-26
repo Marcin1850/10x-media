@@ -399,8 +399,8 @@ The real cost is monetary, not latency: `/metadata` is a flat 1 credit, doubling
 
 #### Automated
 
-- [x] 4.1 `npx supabase db push` reports the migration applied
-- [x] 4.2 `npx wrangler deploy` completes without error
+- [x] 4.1 `npx supabase db push` reports the migration applied — 0a67e40
+- [x] 4.2 `npx wrangler deploy` completes without error — 0a67e40
 
 #### Manual
 
