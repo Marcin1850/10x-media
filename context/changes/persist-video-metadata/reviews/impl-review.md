@@ -6,6 +6,7 @@
 - **Date**: 2026-07-26
 - **Verdict**: NEEDS ATTENTION
 - **Findings**: 0 critical, 4 warnings, 4 observations
+- **Triage**: complete 2026-07-26 — F1, F2, F3, F4, F5, F8 fixed; F7 resolved by inspection (+ review comment posted); F6 skipped. Lint + build + `supabase migration up` green after the fixes. Outstanding: `supabase db push` for `20260726120000_videos_single_writer.sql`.
 
 ## Verdicts
 
@@ -45,7 +46,7 @@
   - Tradeoff: Does not cancel the underlying fetch, so the subrequest and possible vendor credit may continue after the function proceeds.
   - Confidence: MEDIUM — it bounds application waiting but not the actual upstream operation.
   - Blind spot: Cloudflare's handling of the orphaned fetch has not been verified.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A — `supadata.metadata()` replaced by a direct `GET /v1/metadata` (`requestMetadata()`) carrying `AbortSignal.timeout(10_000)`, mirroring the SDK's request shape and `SupadataError` mapping so retry classification is unchanged. Lint passes.
 
 ### F2 — Finite duration values are not necessarily PostgreSQL-safe
 
@@ -55,7 +56,7 @@
 - **Location**: `src/lib/services/metadata.ts:50`
 - **Detail**: `normaliseDuration()` accepts every finite number, including negatives and values outside PostgreSQL `integer` range. A malformed vendor value such as `3_000_000_000` reaches `p_duration_seconds integer` and aborts the atomic persist after the paid LLM call, contradicting the plan's column-safe normalization requirement.
 - **Fix**: Round first, then return the value only when it is between `0` and `2_147_483_647`; otherwise return null.
-- **Decision**: PENDING
+- **Decision**: FIXED — `normaliseDuration()` now rounds, then range-checks against `[0, PG_INT_MAX]` and returns null outside it.
 
 ### F3 — Authenticated clients can forge vendor-reported metadata
 
@@ -74,7 +75,7 @@
   - Tradeoff: More complex privilege maintenance; every future column must be classified correctly.
   - Confidence: MEDIUM — PostgreSQL supports the shape, but the required external compatibility is unknown.
   - Blind spot: No evidence currently identifies which columns an external client would legitimately own.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A — new migration `supabase/migrations/20260726120000_videos_single_writer.sql` revokes all on `public.videos` from `anon, authenticated`, re-grants only `select, delete` to `authenticated`, and drops the `videos_insert_authenticated` / `videos_update_authenticated` policies. Applied clean against the local database. **Not yet pushed to production** — needs `npx supabase db push`.
 
 ### F4 — Retry classification treats every unknown failure as transport-level
 
@@ -84,7 +85,7 @@
 - **Location**: `src/lib/services/metadata.ts:34`
 - **Detail**: The plan requires retrying `limit-exceeded` or a recognized transport rejection and returning null for unrecognized failures. `isRetryable()` instead returns true for every non-`SupadataError`, so arbitrary strings, programmer errors, or unexpected runtime failures trigger a second paid metadata attempt.
 - **Fix**: Return true only for `SupadataError` with `limit-exceeded` or a positively recognized fetch/transport error (for this runtime, a fetch-rejection `TypeError`); return false for unknown values.
-- **Decision**: PENDING
+- **Decision**: FIXED (user-adjusted) — `isRetryable()` is now an allow-list: `limit-exceeded`, a fetch-rejection `TypeError`, or a `TimeoutError` (checked by name). Everything else is non-retryable. Per the user's call, `TimeoutError` stays retryable and `METADATA_TIMEOUT_MS` stays at 10s, so the worst-case operation remains ~21s — judged acceptable.
 
 ### F5 — The shared metadata DTO is structurally duplicated
 
@@ -94,7 +95,7 @@
 - **Location**: `src/lib/services/summaries.ts:180`
 - **Detail**: `VideoMetadata` crosses the metadata service, endpoint, and persistence service, but `PersistSummaryParams.metadata` repeats its structure instead of importing a shared type. This conflicts with the repository convention that shared DTOs live in `src/types.ts` and allows the two shapes to drift silently.
 - **Fix**: Move `VideoMetadata` to `src/types.ts` and import it in both services, or at minimum import the existing type from `metadata.ts` into `summaries.ts`.
-- **Decision**: PENDING
+- **Decision**: FIXED — `VideoMetadata` now lives in `src/types.ts`; `metadata.ts` and `summaries.ts` both import it, and `PersistSummaryParams.metadata` is `VideoMetadata | null`. Lint + build pass.
 
 ### F6 — All behavioral and production success criteria remain pending
 
@@ -104,7 +105,7 @@
 - **Location**: `context/changes/persist-video-metadata/plan.md:363`
 - **Detail**: All eighteen Manual Progress rows are unchecked. The unverified behavior includes real seven-field persistence, non-Polish language capture, the large-pool warning, invalid-key and raw transport failure totality, coalescing on a second generation, the two-credit delta, the deployed production row, Worker logs, and reservation settlement. The roadmap discloses this accurately, so this is missing evidence rather than rubber-stamping.
 - **Fix**: Complete the manual checklist before archive and record evidence, prioritizing the transport-rejection/settlement, second-generation coalesce, production row, and production reservation checks because they cover the highest data-safety risk.
-- **Decision**: PENDING
+- **Decision**: SKIPPED — no follow-up file queued. The eighteen Manual rows stay unchecked in `plan.md` and the roadmap's disclosure stands as the record.
 
 ### F7 — Linear phase-4 synchronization is not verifiable
 
@@ -114,7 +115,7 @@
 - **Location**: N/A (`MAR-14`)
 - **Detail**: Phase 4 requires moving the Linear issue and adding a completion comment, reinforced by two accepted lessons. Commit `0a67e40` references `MAR-14` but contains no evidence of the issue state or comment, and no Linear connector is available in this session to inspect it.
 - **Fix**: Inspect MAR-14, set the lifecycle-appropriate state, and add a concise phase-completion plus implementation-review comment if either is missing.
-- **Decision**: PENDING
+- **Decision**: RESOLVED BY INSPECTION + FIXED — the Linear MCP server was available this session. MAR-14 moved to **In Progress** at 2026-07-26 12:52 and the phase-4 completion comment landed the same minute, so the sync did happen; only the commit lacked evidence of it. State is lifecycle-correct and unchanged (manual checks still gate completion). Added the missing implementation-review comment covering all eight findings and their decisions.
 
 ### F8 — Roadmap frontmatter was not refreshed with the rollout
 
@@ -124,4 +125,4 @@
 - **Location**: `context/foundation/roadmap.md:6`
 - **Detail**: Phase 4 updated all three S-08 status surfaces with 2026-07-26 rollout information, but the roadmap frontmatter still says `updated: 2026-07-25`.
 - **Fix**: Set the roadmap frontmatter `updated` field to `2026-07-26`.
-- **Decision**: PENDING
+- **Decision**: FIXED — `context/foundation/roadmap.md` frontmatter now reads `updated: 2026-07-26`.

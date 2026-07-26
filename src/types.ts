@@ -26,6 +26,23 @@ export interface Video {
   created_at: string;
 }
 
+/**
+ * The descriptive fields S-08 persists, normalised to be safe for their typed columns. Field names
+ * stay vendor-shaped (`thumbnailUrl`); mapping onto `thumbnail_url_reported` happens in the persist
+ * layer, where the column name records that the value is what Supadata said and is never repaired.
+ *
+ * Shared rather than local because it crosses three modules — the metadata service produces it, the
+ * generate endpoint carries it, the persistence service writes it — and a second structural copy
+ * would let the producer and the writer drift apart silently.
+ */
+export interface VideoMetadata {
+  title: string | null;
+  thumbnailUrl: string | null;
+  channelName: string | null;
+  durationSeconds: number | null;
+  publishedAt: string | null;
+}
+
 export interface Summary {
   id: string;
   user_id: string;

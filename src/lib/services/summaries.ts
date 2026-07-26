@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { ChannelCharacter, TranscriptResolvedVia } from "@/types";
+import type { ChannelCharacter, TranscriptResolvedVia, VideoMetadata } from "@/types";
 
 interface VideoRow {
   id: string;
@@ -174,16 +174,10 @@ export interface PersistSummaryParams {
   reservationId: string;
   /**
    * Descriptive video metadata, best-effort — omitted or null when the Supadata metadata call
-   * failed. Structurally the `VideoMetadata` DTO. The RPC coalesces every field on conflict, so a
-   * failed fetch here can never erase metadata an earlier generation of the same video captured.
+   * failed. The RPC coalesces every field on conflict, so a failed fetch here can never erase
+   * metadata an earlier generation of the same video captured.
    */
-  metadata?: {
-    title: string | null;
-    thumbnailUrl: string | null;
-    channelName: string | null;
-    durationSeconds: number | null;
-    publishedAt: string | null;
-  } | null;
+  metadata?: VideoMetadata | null;
   /** Which caption track Supadata actually returned. Diagnostic only — null on the cached-quote path. */
   transcriptLang?: string | null;
   /** The whole caption-track pool the transcript came from. Diagnostic only — null on the cached-quote path. */

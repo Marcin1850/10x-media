@@ -1,17 +1,5 @@
-import { Supadata, SupadataError } from "@supadata/js";
-
-/**
- * The descriptive fields S-08 persists, normalised to be safe for their typed columns. Field names
- * stay vendor-shaped (`thumbnailUrl`); mapping onto `thumbnail_url_reported` happens in the persist
- * layer, where the column name records that the value is what Supadata said and is never repaired.
- */
-export interface VideoMetadata {
-  title: string | null;
-  thumbnailUrl: string | null;
-  channelName: string | null;
-  durationSeconds: number | null;
-  publishedAt: string | null;
-}
+import { SupadataError, type Metadata } from "@supadata/js";
+import type { VideoMetadata } from "@/types";
 
 /** Past the rate-limit window on the Free plan's 1 req/s, with margin. */
 const RETRY_DELAY_MS = 1200;
@@ -20,23 +8,96 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** The origin `@supadata/js` targets. Called directly, for the reason on `METADATA_TIMEOUT_MS`. */
+const SUPADATA_BASE_URL = "https://api.supadata.ai/v1";
+
 /**
- * Only two failures are worth a second attempt: a rate-limit breach (the 1 req/s Free-plan cap) and
- * a transport-level rejection, which is a rejection carrying no recognised SupadataError shape — a
- * DNS failure, a socket reset, a Workers subrequest cap. Every documented error code
- * (`not-found`, `invalid-request`, `transcript-unavailable`, `internal-error`, `upgrade-required`,
- * `unauthorized`) is permanent, and retrying one only appends latency to a generation that has
- * already been paid for and completed.
+ * Wall-clock deadline for one metadata attempt, and the reason this module issues its own request
+ * rather than calling `supadata.metadata()`: the SDK's `fetch` carries no `AbortSignal`, and
+ * Cloudflare caps only CPU time — waiting on a subrequest is not CPU time — so an SDK call has
+ * nothing bounding it.
+ *
+ * That gap costs more here than anywhere else in the pipeline. This call runs AFTER the credit debit
+ * and the paid LLM call, so a stalled request holds the generation lease, the credit reservation and
+ * the client's HTTP response open — indefinitely, for a value that is decorative. Only a real
+ * `AbortSignal` cancels the subrequest; racing a timer would leave it running. Same guarantee, same
+ * mechanism as the bounded provider call in `llm.ts`.
+ *
+ * 10s is generous for a metadata lookup, and a retry may spend a second one: the operation is bounded
+ * at ~21s including the rate-limit delay.
+ */
+const METADATA_TIMEOUT_MS = 10_000;
+
+/** Narrows the `{ error, message, details }` body Supadata returns on a failed request. */
+function isErrorBody(body: unknown): body is { error: SupadataError["error"]; message?: string; details?: string } {
+  return typeof body === "object" && body !== null && typeof (body as { error?: unknown }).error === "string";
+}
+
+/**
+ * `GET /v1/metadata`, with a deadline. Deliberately mirrors the SDK's request shape and its error
+ * mapping — every failure response, non-JSON body and parse failure still surfaces as a typed
+ * `SupadataError` — so `isRetryable` sees the same vendor error codes it would have seen through the
+ * SDK. The `AbortSignal` is the only intended behavioural difference.
+ */
+async function requestMetadata(url: string, apiKey: string): Promise<Metadata> {
+  const response = await fetch(`${SUPADATA_BASE_URL}/metadata?url=${encodeURIComponent(url)}`, {
+    headers: { "x-api-key": apiKey, "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(METADATA_TIMEOUT_MS),
+  });
+
+  const isJson = response.headers.get("content-type")?.includes("application/json") ?? false;
+
+  if (!response.ok) {
+    const body = isJson ? ((await response.json().catch(() => null)) as unknown) : null;
+    if (isErrorBody(body)) throw new SupadataError(body);
+    throw new SupadataError({
+      error: "internal-error",
+      message: "Unexpected error response format",
+      details: `Supadata responded ${response.status}`,
+    });
+  }
+
+  if (!isJson) {
+    throw new SupadataError({
+      error: "internal-error",
+      message: "Invalid response format",
+      details: "Expected JSON response but received different content type",
+    });
+  }
+
+  try {
+    return (await response.json()) as Metadata;
+  } catch (error) {
+    throw new SupadataError({
+      error: "internal-error",
+      message: "Failed to parse response",
+      details: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+}
+
+/**
+ * Retryable is an allow-list, not a fallback. Three failures are worth a second attempt: a
+ * rate-limit breach (the 1 req/s Free-plan cap), a transport-level rejection (`fetch` rejects with a
+ * `TypeError` on a DNS failure, socket reset or Workers subrequest cap), and our own deadline
+ * (`AbortSignal.timeout` aborts with a `TimeoutError`).
+ *
+ * Everything else returns false. The remaining documented error codes (`not-found`,
+ * `invalid-request`, `transcript-unavailable`, `internal-error`, `upgrade-required`, `unauthorized`)
+ * are permanent, and an unrecognised rejection — a thrown string, a programmer error, an unexpected
+ * runtime failure — is not evidence of a transient fault. Treating either as transient would spend a
+ * second Supadata credit and append latency to a generation that has already been paid for and
+ * completed.
  *
  * Never throws, whatever shape it is handed — it runs inside the catch that makes the whole call
- * total, so a classifier that threw would defeat the guarantee it exists to support.
+ * total, so a classifier that threw would defeat the guarantee it exists to support. The
+ * `TimeoutError` check is by name rather than `instanceof DOMException` for the same reason: it
+ * holds regardless of how the runtime models the abort reason.
  */
 function isRetryable(error: unknown): boolean {
-  if (error instanceof SupadataError) {
-    return error.error === "limit-exceeded";
-  }
-  // Not a SupadataError: the SDK never recognised the response, so this is transport-level.
-  return true;
+  if (error instanceof SupadataError) return error.error === "limit-exceeded";
+  if (error instanceof TypeError) return true;
+  return typeof error === "object" && error !== null && (error as { name?: unknown }).name === "TimeoutError";
 }
 
 /** Re-emits a vendor date string as ISO, or null. Never hands a raw vendor value to a timestamptz. */
@@ -46,9 +107,18 @@ function normalisePublishedAt(createdAt: unknown): string | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
-/** Rounds a vendor duration only when it is a finite number, else null. `integer` column. */
+/** Largest value PostgreSQL's `integer` holds — the ceiling `duration_seconds` is declared with. */
+const PG_INT_MAX = 2_147_483_647;
+
+/**
+ * Rounds a vendor duration to a value the `integer` column actually accepts, else null. Finiteness
+ * alone is not enough: a negative or out-of-range number is a perfectly finite `number` that
+ * PostgreSQL rejects, and the rejection would abort the persist of a summary already paid for.
+ */
 function normaliseDuration(duration: unknown): number | null {
-  return typeof duration === "number" && Number.isFinite(duration) ? Math.round(duration) : null;
+  if (typeof duration !== "number" || !Number.isFinite(duration)) return null;
+  const rounded = Math.round(duration);
+  return rounded >= 0 && rounded <= PG_INT_MAX ? rounded : null;
 }
 
 /**
@@ -69,16 +139,14 @@ function normaliseDuration(duration: unknown): number | null {
  * Costs a flat 1 Supadata credit per call — see `docs/supadata-metadata.md` §Pricing.
  */
 export async function fetchVideoMetadata({ url }: { url: string }, apiKey: string): Promise<VideoMetadata | null> {
-  const supadata = new Supadata({ apiKey });
-
   try {
     let metadata;
     try {
-      metadata = await supadata.metadata({ url });
+      metadata = await requestMetadata(url, apiKey);
     } catch (error) {
       if (!isRetryable(error)) throw error;
       await sleep(RETRY_DELAY_MS);
-      metadata = await supadata.metadata({ url });
+      metadata = await requestMetadata(url, apiKey);
     }
 
     // `media` is a union — only `VideoMedia` carries `duration` and `thumbnailUrl`. A non-video

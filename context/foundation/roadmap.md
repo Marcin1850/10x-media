@@ -3,7 +3,7 @@ project: "10xMedia"
 version: 1
 status: draft
 created: 2026-06-11
-updated: 2026-07-25
+updated: 2026-07-26
 prd_version: 1
 main_goal: speed
 top_blocker: external
