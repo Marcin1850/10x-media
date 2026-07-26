@@ -369,8 +369,8 @@ The real cost is monetary, not latency: `/metadata` is a flat 1 credit, doubling
 
 #### Automated
 
-- [x] 2.1 Linting passes
-- [x] 2.2 Build passes
+- [x] 2.1 Linting passes — 6553ac0
+- [x] 2.2 Build passes — 6553ac0
 
 #### Manual
 
@@ -383,8 +383,8 @@ The real cost is monetary, not latency: `/metadata` is a flat 1 credit, doubling
 
 #### Automated
 
-- [x] 3.1 Linting passes
-- [x] 3.2 Build passes
+- [x] 3.1 Linting passes — 17e9730
+- [x] 3.2 Build passes — 17e9730
 
 #### Manual
 
@@ -399,8 +399,8 @@ The real cost is monetary, not latency: `/metadata` is a flat 1 credit, doubling
 
 #### Automated
 
-- [ ] 4.1 `npx supabase db push` reports the migration applied
-- [ ] 4.2 `npx wrangler deploy` completes without error
+- [x] 4.1 `npx supabase db push` reports the migration applied
+- [x] 4.2 `npx wrangler deploy` completes without error
 
 #### Manual
 
