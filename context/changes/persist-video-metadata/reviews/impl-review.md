@@ -4,20 +4,22 @@
 - **Plan**: `context/changes/persist-video-metadata/plan.md`
 - **Scope**: All implementation work, Phases 1–4 of 4
 - **Date**: 2026-07-26
-- **Verdict**: NEEDS ATTENTION at review time → **APPROVED** after remediation (2026-07-26)
-- **Findings**: 0 critical, 4 warnings, 4 observations
-- **Triage**: complete 2026-07-26 — F1, F2, F3, F4, F5, F8 fixed; F7 resolved by inspection (+ review comment posted); **F6 re-opened and executed** (was SKIPPED). Lint + build + `supabase migration up` green after the fixes. No outstanding items: the `20260726120000_videos_single_writer.sql` push was confirmed already applied to production, and all 27 Progress rows are now verified.
+- **Verdict**: NEEDS ATTENTION at review time → APPROVED after remediation (2026-07-26) → **NEEDS ATTENTION (2026-07-27)** — the manual run surfaced three new findings, all PENDING
+- **Findings**: 0 critical, 5 warnings, 6 observations (F1–F8 from the static review; F9–F11 from the manual verification run)
+- **Triage**: F1–F8 complete 2026-07-26 — F1, F2, F3, F4, F5, F8 fixed; F7 resolved by inspection (+ review comment posted); **F6 re-opened and executed** (was SKIPPED). Lint + build + `supabase migration up` green after the fixes; the `20260726120000_videos_single_writer.sql` push was confirmed already applied to production and all 27 Progress rows are verified. **F9–F11 awaiting triage** — behavioural findings that only real generations could surface.
 
 ## Verdicts
 
-| Dimension | At review | After remediation |
-|-----------|-----------|-------------------|
-| Plan Adherence | WARNING | PASS — F4, F7 closed |
-| Scope Discipline | PASS | PASS |
-| Safety & Quality | WARNING | PASS — F1, F2, F3 closed |
-| Architecture | PASS | PASS |
-| Pattern Consistency | WARNING | PASS — F5, F8 closed |
-| Success Criteria | WARNING | PASS — 27/27 rows verified |
+| Dimension | At review | After remediation | After manual run |
+|-----------|-----------|-------------------|------------------|
+| Plan Adherence | WARNING | PASS — F4, F7 closed | WARNING — F9, F11 open |
+| Scope Discipline | PASS | PASS | PASS |
+| Safety & Quality | WARNING | PASS — F1, F2, F3 closed | PASS |
+| Architecture | PASS | PASS | WARNING — F10 open |
+| Pattern Consistency | WARNING | PASS — F5, F8 closed | PASS |
+| Success Criteria | WARNING | PASS — 27/27 rows verified | PASS |
+
+The regression from APPROVED is not new defects in the delivered code — F1–F8 all stand closed. It is that running the manual suite converted three unknowns into named risks: one product-level (F9), one data-completeness (F10), one calibration (F11). None blocks archive on its own; F9 is the one that needs a decision rather than a patch.
 
 ## Verification
 
@@ -160,3 +162,50 @@
 - **Detail**: Phase 4 updated all three S-08 status surfaces with 2026-07-26 rollout information, but the roadmap frontmatter still says `updated: 2026-07-25`.
 - **Fix**: Set the roadmap frontmatter `updated` field to `2026-07-26`.
 - **Decision**: FIXED — `context/foundation/roadmap.md` frontmatter now reads `updated: 2026-07-26`.
+
+---
+
+> **F9–F11 were raised by the 2026-07-26 manual verification run, not by the original static review.** They are behavioural findings that only real generations could surface, and they are recorded here (2026-07-27) so triage happens against the same report.
+
+### F9 — Supadata returns machine-translated caption tracks, contradicting a recorded product decision
+
+- **Severity**: ⚠️ WARNING
+- **Impact**: 🔴 HIGH — architectural stakes; think carefully before deciding
+- **Dimension**: Plan Adherence
+- **Location**: `src/lib/services/transcript.ts:55`
+- **Detail**: `change.md` records the user decision "never trade the original transcript for a machine-translated one", and the plan's answer was to drop the `lang: "pl"` request so the vendor would hand back the native track. Manual verification shows that is not what happens. `mode: "auto"` returned `de` for the English `jNQXAC9IVRw` (pool `{en, de}`) and `af` for the English TED talk `iG9CE55wbtY` (pool of 61) — two of three videos were summarised from a translated track rather than the source. The German wording reached the delivered output: the summary describes the elephants' "Rüssel". Output *language* is unaffected (the prompt controls that, verified by 2.5), but summary *fidelity* now depends on a translation the app never chose, and Supadata exposes no parameter to request "the original track". Dropping `lang: "pl"` removed the app's own worst lever without removing the underlying exposure — the plan's premise, not its implementation, is what fails here.
+- **Fix A ⭐ Recommended**: Escalate to a follow-up change against S-01/S-02 rather than patching S-08; leave `transcript_lang` / `transcript_available_langs` accumulating as the evidence base.
+  - Strength: The response is a product decision — accept degraded fidelity, warn the user, or restrict the corpus — not a code change; the diagnostic columns this slice added exist precisely to inform it and now carry their first real data.
+  - Tradeoff: Ships a known fidelity risk into S-01/S-02 in the meantime.
+  - Confidence: HIGH — confirmed by three independent runs, with the leak visible in delivered output.
+  - Blind spot: All three observations are local; no production row has language data yet (see F10), so the real-world frequency is unmeasured.
+- **Fix B**: Probe the vendor first — test whether an explicit `lang`, or any other parameter, can pin the source track, then decide with that evidence in hand.
+  - Strength: Turns "no lever exists" from an assumption into a verified fact before a product decision is built on it.
+  - Tradeoff: Costs several Supadata credits, may conclude nothing is available, and re-introduces the very `lang` parameter the plan deliberately removed.
+  - Confidence: MEDIUM — the docs are silent on original-track selection.
+  - Blind spot: Whether `lang` *requests a translation* or *selects an existing track* is exactly the undocumented behaviour in question.
+- **Decision**: PENDING
+
+### F10 — The quote cache silently drops both language columns
+
+- **Severity**: ℹ️ OBSERVATION
+- **Impact**: 🟡 MEDIUM — real tradeoff; pause to reason through it
+- **Dimension**: Architecture
+- **Location**: `src/pages/api/summaries/generate.ts:248`, `supabase/migrations/20260722130000_transcript_spend_guards.sql:123`
+- **Detail**: `transcript_quotes` stores `transcript_content` and `resolved_via` only, so the `allowLong` confirmation resubmit — the one path that reads a transcript from cache — has no language data to persist and writes null to both columns. The plan documents this as known and accepted. What the manual run adds is the *shape* of the gap: only transcripts over 40,000 characters trigger the 409/confirm/cache path, so the nulls are not randomly distributed. They fall exclusively on long videos, and only when confirmation lands inside the 600-second TTL (`transcript-guard.ts:27`) — a late confirmation misses the cache, re-fetches, and populates both columns normally at the cost of one extra Supadata credit. The production row from 4.3 is exactly this case. The diagnostic columns are therefore systematically blind to the longest content, which is where an unnoticed translated track (F9) does the most damage.
+- **Fix**: Widen the quote cache — add `lang text` and `available_langs text[]` to `transcript_quotes`, extend the `save_transcript_quote` RPC signature and the `saveTranscriptQuote` / `getTranscriptQuote` wrappers, and read them back in the cache-hit branch instead of hardcoding null.
+  - Strength: Removes the bias at source; both values are already in hand at `saveTranscriptQuote` call time, so nothing extra is fetched or paid for.
+  - Tradeoff: A migration plus an RPC signature change across four files, for data that is diagnostic only and never rendered.
+  - Confidence: HIGH — mechanical, and the columns mirror ones that already exist on `videos`.
+  - Blind spot: Whether existing null rows need backfilling or can stay indistinguishable from genuine nulls.
+- **Decision**: PENDING
+
+### F11 — The large-pool threshold flags human translation, not auto-translation
+
+- **Severity**: ℹ️ OBSERVATION
+- **Impact**: 🟢 LOW — quick decision; fix is obvious and narrowly scoped
+- **Dimension**: Plan Adherence
+- **Location**: `src/lib/services/transcript.ts:25`
+- **Detail**: `LARGE_LANG_POOL_THRESHOLD = 15` was set on the reasoning that a native caption set runs 1–3 tracks while a YouTube auto-translation pool exposes 100+, and its own comment marks it a first guess to revisit once real rows exist. Observed pools are 2, 5 and 61. The only pool that crossed the threshold belongs to TED, whose 61 tracks are *human* translations — so the single firing to date is a false positive against the constant's stated purpose, and nothing near the 100+ auto-translation scale ever appeared. The plan's own revisit condition is now met, but on three local data points and none from production.
+- **Fix**: Leave the value at 15 and revisit once production rows accumulate — three local samples are too thin to retune on, and the warning is diagnostic-only, so a false positive costs nothing but a log line.
+- **Decision**: PENDING
