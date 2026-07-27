@@ -16,29 +16,15 @@ const JOB_POLL_BACKOFF_FACTOR = 2;
 const JOB_POLL_MAX_INTERVAL_MS = 30000;
 const JOB_POLL_MAX_ATTEMPTS = 12; // ~4 minutes of total coverage at 12 subrequests
 
-// A video's own caption set is typically 1-3 tracks (the uploader's language, maybe a manual
-// translation or two). YouTube's auto-translation feature instead exposes 100+ machine-translated
-// tracks off a single source. A threshold around 15 separates the two without firing on a channel
-// that publishes a handful of human translations. Explicitly a FIRST GUESS: this is the observational
-// half of the open vendor question — whether auto-translated tracks enter Supadata's pool at all —
-// and it should be revisited once `transcript_available_langs` has real rows behind it.
-const LARGE_LANG_POOL_THRESHOLD = 15;
+// A caption-pool-size warning used to live here (`LARGE_LANG_POOL_THRESHOLD = 15`). Removed in F11:
+// pool size was only ever a proxy for "we may not have the original track", chosen when this function
+// sent no `lang` at all and nothing better was available. It measured the wrong thing — it fired on
+// TED's 61 *human* translations while staying silent on the `{en, de}` video that actually served
+// German. `transcript_lang` / `transcript_available_langs` record the same facts queryably, across
+// every row rather than whichever ones a log retention window happens to cover.
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Flags a caption pool big enough to imply YouTube auto-translation. Diagnostic only — the transcript
- * is used either way, because Supadata gives no way to ask for "the original track" specifically.
- */
-function warnOnLargeLangPool(url: string, lang: string, availableLangs: string[]): void {
-  if (availableLangs.length > LARGE_LANG_POOL_THRESHOLD) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      `Large caption-language pool for ${url}: returned lang '${lang}', ${availableLangs.length} available languages — possible YouTube auto-translation`,
-    );
-  }
 }
 
 /**
@@ -70,14 +56,12 @@ export async function fetchTranscript({ url }: { url: string }, apiKey: string):
     const result = await supadata.transcript({ url, text: true, mode: "auto", lang: "en" });
 
     if ("jobId" in result) {
-      return await pollTranscriptJob(supadata, result.jobId, url);
+      return await pollTranscriptJob(supadata, result.jobId);
     }
 
     if (typeof result.content !== "string") {
       return { ok: false, reason: "unavailable" };
     }
-
-    warnOnLargeLangPool(url, result.lang, result.availableLangs);
 
     return {
       ok: true,
@@ -94,7 +78,7 @@ export async function fetchTranscript({ url }: { url: string }, apiKey: string):
   }
 }
 
-async function pollTranscriptJob(supadata: Supadata, jobId: string, url: string): Promise<TranscriptResult> {
+async function pollTranscriptJob(supadata: Supadata, jobId: string): Promise<TranscriptResult> {
   let interval = JOB_POLL_INITIAL_INTERVAL_MS;
 
   for (let attempt = 0; attempt < JOB_POLL_MAX_ATTEMPTS; attempt++) {
@@ -103,7 +87,6 @@ async function pollTranscriptJob(supadata: Supadata, jobId: string, url: string)
 
     if (job.status === "completed") {
       if (job.result && typeof job.result.content === "string") {
-        warnOnLargeLangPool(url, job.result.lang, job.result.availableLangs);
         return {
           ok: true,
           content: job.result.content,

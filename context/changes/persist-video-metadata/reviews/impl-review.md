@@ -4,22 +4,27 @@
 - **Plan**: `context/changes/persist-video-metadata/plan.md`
 - **Scope**: All implementation work, Phases 1–4 of 4
 - **Date**: 2026-07-26
-- **Verdict**: NEEDS ATTENTION at review time → APPROVED after remediation (2026-07-26) → **NEEDS ATTENTION (2026-07-27)** — the manual run surfaced three new findings, all PENDING
-- **Findings**: 0 critical, 5 warnings, 6 observations (F1–F8 from the static review; F9–F11 from the manual verification run)
-- **Triage**: F1–F8 complete 2026-07-26 — F1, F2, F3, F4, F5, F8 fixed; F7 resolved by inspection (+ review comment posted); **F6 re-opened and executed** (was SKIPPED). Lint + build + `supabase migration up` green after the fixes; the `20260726120000_videos_single_writer.sql` push was confirmed already applied to production and all 27 Progress rows are verified. **F9–F11 awaiting triage** — behavioural findings that only real generations could surface.
+- **Verdict**: NEEDS ATTENTION at review time → APPROVED after remediation (2026-07-26) → NEEDS ATTENTION (2026-07-27, manual run surfaced F9–F11) → **APPROVED PENDING RE-VERIFICATION (2026-07-27)** — all eleven findings are closed in code; three manual Progress rows need re-running before archive
+- **Findings**: 0 critical, 5 warnings, 6 observations (F1–F8 from the static review; F9–F11 from the manual verification run). **All 11 triaged, none skipped.**
+- **Triage**: F1–F8 complete 2026-07-26 — F1, F2, F3, F4, F5, F8 fixed; F7 resolved by inspection (+ review comment posted); **F6 re-opened and executed** (was SKIPPED). **F9–F11 complete 2026-07-27** — F9 fixed via probe-then-code (`lang: "en"`, commit `c367866`), F10 fixed (quote cache widened, commit `507d3c3`), F11 fixed differently (pool-size warning removed entirely). Lint, build and `supabase migration up` green throughout.
+- **Open before archive**: three manual Progress rows no longer match shipped behaviour — **2.3** and **2.5** were verified against the no-`lang` build (re-run), and **2.6** verifies a warning that no longer exists (strike). Progress is **24/27**, not 27/27. Nothing is known-broken; the evidence is simply stale.
 
 ## Verdicts
 
-| Dimension | At review | After remediation | After manual run |
-|-----------|-----------|-------------------|------------------|
-| Plan Adherence | WARNING | PASS — F4, F7 closed | WARNING — F9, F11 open |
-| Scope Discipline | PASS | PASS | PASS |
-| Safety & Quality | WARNING | PASS — F1, F2, F3 closed | PASS |
-| Architecture | PASS | PASS | WARNING — F10 open |
-| Pattern Consistency | WARNING | PASS — F5, F8 closed | PASS |
-| Success Criteria | WARNING | PASS — 27/27 rows verified | PASS |
+| Dimension | At review | After remediation | After manual run | After F9–F11 triage |
+|-----------|-----------|-------------------|------------------|---------------------|
+| Plan Adherence | WARNING | PASS — F4, F7 closed | WARNING — F9, F11 open | PASS — F9, F11 closed |
+| Scope Discipline | PASS | PASS | PASS | PASS |
+| Safety & Quality | WARNING | PASS — F1, F2, F3 closed | PASS | PASS |
+| Architecture | PASS | PASS | WARNING — F10 open | PASS — F10 closed |
+| Pattern Consistency | WARNING | PASS — F5, F8 closed | PASS | PASS |
+| Success Criteria | WARNING | PASS — 27/27 rows verified | PASS | WARNING — 24/27, three rows stale |
 
-The regression from APPROVED is not new defects in the delivered code — F1–F8 all stand closed. It is that running the manual suite converted three unknowns into named risks: one product-level (F9), one data-completeness (F10), one calibration (F11). None blocks archive on its own; F9 is the one that needs a decision rather than a patch.
+The regression from APPROVED was never new defects in the delivered code — F1–F8 all stand closed. Running the manual suite converted three unknowns into named risks: one product-level (F9), one data-completeness (F10), one calibration (F11).
+
+All three are now closed, and the order mattered: **F9's probe changed what F10 and F11 were worth.** F10 was documented and accepted as a known gap until the fetch started requesting `lang: "en"` — at which point the language columns became the instrument for measuring that change's residual risk, and a blind spot correlated with video length stopped being tolerable. F11's threshold existed only as a proxy for a question the probe answered outright, so the right move turned out to be deleting it rather than retuning it. Triaging these three independently would have produced three worse decisions.
+
+The one dimension still short of PASS is Success Criteria, and for a benign reason: fixing F9 and F11 changed behaviour that three manual rows had already certified. That is stale evidence, not a defect.
 
 ## Verification
 
@@ -27,7 +32,8 @@ The regression from APPROVED is not new defects in the delivered code — F1–F
 - `npm.cmd run build` — PASS. Astro's Cloudflare SSR build completed successfully; the sitemap integration repeated its existing missing-`site` warning.
 - `npx.cmd supabase migration up` — PASS against the local database (`Migrations applied`, with no pending migration left to apply).
 - `npx supabase db push` and `npx wrangler deploy` — **both independently confirmed 2026-07-26**, closing the gap this section originally flagged. `npx supabase migration list` shows every migration through `20260726120000` present remotely; `npx wrangler deployments list` shows version `52657520-eac9-47fe-85a4-19f726db4f79` deployed at 12:50:00Z, and a live `wrangler tail` reports that same version serving production traffic. Commit `0a67e40`'s record is accurate.
-- Progress was **9/27 (33%)** at review time. After the 2026-07-26 manual run it is **27/27 (100%)**: all nine automated rows and all eighteen manual rows, local and production. One row (4.3) carries a documented caveat rather than a clean pass — see F6.
+- Progress was **9/27 (33%)** at review time. After the 2026-07-26 manual run it reached **27/27 (100%)**: all nine automated rows and all eighteen manual rows, local and production. One row (4.3) carries a documented caveat rather than a clean pass — see F6.
+- After the 2026-07-27 triage it stands at **24/27**. The F9 and F11 fixes changed transcript-path behaviour that three rows had certified against the previous build: **2.3** and **2.5** need re-running, **2.6** should be struck (the warning it verifies was removed). Lint, build and `supabase migration up` were re-run green after each of the two commits.
 
 ## Findings
 
@@ -233,4 +239,14 @@ The regression from APPROVED is not new defects in the delivered code — F1–F
 - **Location**: `src/lib/services/transcript.ts:25`
 - **Detail**: `LARGE_LANG_POOL_THRESHOLD = 15` was set on the reasoning that a native caption set runs 1–3 tracks while a YouTube auto-translation pool exposes 100+, and its own comment marks it a first guess to revisit once real rows exist. Observed pools are 2, 5 and 61. The only pool that crossed the threshold belongs to TED, whose 61 tracks are *human* translations — so the single firing to date is a false positive against the constant's stated purpose, and nothing near the 100+ auto-translation scale ever appeared. The plan's own revisit condition is now met, but on three local data points and none from production.
 - **Fix**: Leave the value at 15 and revisit once production rows accumulate — three local samples are too thin to retune on, and the warning is diagnostic-only, so a false positive costs nothing but a log line.
-- **Decision**: PENDING
+- **Decision**: **FIXED DIFFERENTLY — warning removed entirely (2026-07-27).** The proposed fix (keep 15, revisit later) was rejected on the grounds that retuning the number was never the real question.
+
+  The threshold was a *proxy*. It was chosen when `fetchTranscript` sent no `lang` at all, so pool size was the only signal available for "we may not have the original track". Measured against the three observed pools it is backwards on both counts: it fires on TED's 61 **human** translations and stays silent on the `{en, de}` video that actually served German. Nothing near the 100+ auto-translation scale its comment reasoned about ever appeared.
+
+  F9 then removed the reason to keep a proxy at all. With `lang: "en"` requested, the precise signal is `result.lang !== "en"` — the fallback fired and an arbitrary track was taken. A mismatch check would have fired on both real failures (`de`, `af`) and stayed quiet on the healthy fetch.
+
+  Per the user's call, the warning was **dropped** rather than re-pointed at that mismatch: `transcript_lang` and `transcript_available_langs` already record the same facts queryably, across every row, instead of only those a log-retention window happens to cover — and after F10 they no longer skew toward short videos. A `console.warn` would be a strictly weaker copy of a column.
+
+  Removed: `LARGE_LANG_POOL_THRESHOLD`, `warnOnLargeLangPool`, both call sites, and `pollTranscriptJob`'s now-dead `url` parameter. A comment records why the constant is gone, so the reasoning isn't rediscovered from scratch. Lint + build pass.
+
+  ⚠️ **Manual Progress row 2.6** ("the large-pool warning fires") no longer describes shipped behaviour — the warning it verifies does not exist. The row should be struck rather than re-run.

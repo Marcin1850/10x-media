@@ -18,7 +18,9 @@ Populate `videos` with the descriptive metadata a saved summary needs to be reco
 
 After a successful generation **on the fresh-transcript path**, the `videos` row for that YouTube ID carries `title`, `thumbnail_url_reported`, `channel_name`, `duration_seconds`, `published_at`, `transcript_lang` and `transcript_available_langs` — with nulls only where Supadata genuinely had nothing or the metadata call failed.
 
-One accepted exception: a generation resumed from a cached quote (the `allowLong` confirmation path) always leaves `transcript_lang` and `transcript_available_langs` null, because the quote cache stores no language fields and widening it is explicitly out of scope. The five descriptive columns still populate on that path. The transcript request no longer sends `lang`, so the returned track is whatever Supadata considers first-available rather than a Polish track that may be machine-translated. Nothing renders yet.
+~~One accepted exception: a generation resumed from a cached quote (the `allowLong` confirmation path) always leaves `transcript_lang` and `transcript_available_langs` null, because the quote cache stores no language fields and widening it is explicitly out of scope.~~ The five descriptive columns still populate on that path. ~~The transcript request no longer sends `lang`, so the returned track is whatever Supadata considers first-available rather than a Polish track that may be machine-translated.~~ Nothing renders yet.
+
+> **Both struck 2026-07-27 by impl-review triage.** The exception is gone — F10 widened the quote cache, so the `allowLong` path now persists both language columns (`20260727120000_transcript_quote_langs.sql`). And the transcript request sends `lang: "en"` again, because F9's probe showed that omitting `lang` does *not* return the original track: the vendor's first-available default ignored pool order and served German for an English video. See §Manual Verification Findings.
 
 Verify with a real generation against a local Supabase stack, then:
 
@@ -34,7 +36,7 @@ from public.videos order by created_at desc limit 1;
 - **`thumbnail_url` has never held a value and has no readers** — only two type declarations (`src/types.ts:12`, `src/lib/services/summaries.ts:10`). That makes renaming it to `thumbnail_url_reported` free *now* and expensive after S-02 renders it.
 - Widening a Postgres function's parameter list via `create or replace` produces a **second overload**, not a replacement, and PostgREST then has to disambiguate. Grants are signature-scoped too (`20260723120000_atomic_persist_summary.sql:136-139`).
 - `Metadata.media` is a union (`VideoMedia | ImageMedia | CarouselMedia | PostMedia`); only `VideoMedia` has `duration` and `thumbnailUrl`. `Metadata.title` is `string | null`.
-- **The long-video confirmation path has no transcript in hand.** `transcript_quotes` stores `transcript_content` + `resolved_via` only (`transcript-guard.ts:51-52`), so an `allowLong` resubmit has no `lang`/`availableLangs`. Accepted: those two columns are diagnostic, and null on that path is tolerable.
+- ~~**The long-video confirmation path has no transcript in hand.**~~ `transcript_quotes` stored `transcript_content` + `resolved_via` only, so an `allowLong` resubmit had no `lang`/`availableLangs`. Accepted at planning time as diagnostic-only. **Closed 2026-07-27 (impl-review F10):** the manual run showed the nulls were not randomly distributed — the 409/confirm/cache path is reachable only above 40,000 characters, so they fell exclusively on long videos, biasing the columns against the longest content. Once F9 made those columns the instrument for measuring `lang: "en"`'s residual risk, that bias stopped being tolerable. The cache now carries both fields.
 - Free-plan rate limit is 1 request/second, which is why the two Supadata calls must be ordered rather than parallelised.
 
 ## What We're NOT Doing
@@ -182,6 +184,8 @@ Add a module-level threshold constant with a comment recording the reasoning: a 
 **Intent**: Stop discarding the language fields and carry them to the persist call.
 
 **Contract**: Remove `lang: "pl"` from the `fetchTranscript` call (line 260). Alongside the existing `content` / `resolvedVia` locals, capture `transcriptLang: string | null` and `transcriptAvailableLangs: string[] | null`, set from the transcript result on the fetch path and left null on the `cachedQuote` path — the quote cache carries neither. Pass both into `persistSummaryAndSettle`. Add a brief comment at the cached-quote branch noting that the nulls are known and accepted, so a future reader does not read it as an oversight.
+
+> **Superseded 2026-07-27 by impl-review triage.** Both halves of this contract changed after the fact. The call now requests `lang: "en"` rather than no `lang` (F9 — omitting it returned a translated track, not the original), and the `cachedQuote` branch now carries the language fields through instead of setting them null (F10). The comment at that branch was rewritten accordingly. This paragraph is kept as the record of what Phase 2 was built to, not as a description of current behaviour.
 
 ### Success Criteria:
 
@@ -366,9 +370,17 @@ Two things the manual suite established that the plan had assumed differently. B
 | `iG9CE55wbtY` | English | 61 | **`af`** (first in pool) |
 | `dQw4w9WgXcQ` | English | 5 | `en` |
 
-Two of three runs summarised a **translated** track rather than the source — and it shows: the "Me at the zoo" summary describes the elephants' "Rüssel", straight out of the German captions. Output language is unaffected (the prompt controls it, confirmed by 2.5), but summary *fidelity* now rides on a translation the app never chose. This is a content-quality risk for S-01/S-02, not a schema defect, and it is precisely what the diagnostic columns were added to surface. Supadata exposes no way to request "the original track", so there is no fix inside S-08 — it needs a follow-up.
+Two of three runs summarised a **translated** track rather than the source — and it shows: the "Me at the zoo" summary describes the elephants' "Rüssel", straight out of the German captions. Output language is unaffected (the prompt controls it, confirmed by 2.5), but summary *fidelity* now rides on a translation the app never chose.
 
-Second observation, on the threshold: the observed pools are 2, 5 and 61, and the 61 is TED, which publishes *human* translations. Neither ordinary video came near the 100+ auto-translation scale `LARGE_LANG_POOL_THRESHOLD = 15` was guessing at. As set, the warning fires on large human-translated catalogues rather than on auto-translation. It is doing no harm, but it is not yet measuring what it was written to measure — revisit once production rows accumulate, as the constant's own comment anticipates.
+> **RESOLVED 2026-07-27 (impl-review F9, commit `c367866`).** The paragraph above originally concluded "there is no fix inside S-08 — it needs a follow-up." That was wrong, and probing the vendor for 3 credits is what showed it.
+>
+> Two facts came back. First, `lang` **selects** among existing caption tracks and never requests a translation — Supadata translates only through a separate, explicitly-called endpoint. So dropping `lang: "pl"` never protected anything. Second, and decisively: re-fetching `jNQXAC9IVRw` with `lang: "en"` returned the genuine English original, while the no-`lang` call returned `de` **even though `en` is listed first in `availableLangs`**. The vendor's "first available language" has no bias toward the source track. *Omitting `lang` was the exposure, not the protection* — the plan's premise was inverted.
+>
+> `/v1/metadata` carries no language field at all (entire payload scanned; `additionalData` holds only `channelId`), so the source language cannot be learned before choosing a track and a single preferred code is the only lever. The fetch now requests **`lang: "en"`**: it fixes both observed failures, and on a Polish-original video the pool is typically `{pl}` alone, so the request falls through and the fallback returns the Polish original. `lang: "pl"` would instead actively select a Polish translation on exactly the large-pool English content this slice's own decision forbids. Full detail in `docs/supadata-transcript.md` §Language selection.
+
+Second observation, on the threshold: the observed pools are 2, 5 and 61, and the 61 is TED, which publishes *human* translations. Neither ordinary video came near the 100+ auto-translation scale `LARGE_LANG_POOL_THRESHOLD = 15` was guessing at. As set, the warning fires on large human-translated catalogues rather than on auto-translation.
+
+> **RESOLVED 2026-07-27 (impl-review F11).** Not retuned — **removed**. The threshold was only ever a proxy for "we may not have the original track", chosen when no `lang` was requested and nothing better existed. Once F9 settled the underlying question, the proxy had no job left: it fired on TED's human translations and stayed silent on the `{en, de}` video that actually served German. `transcript_lang` / `transcript_available_langs` record the same facts queryably across every row rather than whichever ones a log-retention window covers — and after F10 they no longer skew toward short videos.
 
 ## Progress
 
@@ -398,10 +410,10 @@ Second observation, on the threshold: the observed pools are 2, 5 and 61, and th
 
 #### Manual
 
-- [x] 2.3 A non-Polish video populates `transcript_lang` with its own language — 2026-07-26, `de` on `jNQXAC9IVRw`, `en` on `dQw4w9WgXcQ`, `af` on `iG9CE55wbtY`; never `pl`. See the vendor caveat below
+- [ ] 2.3 A non-Polish video populates `transcript_lang` with its own language — ~~2026-07-26, `de` on `jNQXAC9IVRw`, `en` on `dQw4w9WgXcQ`, `af` on `iG9CE55wbtY`; never `pl`~~ **RE-OPENED 2026-07-27 (impl-review F9)**: verified against the no-`lang` build. The fetch now requests `lang: "en"`, so the expected values have changed — re-run and confirm `transcript_lang` reflects the selected track
 - [x] 2.4 `transcript_available_langs` is a readable Postgres array — 2026-07-26, `array_length` 2 / 5 / 61, `[1]` reads back
-- [x] 2.5 The summary is still returned in Polish — 2026-07-26, Polish output from `de` and `af` transcripts; the prompt, not `lang`, controls output
-- [x] 2.6 The large-pool warning appears in the console — 2026-07-26, fired on `iG9CE55wbtY` with URL, lang `af`, 61 languages
+- [ ] 2.5 The summary is still returned in Polish — ~~2026-07-26, Polish output from `de` and `af` transcripts~~ **RE-OPENED 2026-07-27 (impl-review F9)**: the claim still holds in principle (the prompt controls output language, not `lang`), but it was demonstrated on transcripts the app no longer selects the same way. Re-run on a non-English-source video
+- [x] 2.6 ~~The large-pool warning appears in the console~~ — **STRUCK 2026-07-27 (impl-review F11)**: the warning was removed, not re-tuned. Pool size was a proxy chosen when no `lang` was requested; it fired on TED's 61 *human* translations and stayed silent on the `{en, de}` video that actually served German. `transcript_lang` / `transcript_available_langs` record the same facts queryably across every row. Nothing left to verify
 
 ### Phase 3: Supadata metadata fetch
 
@@ -428,7 +440,7 @@ Second observation, on the threshold: the observed pools are 2, 5 and 61, and th
 
 #### Manual
 
-- [x] 4.3 A production generation carries the full field set — 2026-07-26, `TVA738-ERqg`: title / HISTORIA REALNA / 4523s / 2026-07-22 / `maxresdefault.jpg` (HTTP 200, 305 KB). **Caveat**: the run took the `allowLong` path, so `transcript_lang` and `transcript_available_langs` are null by design (§Phase 2, quote cache carries no language fields). Five of seven columns proven in production; the two language columns are proven locally only (2.3, 2.4). Accepted as verified
+- [x] 4.3 A production generation carries the full field set — 2026-07-26, `TVA738-ERqg`: title / HISTORIA REALNA / 4523s / 2026-07-22 / `maxresdefault.jpg` (HTTP 200, 305 KB). **Caveat**: the run took the `allowLong` path, so `transcript_lang` and `transcript_available_langs` were null by design (§Phase 2, quote cache carried no language fields). Five of seven columns proven in production; the two language columns proven locally only (2.3, 2.4). Accepted as verified. **Note 2026-07-27**: impl-review F10 removed that design limitation — the quote cache now carries both fields, so a future `allowLong` production run will populate all seven. The row stays verified as recorded; the caveat is now historical
 - [x] 4.4 No 500s in the Worker logs for the deploy window — 2026-07-26, live `wrangler tail` over both POSTs: `outcome: ok`, zero exceptions, no error logs
 - [x] 4.5 The production reservation is `settled` — 2026-07-26, `ea718a97`, amount 2, `settled`, resolved at 14:23:13Z
 - [x] 4.6 `GET /v1/me` confirms the expected credit delta — 2026-07-26, 37 → 39 (+2: one transcript on the 409, one metadata on the resubmit). 61 of 100 remain ≈ 30 further native-transcript generations at the post-halving cost of 2
