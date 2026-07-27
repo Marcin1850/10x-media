@@ -184,7 +184,24 @@ The regression from APPROVED is not new defects in the delivered code — F1–F
   - Tradeoff: Costs several Supadata credits, may conclude nothing is available, and re-introduces the very `lang` parameter the plan deliberately removed.
   - Confidence: MEDIUM — the docs are silent on original-track selection.
   - Blind spot: Whether `lang` *requests a translation* or *selects an existing track* is exactly the undocumented behaviour in question.
-- **Decision**: PENDING
+- **Decision**: **FIXED via Fix B, then fixed in code (2026-07-27).** Fix B was chosen and run; its result inverted the finding's own premise, so the escalation Fix A proposed became unnecessary and the fix landed in this slice instead.
+
+  **Probe results (3 credits).** Documentation phase first: `lang` is documented on `/v1/transcript` as a *preference among existing tracks*, and translation is a separate, explicitly-called `/youtube/transcript/translate`. So the plan's stated fear — that requesting `lang` might *cause* a machine translation — was wrong about the vendor. Then three live calls:
+
+  | Probe | Result |
+  |---|---|
+  | `jNQXAC9IVRw`, `lang: "en"` | returned `lang: "en"`, genuine English original ("really really long trunks") — vs. `de` ("Rüssel") with no `lang` |
+  | `/v1/metadata` × 2 videos | **no language field anywhere** — full payload scanned for `/lang/i`, zero hits; `additionalData` holds only `channelId` |
+
+  The decisive result is the first: pool order was `["en","de"]` and the no-`lang` default *still* returned `de`. The vendor's "first available language" has no bias toward the source track and does not follow pool order — **omitting `lang` was the exposure, not the protection.** The second result confirms no in-vendor lever can supply the source language a priori (`snippet.defaultAudioLanguage` on the YouTube Data API remains the only real source, out of scope per `docs/supadata-metadata.md:66`).
+
+  **Fix applied**: `src/lib/services/transcript.ts` now requests `lang: "en"`, and the comment block that carried the falsified rationale was rewritten to record the evidence. `en` is the only single value that fixes both observed failures (`jNQXAC9IVRw` → `de`, `iG9CE55wbtY` → `af`, both English-source); on a Polish-original video the pool is typically `{pl}` alone, so the request falls through and the fallback returns the Polish original. `lang: "pl"` was rejected — it would actively select a Polish translation on exactly the large-pool English content `change.md` forbids, and would leave `jNQXAC9IVRw` broken, since that pool has no `pl` to fall through from. `mode: "generate"` was rejected on cost/latency (2 credits/min vs 1 flat, every request through the job poller). Residual risk — a Polish-original video that also carries an English track — is what `transcript_lang` / `transcript_available_langs` now measure.
+
+  Lint + build pass. Vendor docs updated in place: `docs/supadata-transcript.md` §Language selection now carries the answer to the open question it had been holding since 2026-07-25, and `docs/README.md`'s "genuinely unanswered" caveat is closed.
+
+  ⚠️ **Re-verification owed**: this is a behaviour change to the transcript path. Manual Progress rows **2.3** (language capture) and **2.5** (Polish output from a foreign-language transcript) were verified against the no-`lang` build and no longer describe what ships. Row 2.6 (large-pool warning) is unaffected. Progress is therefore **25/27**, not 27/27.
+
+  The earlier "escalate to S-01/S-02" framing in Fix A was wrong on the facts and is retracted: S-01 is complete and S-02 covers only summary-list display, so no downstream slice was waiting to receive this.
 
 ### F10 — The quote cache silently drops both language columns
 

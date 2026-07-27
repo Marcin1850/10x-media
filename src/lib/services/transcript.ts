@@ -42,17 +42,32 @@ function warnOnLargeLangPool(url: string, lang: string, availableLangs: string[]
 }
 
 /**
- * No `lang` is requested. Supadata's `lang` is a preference among EXISTING caption tracks, not a
- * translation request, and Polish output comes entirely from the LLM prompt — so asking for `pl`
- * bought nothing on a foreign-language video and, if YouTube auto-translated tracks enter the pool,
- * could hand the model a machine-translated transcript in place of the original. Whichever track
- * Supadata considers first-available is recorded in `lang` instead of being chosen.
+ * `en` is requested deliberately. Two facts, both verified against the live API (2026-07-27, see
+ * `../../../context/changes/persist-video-metadata/docs/supadata-transcript-lang.md`):
+ *
+ * 1. `lang` SELECTS among existing caption tracks — it never asks for a translation. Supadata
+ *    translates only through a separate, explicitly-called `/youtube/transcript/translate`.
+ * 2. Omitting `lang` does NOT yield the original track. The vendor's "first available language"
+ *    default is arbitrary and ignores `availableLangs` order: an English video with pool
+ *    `["en","de"]` returned `de`, and an English TED talk with a 61-track pool returned `af`.
+ *
+ * So the earlier reasoning here was inverted — omitting `lang` was the exposure, not the protection.
+ * Nothing in the vendor's surface marks a track as the original (`/metadata` carries no language
+ * field either), so a single preferred code is the only lever available, and `en` is the better bet:
+ * informational/educational YouTube is overwhelmingly English-original, and on a Polish video the
+ * pool is typically `{pl}` alone, so the request falls through and the fallback returns the Polish
+ * original anyway. Requesting `pl` would instead actively select a Polish translation on exactly the
+ * large-pool English videos — the case `change.md` forbids.
+ *
+ * Residual risk: a Polish-original video that also carries an English track hands us the translation.
+ * `transcript_lang` / `transcript_available_langs` exist to measure how often that happens.
+ * Output language is unaffected either way — Polish comes entirely from the LLM prompt.
  */
 export async function fetchTranscript({ url }: { url: string }, apiKey: string): Promise<TranscriptResult> {
   const supadata = new Supadata({ apiKey });
 
   try {
-    const result = await supadata.transcript({ url, text: true, mode: "auto" });
+    const result = await supadata.transcript({ url, text: true, mode: "auto", lang: "en" });
 
     if ("jobId" in result) {
       return await pollTranscriptJob(supadata, result.jobId, url);

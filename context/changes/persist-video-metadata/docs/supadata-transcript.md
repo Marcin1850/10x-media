@@ -16,7 +16,9 @@
 
 Responses: `200` transcript, `202` job id (async), `400` invalid request, `404` not found, `500` internal error. The app treats the async form by polling `/transcript/:jobId`.
 
-Current call: `supadata.transcript({ url, lang: "pl", text: true, mode: "auto" })`.
+Current call: `supadata.transcript({ url, text: true, mode: "auto", lang: "en" })`. S-08 first dropped `lang: "pl"` entirely, then settled on `lang: "en"` once the open question below was answered empirically — see §Language selection.
+
+> The `/v1/youtube/transcript` variant is marked **`deprecated: true`** in the OpenAPI spec (2026-07-27 re-fetch). The app already uses `/v1/transcript`; nothing to change, worth not regressing.
 
 ## `mode` — the S-09 lever
 
@@ -32,9 +34,27 @@ Three documented behaviours, all relevant:
 2. **In `generate` mode `lang` is ignored entirely** and the transcript is produced in the video's original language. The app's `lang: "pl"` is therefore silently dropped on exactly the expensive path.
 3. **"First available" has no documented ordering** — so omitting `lang` is not a guarantee of getting the original track either.
 
-> ❓ **Unanswered by the docs, and the reason S-08's language decision is not yet actionable:** whether YouTube's *auto-translated* or *auto-generated* caption tracks enter the `lang` / `availableLangs` pool. If auto-translated tracks do, then `lang: "pl"` can hand the model a machine-translated Polish transcript in place of the original — a lossy double translation, worse input than letting the LLM work from the source language. Neither `docs.supadata.ai/get-transcript` nor `/youtube/supported-language-codes` addresses it.
->
-> **Settleable empirically for ~2 credits:** one transcript call on a video known to expose many auto-translations, with and without `lang=pl`, inspecting the returned `lang` and `availableLangs`. Not yet run (as of 2026-07-25).
+### ✅ Answered empirically, 2026-07-27 (review finding F9)
+
+The question below was run for 3 credits during impl-review triage. The docs were right that `lang` selects rather than translates — and **point 3 turned out to be the decisive one**: omitting `lang` was the exposure, not the protection.
+
+| Video | Source | Pool | No `lang` → | `lang: "en"` → |
+| --- | --- | --- | --- | --- |
+| `jNQXAC9IVRw` (*Me at the zoo*) | English | `["en","de"]` | **`de`** — German wording ("Rüssel") reached the delivered summary | **`en`** — genuine English original |
+| `iG9CE55wbtY` (TED talk) | English | 61 tracks | **`af`** (Afrikaans) | not probed |
+
+Note row 1: `en` is listed **first** in `availableLangs` and was *still* not what the default returned. The vendor's "first available language" has no bias toward the source track and does not follow pool order.
+
+Two further results, both negative:
+
+- **No original-track marker exists.** The response is bare ISO codes; nothing distinguishes original, auto-generated, or auto-translated tracks.
+- **`GET /v1/metadata` carries no language field at all.** Both videos were probed and the *entire* payload scanned for any key matching `/lang/i` — zero hits; `additionalData` holds only `channelId`. This empirically confirms what `supadata-metadata.md:47,66` already assumed: a real spoken-language field is obtainable only from the YouTube Data API's `snippet.defaultAudioLanguage`.
+
+So the source language cannot be learned from Supadata *before* choosing a track, and a single preferred code is the only lever available.
+
+**Decision: `lang: "en"`** (`src/lib/services/transcript.ts`, full rationale in the comment there). English-original video → the original; Polish-original video → pool is typically `{pl}` alone, so the request falls through and the fallback returns the Polish original. `lang: "pl"` was rejected: it would actively select a Polish translation on exactly the large-pool English content that `change.md` forbids, and would leave `jNQXAC9IVRw` broken since that pool has no `pl` to fall through from. Residual risk — a Polish-original video that also carries an English track — is what `transcript_lang` / `transcript_available_langs` now measure.
+
+`mode: "generate"` is immune to the whole problem (point 2 above: it ignores `lang` and works from the original audio) but was rejected on cost and latency: 2 credits/min instead of 1 flat, and every request routed through the job poller.
 
 ## Response shape (`text=true`)
 
