@@ -4,10 +4,10 @@
 - **Plan**: `context/changes/persist-video-metadata/plan.md`
 - **Scope**: All implementation work, Phases 1–4 of 4
 - **Date**: 2026-07-26
-- **Verdict**: NEEDS ATTENTION at review time → APPROVED after remediation (2026-07-26) → NEEDS ATTENTION (2026-07-27, manual run surfaced F9–F11) → **APPROVED PENDING RE-VERIFICATION (2026-07-27)** — all eleven findings are closed in code; three manual Progress rows need re-running before archive
+- **Verdict**: NEEDS ATTENTION at review time → APPROVED after remediation (2026-07-26) → NEEDS ATTENTION (2026-07-27, manual run surfaced F9–F11) → **APPROVED (2026-07-27)** — all eleven findings closed, all six dimensions PASS, affected manual rows re-verified
 - **Findings**: 0 critical, 5 warnings, 6 observations (F1–F8 from the static review; F9–F11 from the manual verification run). **All 11 triaged, none skipped.**
 - **Triage**: F1–F8 complete 2026-07-26 — F1, F2, F3, F4, F5, F8 fixed; F7 resolved by inspection (+ review comment posted); **F6 re-opened and executed** (was SKIPPED). **F9–F11 complete 2026-07-27** — F9 fixed via probe-then-code (`lang: "en"`, commit `c367866`), F10 fixed (quote cache widened, commit `507d3c3`), F11 fixed differently (pool-size warning removed entirely). Lint, build and `supabase migration up` green throughout.
-- **Open before archive**: three manual Progress rows no longer match shipped behaviour — **2.3** and **2.5** were verified against the no-`lang` build (re-run), and **2.6** verifies a warning that no longer exists (strike). Progress is **24/27**, not 27/27. Nothing is known-broken; the evidence is simply stale.
+- **Re-verification closed 2026-07-27**: rows **2.3** and **2.5** were re-run against the F9 build and pass — both videos now record `transcript_lang = 'en'`, and the German wording is gone from the delivered summary. Row **2.6** is struck rather than re-run (the warning it verified was removed by F11). Progress is **27/27**, with 2.6 marked not-applicable.
 
 ## Verdicts
 
@@ -18,13 +18,15 @@
 | Safety & Quality | WARNING | PASS — F1, F2, F3 closed | PASS | PASS |
 | Architecture | PASS | PASS | WARNING — F10 open | PASS — F10 closed |
 | Pattern Consistency | WARNING | PASS — F5, F8 closed | PASS | PASS |
-| Success Criteria | WARNING | PASS — 27/27 rows verified | PASS | WARNING — 24/27, three rows stale |
+| Success Criteria | WARNING | PASS — 27/27 rows verified | PASS | PASS — 2.3/2.5 re-run, 2.6 struck |
 
 The regression from APPROVED was never new defects in the delivered code — F1–F8 all stand closed. Running the manual suite converted three unknowns into named risks: one product-level (F9), one data-completeness (F10), one calibration (F11).
 
 All three are now closed, and the order mattered: **F9's probe changed what F10 and F11 were worth.** F10 was documented and accepted as a known gap until the fetch started requesting `lang: "en"` — at which point the language columns became the instrument for measuring that change's residual risk, and a blind spot correlated with video length stopped being tolerable. F11's threshold existed only as a proxy for a question the probe answered outright, so the right move turned out to be deleting it rather than retuning it. Triaging these three independently would have produced three worse decisions.
 
-The one dimension still short of PASS is Success Criteria, and for a benign reason: fixing F9 and F11 changed behaviour that three manual rows had already certified. That is stale evidence, not a defect.
+Fixing F9 and F11 changed behaviour that three manual rows had already certified, so those rows were re-settled the same day: 2.3 and 2.5 re-run and passing, 2.6 struck as no longer applicable. All six dimensions are PASS.
+
+The one caveat worth carrying forward is not a defect but a gap in coverage: every language observation to date is English-source. F9's residual risk — a Polish-original video that also carries an English track, where requesting `en` would take the translation — has never been exercised, because no Polish-language video has been run through the pipeline. The diagnostic columns will surface it if it happens.
 
 ## Verification
 
@@ -199,13 +201,22 @@ The one dimension still short of PASS is Success Criteria, and for a benign reas
   | `jNQXAC9IVRw`, `lang: "en"` | returned `lang: "en"`, genuine English original ("really really long trunks") — vs. `de` ("Rüssel") with no `lang` |
   | `/v1/metadata` × 2 videos | **no language field anywhere** — full payload scanned for `/lang/i`, zero hits; `additionalData` holds only `channelId` |
 
-  The decisive result is the first: pool order was `["en","de"]` and the no-`lang` default *still* returned `de`. The vendor's "first available language" has no bias toward the source track and does not follow pool order — **omitting `lang` was the exposure, not the protection.** The second result confirms no in-vendor lever can supply the source language a priori (`snippet.defaultAudioLanguage` on the YouTube Data API remains the only real source, out of scope per `docs/supadata-metadata.md:66`).
+  The decisive result is the first: requesting `en` returned the English original where the default had served German. The vendor's default is literally "the first track in the pool", and pool order carries no information about which track is the source — `iG9CE55wbtY`'s 61-track pool begins with `af`, and `af` is exactly what the no-`lang` build took. **Omitting `lang` was the exposure, not the protection.** The second result confirms no in-vendor lever can supply the source language a priori (`snippet.defaultAudioLanguage` on the YouTube Data API remains the only real source, out of scope per `docs/supadata-metadata.md:66`).
 
   **Fix applied**: `src/lib/services/transcript.ts` now requests `lang: "en"`, and the comment block that carried the falsified rationale was rewritten to record the evidence. `en` is the only single value that fixes both observed failures (`jNQXAC9IVRw` → `de`, `iG9CE55wbtY` → `af`, both English-source); on a Polish-original video the pool is typically `{pl}` alone, so the request falls through and the fallback returns the Polish original. `lang: "pl"` was rejected — it would actively select a Polish translation on exactly the large-pool English content `change.md` forbids, and would leave `jNQXAC9IVRw` broken, since that pool has no `pl` to fall through from. `mode: "generate"` was rejected on cost/latency (2 credits/min vs 1 flat, every request through the job poller). Residual risk — a Polish-original video that also carries an English track — is what `transcript_lang` / `transcript_available_langs` now measure.
 
   Lint + build pass. Vendor docs updated in place: `docs/supadata-transcript.md` §Language selection now carries the answer to the open question it had been holding since 2026-07-25, and `docs/README.md`'s "genuinely unanswered" caveat is closed.
 
-  ⚠️ **Re-verification owed**: this is a behaviour change to the transcript path. Manual Progress rows **2.3** (language capture) and **2.5** (Polish output from a foreign-language transcript) were verified against the no-`lang` build and no longer describe what ships. Row 2.6 (large-pool warning) is unaffected. Progress is therefore **25/27**, not 27/27.
+  ✅ **Re-verified end-to-end 2026-07-27.** Rows **2.3** and **2.5** were re-run against the local stack on the throwaway account (2 generations, 2 credits, 9 → 7, both reservations `settled`):
+
+  | Video | Before | After |
+  |---|---|---|
+  | `jNQXAC9IVRw` | `de` — summary said "Rüssel" | **`en`** — summary says "**trąby**" (from the English "trunks") |
+  | `iG9CE55wbtY` | `af` | **`en`** |
+
+  The German wording is gone from the delivered output, which was F9's visible symptom.
+
+  📌 **Correction to this entry's own evidence.** It originally read "pool order was `["en","de"]` and the no-`lang` default *still* returned `de`", concluding the default ignores pool order. That conflated two responses: the stored 2026-07-26 row shows the no-`lang` call reported a pool of `{de}` alone, while `{en,de}` came from the `lang=en` call. The corrected mechanism — the default takes the first track in the pool, and pool order says nothing about originality — is better supported (TED's pool begins with `af`, and `af` is what it returned). A secondary finding fell out of it: the reported pool is **request-dependent**, so `availableLangs` is not a stable property of a video. The decision is unaffected.
 
   The earlier "escalate to S-01/S-02" framing in Fix A was wrong on the facts and is retracted: S-01 is complete and S-02 covers only summary-list display, so no downstream slice was waiting to receive this.
 

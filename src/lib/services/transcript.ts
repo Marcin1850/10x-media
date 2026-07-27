@@ -33,9 +33,11 @@ function sleep(ms: number): Promise<void> {
  *
  * 1. `lang` SELECTS among existing caption tracks — it never asks for a translation. Supadata
  *    translates only through a separate, explicitly-called `/youtube/transcript/translate`.
- * 2. Omitting `lang` does NOT yield the original track. The vendor's "first available language"
- *    default is arbitrary and ignores `availableLangs` order: an English video with pool
- *    `["en","de"]` returned `de`, and an English TED talk with a 61-track pool returned `af`.
+ * 2. Omitting `lang` does NOT yield the original track. The vendor returns the FIRST track in the
+ *    pool, and pool order has nothing to do with which track is the original: an English TED talk
+ *    whose 61-track pool begins with `af` returned `af`, and "Me at the zoo" (English) returned `de`.
+ *    The reported pool is also request-dependent — the same video reported `{de}` with no `lang` and
+ *    `{en, de}` when `en` was requested — so `availableLangs` is not a stable property of a video.
  *
  * So the earlier reasoning here was inverted — omitting `lang` was the exposure, not the protection.
  * Nothing in the vendor's surface marks a track as the original (`/metadata` carries no language

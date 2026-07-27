@@ -63,11 +63,20 @@ See `reviews/impl-review.md` F9–F11 and `docs/supadata-transcript.md` §Langua
 green, review verdict moved to APPROVED. One caveat on 4.3 — the production run took the
 `allowLong` path, so the two language columns are proven locally but not yet on production.
 
-**Re-verification owed (2026-07-27):** the F9 and F11 fixes changed transcript-path behaviour that
-three manual rows had already certified. Rows **2.3** and **2.5** were verified against the no-`lang`
-build and need re-running; row **2.6** verifies a warning that no longer exists and is struck.
-Progress is **24/27**. Nothing is known-broken — the evidence is stale, not contradicted. Neither
-migration nor Worker has been pushed to production yet.
+**Re-verification complete (2026-07-27):** the F9 and F11 fixes changed transcript-path behaviour
+that three manual rows had certified, so those rows were re-settled the same day. Rows **2.3** and
+**2.5** were re-run against the local stack (2 generations, credits 9 → 7, both reservations
+`settled`): `jNQXAC9IVRw` moved `de` → **`en`** and `iG9CE55wbtY` `af` → **`en`**, and the German
+wording is gone from the delivered summary — it now reads "trąby" (from the English "trunks") where
+the earlier run said "Rüssel". Row **2.6** is struck, not re-run: the warning it verified was removed.
+Progress **27/27**, verdict APPROVED.
+
+Coverage gap worth carrying forward: every language observation so far is English-source. The
+residual risk F9 leaves open — a Polish-original video that also carries an English track, where
+requesting `en` would take the translation — has never been exercised, because no Polish-language
+video has gone through the pipeline. The diagnostic columns will surface it if it occurs.
+
+Neither the new migration nor the Worker has been pushed to production yet.
 
 **Plan review triaged (2026-07-25):** 7 findings — 6 fixed in the plan, 1 accepted. Accepted:
 the `persist_summary` hard-swap keeps its deployment window (F1), judged a non-issue at this

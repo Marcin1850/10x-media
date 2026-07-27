@@ -38,12 +38,17 @@ Three documented behaviours, all relevant:
 
 The question below was run for 3 credits during impl-review triage. The docs were right that `lang` selects rather than translates — and **point 3 turned out to be the decisive one**: omitting `lang` was the exposure, not the protection.
 
-| Video | Source | Pool | No `lang` → | `lang: "en"` → |
+| Video | Source | Pool reported | No `lang` → | `lang: "en"` → |
 | --- | --- | --- | --- | --- |
-| `jNQXAC9IVRw` (*Me at the zoo*) | English | `["en","de"]` | **`de`** — German wording ("Rüssel") reached the delivered summary | **`en`** — genuine English original |
-| `iG9CE55wbtY` (TED talk) | English | 61 tracks | **`af`** (Afrikaans) | not probed |
+| `jNQXAC9IVRw` (*Me at the zoo*) | English | `{de}` without `lang`; `{en,de}` with `lang=en` | **`de`** — German wording ("Rüssel") reached the delivered summary | **`en`** — genuine English original |
+| `iG9CE55wbtY` (TED talk) | English | 61 tracks, beginning `af, sq, ar, …` | **`af`** (Afrikaans) | **`en`** |
 
-Note row 1: `en` is listed **first** in `availableLangs` and was *still* not what the default returned. The vendor's "first available language" has no bias toward the source track and does not follow pool order.
+Two things to read off this, both confirmed by an end-to-end re-run on 2026-07-27:
+
+1. **The default returns the first track in the pool, and pool order has nothing to do with originality.** TED's pool begins with `af` and `af` is what came back. So "first available language" is literal — it is simply not a signal about which track is the source.
+2. **The reported pool is request-dependent.** `jNQXAC9IVRw` reported `{de}` on the no-`lang` call and `{en,de}` when `en` was requested. `availableLangs` is therefore not a stable property of a video and should not be treated as a complete caption inventory.
+
+An earlier draft of this section claimed the default "ignores pool order", citing `["en","de"]` → `de`. That conflated the pool reported by the `lang=en` call with the result of the no-`lang` call. The conclusion is unchanged and better supported: omitting `lang` gives you an arbitrary track, and on 2 of 3 videos that track was not the original.
 
 Two further results, both negative:
 
