@@ -346,6 +346,30 @@ The real cost is monetary, not latency: `/metadata` is a flat 1 credit, doubling
 - Additive-column precedent: `supabase/migrations/20260709120000_add_resolved_via_to_summaries.sql`
 - Function-drop precedent: `supabase/migrations/20260724120000_drop_legacy_rpcs.sql`
 
+## Manual Verification Findings (2026-07-26)
+
+Two things the manual suite established that the plan had assumed differently. Both are recorded here because the plan is the input to S-02.
+
+### Edge-case correction — Supadata does not always hand back `maxresdefault`
+
+§Manual Verification 3.4 and §Migration Notes both assume Supadata returns `maxresdefault.jpg` and that it 404s for videos never uploaded above 480p. Probed 2026-07-26 on `jNQXAC9IVRw` (2005, 240p), the vendor returned `https://i.ytimg.com/vi/jNQXAC9IVRw/hqdefault.jpg?sqp=…&rs=…`, which **loads** (HTTP 200, `image/webp`, 15.8 KB). Bare `maxresdefault.jpg` for that video 404s and bare `hqdefault.jpg` 200s — so the vendor picked an existing variant itself rather than emitting a dead URL. The modern HD upload `dQw4w9WgXcQ` did return `vi_webp/…/maxresdefault.webp` (HTTP 200).
+
+**What this changes**: nothing about the requirement, something about the rationale. S-02 still needs the derived-`hqdefault` fallback, because `thumbnail_url_reported` is null on every pre-S-08 row and on every failed metadata fetch — that is the dominant case, and it is unaffected. But the second case the plan insisted on, "a stored URL that 404s", did not reproduce. Keep the `<img onerror>` branch (one probe is not a guarantee, and the column stores the vendor string unvalidated by design), but treat that branch as defensive rather than expected.
+
+### The open vendor question has an answer: the returned track is often not the original
+
+`mode: "auto"` does not reliably return the video's original-language caption track.
+
+| Video | Spoken language | Pool size | Returned |
+|---|---|---|---|
+| `jNQXAC9IVRw` | English | 2 | **`de`** |
+| `iG9CE55wbtY` | English | 61 | **`af`** (first in pool) |
+| `dQw4w9WgXcQ` | English | 5 | `en` |
+
+Two of three runs summarised a **translated** track rather than the source — and it shows: the "Me at the zoo" summary describes the elephants' "Rüssel", straight out of the German captions. Output language is unaffected (the prompt controls it, confirmed by 2.5), but summary *fidelity* now rides on a translation the app never chose. This is a content-quality risk for S-01/S-02, not a schema defect, and it is precisely what the diagnostic columns were added to surface. Supadata exposes no way to request "the original track", so there is no fix inside S-08 — it needs a follow-up.
+
+Second observation, on the threshold: the observed pools are 2, 5 and 61, and the 61 is TED, which publishes *human* translations. Neither ordinary video came near the 100+ auto-translation scale `LARGE_LANG_POOL_THRESHOLD = 15` was guessing at. As set, the warning fires on large human-translated catalogues rather than on auto-translation. It is doing no harm, but it is not yet measuring what it was written to measure — revisit once production rows accumulate, as the constant's own comment anticipates.
+
 ## Progress
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles. See `references/progress-format.md`.
@@ -360,10 +384,10 @@ The real cost is monetary, not latency: `/metadata` is a flat 1 credit, doubling
 
 #### Manual
 
-- [ ] 1.4 One real generation on the local stack still succeeds end-to-end
-- [ ] 1.5 The five new columns are present and null, and `thumbnail_url` is renamed to `thumbnail_url_reported` with its rationale comment attached
-- [ ] 1.6 Exactly one `persist_summary` exists in `pg_proc`
-- [ ] 1.7 The run's reservation is `settled`
+- [x] 1.4 One real generation on the local stack still succeeds end-to-end — 2026-07-26, `jNQXAC9IVRw` 200 in 25s, summary returned
+- [x] 1.5 The five new columns are present and null, and `thumbnail_url` is renamed to `thumbnail_url_reported` with its rationale comment attached — 2026-07-26, `\d+ public.videos`
+- [x] 1.6 Exactly one `persist_summary` exists in `pg_proc` — 2026-07-26, 1 row, `pronargs` 15
+- [x] 1.7 The run's reservation is `settled` — 2026-07-26, `settled` / amount 1
 
 ### Phase 2: Transcript language signals
 
@@ -374,10 +398,10 @@ The real cost is monetary, not latency: `/metadata` is a flat 1 credit, doubling
 
 #### Manual
 
-- [ ] 2.3 A non-Polish video populates `transcript_lang` with its own language
-- [ ] 2.4 `transcript_available_langs` is a readable Postgres array
-- [ ] 2.5 The summary is still returned in Polish
-- [ ] 2.6 The large-pool warning appears in the console
+- [x] 2.3 A non-Polish video populates `transcript_lang` with its own language — 2026-07-26, `de` on `jNQXAC9IVRw`, `en` on `dQw4w9WgXcQ`, `af` on `iG9CE55wbtY`; never `pl`. See the vendor caveat below
+- [x] 2.4 `transcript_available_langs` is a readable Postgres array — 2026-07-26, `array_length` 2 / 5 / 61, `[1]` reads back
+- [x] 2.5 The summary is still returned in Polish — 2026-07-26, Polish output from `de` and `af` transcripts; the prompt, not `lang`, controls output
+- [x] 2.6 The large-pool warning appears in the console — 2026-07-26, fired on `iG9CE55wbtY` with URL, lang `af`, 61 languages
 
 ### Phase 3: Supadata metadata fetch
 
@@ -388,12 +412,12 @@ The real cost is monetary, not latency: `/metadata` is a flat 1 credit, doubling
 
 #### Manual
 
-- [ ] 3.3 All seven fields populate with correct values
-- [ ] 3.4 The thumbnail URL loads in a browser
-- [ ] 3.5 A forced metadata failure still saves the summary with null metadata
-- [ ] 3.6 A transport-level rejection is equally non-fatal and leaves the reservation settled
-- [ ] 3.7 A second generation of the same video does not null out existing metadata
-- [ ] 3.8 `usedCredits` rises by exactly 2 for one native-transcript generation
+- [x] 3.3 All seven fields populate with correct values — 2026-07-26, `jNQXAC9IVRw`: "Me at the zoo" / jawed / 19s / 2005-04-23, all verified against the real video
+- [x] 3.4 The thumbnail URL loads in a browser — 2026-07-26, both HTTP 200: HD `dQw4w9WgXcQ` maxresdefault.webp (28.6 KB) and low-res `jNQXAC9IVRw` (15.8 KB). Supadata returned a working `hqdefault` for the low-res video, **not** the `maxresdefault` 404 the plan predicted — see §Edge-case correction
+- [x] 3.5 A forced metadata failure still saves the summary with null metadata — 2026-07-26, invalid key + cached quote on `kCMwc7qv_f4`: 200, five metadata fields null, `SupadataError: Unauthorized` logged non-retryably
+- [x] 3.6 A transport-level rejection is equally non-fatal and leaves the reservation settled — 2026-07-26, injected `TypeError("fetch failed")`: 200, null metadata, reservation `settled`
+- [x] 3.7 A second generation of the same video does not null out existing metadata — 2026-07-26, `jNQXAC9IVRw` re-run as `educational` with metadata forced null; all seven fields from run 1 survived the `coalesce`
+- [x] 3.8 `usedCredits` rises by exactly 2 for one native-transcript generation — 2026-07-26, 29 → 31 across one generation
 
 ### Phase 4: Production rollout
 
@@ -404,7 +428,7 @@ The real cost is monetary, not latency: `/metadata` is a flat 1 credit, doubling
 
 #### Manual
 
-- [ ] 4.3 A production generation carries the full field set
-- [ ] 4.4 No 500s in the Worker logs for the deploy window
-- [ ] 4.5 The production reservation is `settled`
-- [ ] 4.6 `GET /v1/me` confirms the expected credit delta
+- [x] 4.3 A production generation carries the full field set — 2026-07-26, `TVA738-ERqg`: title / HISTORIA REALNA / 4523s / 2026-07-22 / `maxresdefault.jpg` (HTTP 200, 305 KB). **Caveat**: the run took the `allowLong` path, so `transcript_lang` and `transcript_available_langs` are null by design (§Phase 2, quote cache carries no language fields). Five of seven columns proven in production; the two language columns are proven locally only (2.3, 2.4). Accepted as verified
+- [x] 4.4 No 500s in the Worker logs for the deploy window — 2026-07-26, live `wrangler tail` over both POSTs: `outcome: ok`, zero exceptions, no error logs
+- [x] 4.5 The production reservation is `settled` — 2026-07-26, `ea718a97`, amount 2, `settled`, resolved at 14:23:13Z
+- [x] 4.6 `GET /v1/me` confirms the expected credit delta — 2026-07-26, 37 → 39 (+2: one transcript on the 409, one metadata on the resubmit). 61 of 100 remain ≈ 30 further native-transcript generations at the post-halving cost of 2
