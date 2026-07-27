@@ -13,6 +13,11 @@ import type { TranscriptResolvedVia } from "@/types";
  *   - a short-lived quote cache (`getTranscriptQuote` / `saveTranscriptQuote`) so the long-video
  *     confirmation round-trip reuses the transcript it already paid for instead of re-fetching.
  *
+ * The cache carries the transcript's language fields alongside the body (F10). It did not originally,
+ * which meant a confirmation resubmit persisted null to `videos.transcript_lang` /
+ * `transcript_available_langs` — and since this path is reachable only above 40,000 characters, those
+ * nulls landed exclusively on long videos, biasing the diagnostics against the longest content.
+ *
  * All three back onto service-role-only RPCs (the tables are definer-only, like generation_locks), so
  * they run via the admin client the generate endpoint already requires in preflight. Postgres holds
  * the state because concurrent Worker requests can land in different isolates.
@@ -50,6 +55,8 @@ export async function recordTranscriptAttempt(admin: SupabaseClient, userId: str
 export interface CachedTranscript {
   content: string;
   resolvedVia: TranscriptResolvedVia | null;
+  lang: string | null;
+  availableLangs: string[] | null;
 }
 
 /**
@@ -69,7 +76,14 @@ export async function getTranscriptQuote(
       p_youtube_id: youtubeId,
       p_character: character,
     })) as {
-      data: { transcript_content: string; resolved_via: TranscriptResolvedVia | null }[] | null;
+      data:
+        | {
+            transcript_content: string;
+            resolved_via: TranscriptResolvedVia | null;
+            lang: string | null;
+            available_langs: string[] | null;
+          }[]
+        | null;
       error: { message: string } | null;
     };
 
@@ -82,7 +96,15 @@ export async function getTranscriptQuote(
       return null;
     }
 
-    return { content: data[0].transcript_content, resolvedVia: data[0].resolved_via };
+    return {
+      content: data[0].transcript_content,
+      resolvedVia: data[0].resolved_via,
+      // Null-coalesced rather than asserted: rows written by the pre-F10 Worker predate these columns
+      // and legitimately carry null. Indistinguishable from a genuine null, which is fine — both mean
+      // "no language data for this cached transcript".
+      lang: data[0].lang ?? null,
+      availableLangs: data[0].available_langs ?? null,
+    };
   } catch (cause) {
     // eslint-disable-next-line no-console
     console.error("getTranscriptQuote failed:", cause);
@@ -103,12 +125,16 @@ export async function saveTranscriptQuote(
     character,
     content,
     resolvedVia,
+    lang,
+    availableLangs,
   }: {
     userId: string;
     youtubeId: string;
     character: string;
     content: string;
     resolvedVia: TranscriptResolvedVia | null;
+    lang: string | null;
+    availableLangs: string[] | null;
   },
 ): Promise<void> {
   try {
@@ -119,6 +145,8 @@ export async function saveTranscriptQuote(
       p_content: content,
       p_resolved_via: resolvedVia,
       ttl_seconds: TRANSCRIPT_QUOTE_TTL_SECONDS,
+      p_lang: lang,
+      p_available_langs: availableLangs,
     })) as { error: { message: string } | null };
 
     if (error) {

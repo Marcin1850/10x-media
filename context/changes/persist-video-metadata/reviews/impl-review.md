@@ -215,7 +215,15 @@ The regression from APPROVED is not new defects in the delivered code — F1–F
   - Tradeoff: A migration plus an RPC signature change across four files, for data that is diagnostic only and never rendered.
   - Confidence: HIGH — mechanical, and the columns mirror ones that already exist on `videos`.
   - Blind spot: Whether existing null rows need backfilling or can stay indistinguishable from genuine nulls.
-- **Decision**: PENDING
+- **Decision**: **FIXED (2026-07-27).** Fixed rather than accepted because F9 changed its weight: now that the transcript fetch requests `lang: "en"`, these columns are the instrument for measuring how often a non-original track is still selected — and a blind spot correlated with video length would bias exactly that measurement.
+
+  New migration `supabase/migrations/20260727120000_transcript_quote_langs.sql` adds `lang text` and `available_langs text[]` to `transcript_quotes`, and rebuilds both RPCs. Four files changed: the migration, `transcript-guard.ts` (`CachedTranscript` gains both fields; `getTranscriptQuote` reads them back, `saveTranscriptQuote` writes them), and `generate.ts` (the cache-hit branch now carries `cachedQuote.lang` / `.availableLangs` instead of hardcoding null; the `saveTranscriptQuote` call passes the fetched values).
+
+  **Expand-only, and verified as such.** The two new `save_transcript_quote` parameters are appended with `DEFAULT null`, so a Worker still issuing the 6-argument call resolves to the same function; `get_transcript_quote` gains two result columns an older caller ignores. Both argument forms were executed against the local database — the 8-argument form round-tripped `en` / `{en,de}`, the 6-argument form resolved and defaulted both to null. The old function is dropped explicitly rather than left as an overload, which would have made the 6-argument call ambiguous. `pg_proc` confirms exactly one of each.
+
+  The blind spot is resolved by decision rather than by code: pre-F10 rows keep their nulls and stay indistinguishable from genuine nulls. Both mean "no language data for this cached transcript", the data is diagnostic and never rendered, and quote rows expire after 600 seconds anyway — a backfill would be writing invented values into a cache that empties itself.
+
+  `supabase migration up`, lint, and build all pass.
 
 ### F11 — The large-pool threshold flags human translation, not auto-translation
 

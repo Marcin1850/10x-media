@@ -241,12 +241,12 @@ async function runGeneration({
   if (cachedQuote) {
     content = cachedQuote.content;
     resolvedVia = cachedQuote.resolvedVia;
-    // Known and accepted, not an oversight: `transcript_quotes` stores the transcript body and
-    // `resolved_via` only, so a confirmation resubmit has no language fields to carry. Widening the
-    // quote cache is explicitly out of scope for S-08 — these two columns are diagnostic, and null
-    // on this one path is tolerable. The five descriptive columns still populate here.
-    transcriptLang = null;
-    transcriptAvailableLangs = null;
+    // The quote cache carries both language fields (F10), so a confirmation resubmit persists the
+    // same values the original fetch saw. These stay null only for a row written by a pre-F10 Worker.
+    // This path used to hardcode null, which biased the columns against long videos specifically —
+    // the 409/confirm/cache route is reachable only above 40,000 characters.
+    transcriptLang = cachedQuote.lang;
+    transcriptAvailableLangs = cachedQuote.availableLangs;
   } else {
     // A real paid fetch. Rate-limit it first; a genuine RPC failure fails the request CLOSED (500)
     // rather than proceed to the very unbounded fetch this guard exists to prevent.
@@ -305,7 +305,16 @@ async function runGeneration({
   // costs 1 and ignores this flag. Cache the transcript first (F17) so that confirmation retry reuses
   // it instead of paying Supadata a second time.
   if (cost > 1 && !allowLong) {
-    await saveTranscriptQuote(admin, { userId, youtubeId, character, content, resolvedVia });
+    // `allowLong` is false here, so the cache branch above did not run and these came from the fetch.
+    await saveTranscriptQuote(admin, {
+      userId,
+      youtubeId,
+      character,
+      content,
+      resolvedVia,
+      lang: transcriptLang,
+      availableLangs: transcriptAvailableLangs,
+    });
     return Response.json(
       {
         error: "This video is long and costs more credits. Confirm to continue.",
