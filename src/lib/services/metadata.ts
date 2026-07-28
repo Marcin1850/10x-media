@@ -1,5 +1,6 @@
 import { SupadataError, type Metadata } from "@supadata/js";
 import type { VideoMetadata } from "@/types";
+import { readBillableCredits, type SupadataMeter } from "./supadata-ledger";
 
 /** Past the rate-limit window on the Free plan's 1 req/s, with margin. */
 const RETRY_DELAY_MS = 1200;
@@ -38,16 +39,34 @@ function isErrorBody(body: unknown): body is { error: SupadataError["error"]; me
  * mapping — every failure response, non-JSON body and parse failure still surfaces as a typed
  * `SupadataError` — so `isRetryable` sees the same vendor error codes it would have seen through the
  * SDK. The `AbortSignal` is the only intended behavioural difference.
+ *
+ * Records ONE ledger row per invocation (S-07), which is the point of metering here rather than in
+ * `fetchVideoMetadata`: the retry below is a SECOND billable request, and a per-generation assumption
+ * of "one metadata call" would miss it entirely. The row is written on the error paths too, before
+ * the throw — a failed request is still a charged one.
+ *
+ * Metering never weakens the caller's totality contract: `record` is a plain in-memory push that
+ * cannot throw, and a transport rejection (no `Response` at all) records `null` rather than a guess.
  */
-async function requestMetadata(url: string, apiKey: string): Promise<Metadata> {
-  const response = await fetch(`${SUPADATA_BASE_URL}/metadata?url=${encodeURIComponent(url)}`, {
-    headers: { "x-api-key": apiKey, "Content-Type": "application/json" },
-    signal: AbortSignal.timeout(METADATA_TIMEOUT_MS),
-  });
+async function requestMetadata(url: string, apiKey: string, meter?: SupadataMeter): Promise<Metadata> {
+  let response: Response;
+  try {
+    response = await fetch(`${SUPADATA_BASE_URL}/metadata?url=${encodeURIComponent(url)}`, {
+      headers: { "x-api-key": apiKey, "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(METADATA_TIMEOUT_MS),
+    });
+  } catch (error) {
+    // No response arrived (DNS failure, socket reset, our own deadline), so nothing was reported.
+    // `null` is honest here in a way `0` would not be — see the column comment on billable_credits.
+    meter?.record({ operation: "metadata", outcome: "error", billableCredits: null });
+    throw error;
+  }
 
+  const billableCredits = readBillableCredits(response);
   const isJson = response.headers.get("content-type")?.includes("application/json") ?? false;
 
   if (!response.ok) {
+    meter?.record({ operation: "metadata", outcome: "error", billableCredits });
     const body = isJson ? ((await response.json().catch(() => null)) as unknown) : null;
     if (isErrorBody(body)) throw new SupadataError(body);
     throw new SupadataError({
@@ -58,6 +77,7 @@ async function requestMetadata(url: string, apiKey: string): Promise<Metadata> {
   }
 
   if (!isJson) {
+    meter?.record({ operation: "metadata", outcome: "error", billableCredits });
     throw new SupadataError({
       error: "internal-error",
       message: "Invalid response format",
@@ -66,8 +86,11 @@ async function requestMetadata(url: string, apiKey: string): Promise<Metadata> {
   }
 
   try {
-    return (await response.json()) as Metadata;
+    const metadata = (await response.json()) as Metadata;
+    meter?.record({ operation: "metadata", outcome: "ok", billableCredits });
+    return metadata;
   } catch (error) {
+    meter?.record({ operation: "metadata", outcome: "error", billableCredits });
     throw new SupadataError({
       error: "internal-error",
       message: "Failed to parse response",
@@ -138,15 +161,20 @@ function normaliseDuration(duration: unknown): number | null {
  *
  * Costs a flat 1 Supadata credit per call — see `docs/supadata-metadata.md` §Pricing.
  */
-export async function fetchVideoMetadata({ url }: { url: string }, apiKey: string): Promise<VideoMetadata | null> {
+export async function fetchVideoMetadata(
+  { url }: { url: string },
+  apiKey: string,
+  meter?: SupadataMeter,
+): Promise<VideoMetadata | null> {
   try {
     let metadata;
     try {
-      metadata = await requestMetadata(url, apiKey);
+      metadata = await requestMetadata(url, apiKey, meter);
     } catch (error) {
       if (!isRetryable(error)) throw error;
       await sleep(RETRY_DELAY_MS);
-      metadata = await requestMetadata(url, apiKey);
+      // A second real request against the vendor, and `requestMetadata` records it as its own row.
+      metadata = await requestMetadata(url, apiKey, meter);
     }
 
     // `media` is a union — only `VideoMedia` carries `duration` and `thumbnailUrl`. A non-video

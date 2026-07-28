@@ -479,9 +479,9 @@ The migration is additive except for the `persist_summary` swap and the two `res
 
 #### Automated
 
-- [x] 2.1 Linting passes (`npm run lint`)
-- [x] 2.2 Build and type-check pass (`npm run build`)
-- [x] 2.3 No non-null assertion or unsafe cast around `providerMetadata`
+- [x] 2.1 Linting passes (`npm run lint`) — 219d734
+- [x] 2.2 Build and type-check pass (`npm run build`) — 219d734
+- [x] 2.3 No non-null assertion or unsafe cast around `providerMetadata` — 219d734
 
 #### Manual
 
@@ -492,18 +492,18 @@ The migration is additive except for the `persist_summary` swap and the two `res
 
 #### Automated
 
-- [ ] 3.1 Linting passes (`npm run lint`)
-- [ ] 3.2 Build and type-check pass (`npm run build`)
-- [ ] 3.3 Meter parameter is optional; existing call sites compile unchanged
-- [ ] 3.4 `transcript.ts` no longer calls `supadata.transcript(...)` and still throws `SupadataError` with `transcript-unavailable`
-- [ ] 3.5 `TranscriptResult`'s failure arm is `"unavailable" | "failed" | "timeout"`, each site returning the reason matching its cause
+- [x] 3.1 Linting passes (`npm run lint`)
+- [x] 3.2 Build and type-check pass (`npm run build`)
+- [x] 3.3 Meter parameter is optional; existing call sites compile unchanged
+- [x] 3.4 `transcript.ts` no longer calls `supadata.transcript(...)` and still throws `SupadataError` with `transcript-unavailable`
+- [x] 3.5 `TranscriptResult`'s failure arm is `"unavailable" | "failed" | "timeout"`, each site returning the reason matching its cause
 
 #### Manual
 
 - [ ] 3.6 Local generation produces the expected record set (transcript / polls / metadata)
 - [ ] 3.7 Every recorded row carries an integer or null `billableCredits` — never `NaN`, never a throw
 - [ ] 3.8 A video with no transcript still returns `{ ok: false, reason: 'unavailable' }` after the transport swap
-- [ ] 3.9 `record_supadata_calls` inserts a hand-built batch including null `user_id`, `summary_id` and `billable_credits`
+- [x] 3.9 `record_supadata_calls` inserts a hand-built batch including null `user_id`, `summary_id` and `billable_credits`
 
 ### Phase 4: Endpoint wiring
 

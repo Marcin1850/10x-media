@@ -1,9 +1,24 @@
-import { Supadata, SupadataError } from "@supadata/js";
-import type { TranscriptResolvedVia } from "@/types";
+import { SupadataError, type Transcript, type TranscriptOrJobId, type JobResult } from "@supadata/js";
+import type { FetchedResolvedVia } from "@/types";
+import { readBillableCredits, type SupadataMeter } from "./supadata-ledger";
 
 export type TranscriptResult =
-  | { ok: true; content: string; lang: string; availableLangs: string[]; resolvedVia: TranscriptResolvedVia }
-  | { ok: false; reason: "unavailable" };
+  | { ok: true; content: string; lang: string; availableLangs: string[]; resolvedVia: FetchedResolvedVia }
+  /**
+   * The failure arm is split three ways (S-07) so the endpoint can cache the permanent answer without
+   * ever caching a transient one:
+   *
+   *   `unavailable` — the vendor says there is no transcript (its `transcript-unavailable` error, a
+   *                   non-string `content`, or a job that completed with nothing). Durable: safe to
+   *                   negative-cache.
+   *   `failed`      — the Whisper job reported failure. Transient; says nothing about the video.
+   *   `timeout`     — the poll budget ran out. Transient, and likeliest on exactly the long videos
+   *                   where Whisper runs longest.
+   *
+   * The USER-FACING surface is unchanged — all three still map to the same 422. The distinction exists
+   * solely to gate the negative cache and to give the ledger a truthful `outcome`.
+   */
+  | { ok: false; reason: "unavailable" | "failed" | "timeout" };
 
 // Supadata gives no upper bound on Whisper job duration for long videos, and summarization isn't
 // a real-time interaction, so the poll backs off exponentially: fast checks up front for jobs that
@@ -23,8 +38,110 @@ const JOB_POLL_MAX_ATTEMPTS = 12; // ~4 minutes of total coverage at 12 subreque
 // German. `transcript_lang` / `transcript_available_langs` record the same facts queryably, across
 // every row rather than whichever ones a log retention window happens to cover.
 
+/** The origin `@supadata/js` targets. Called directly — see `supadataGet`. */
+const SUPADATA_BASE_URL = "https://api.supadata.ai/v1";
+
+/**
+ * The `lang` this module asks for. Exported so the caller can record it as the cache row's
+ * `requested_lang` without restating the literal — a diagnostic record of what was asked for, which
+ * would otherwise silently drift from what is actually sent.
+ */
+export const TRANSCRIPT_REQUESTED_LANG = "en";
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Narrows the `{ error, message, details }` body Supadata returns on a failed request. */
+function isErrorBody(body: unknown): body is { error: SupadataError["error"]; message?: string; details?: string } {
+  return typeof body === "object" && body !== null && typeof (body as { error?: unknown }).error === "string";
+}
+
+/**
+ * One raw Supadata GET, with the response's `x-billable-requests` figure alongside the parsed body.
+ *
+ * This module left `@supadata/js` for a direct `fetch` (S-07) for exactly one reason: the SDK funnels
+ * every method through one transport that reads headers only for `content-type` and returns
+ * `await res.json()`, so the `Response` never escapes and the per-call credit figure is unreachable
+ * through it. There is no interceptor hook, and patching the global `fetch` fails because the module
+ * binds it at load time. `metadata.ts:43` already set this precedent for `/v1/metadata`.
+ *
+ * ERROR SEMANTICS ARE PRESERVED VERBATIM, because `fetchTranscript`'s `transcript-unavailable` branch
+ * and every caller depend on them: non-2xx with a JSON body → `new SupadataError(body)`; non-2xx
+ * without → `SupadataError({ error: 'internal-error', … })`; 2xx with a non-JSON content-type → the
+ * same. Nothing downstream can tell the transport changed.
+ */
+async function supadataGet(path: string, apiKey: string): Promise<{ body: unknown; billableCredits: number | null }> {
+  const response = await fetch(`${SUPADATA_BASE_URL}${path}`, {
+    headers: { "x-api-key": apiKey, "Content-Type": "application/json" },
+  });
+
+  // Read before any throw: an error response is still a billable call, and the row recording it is the
+  // single most valuable thing this ledger captures.
+  const billableCredits = readBillableCredits(response);
+  const isJson = response.headers.get("content-type")?.includes("application/json") ?? false;
+
+  if (!response.ok) {
+    const body = isJson ? ((await response.json().catch(() => null)) as unknown) : null;
+    if (isErrorBody(body)) throw new BilledSupadataError(body, billableCredits);
+    throw new BilledSupadataError(
+      {
+        error: "internal-error",
+        message: "Unexpected error response format",
+        details: `Supadata responded ${response.status}`,
+      },
+      billableCredits,
+    );
+  }
+
+  if (!isJson) {
+    throw new BilledSupadataError(
+      {
+        error: "internal-error",
+        message: "Invalid response format",
+        details: "Expected JSON response but received different content type",
+      },
+      billableCredits,
+    );
+  }
+
+  try {
+    return { body: (await response.json()) as unknown, billableCredits };
+  } catch (error) {
+    throw new BilledSupadataError(
+      {
+        error: "internal-error",
+        message: "Failed to parse response",
+        details: error instanceof Error ? error.message : "Unknown error",
+      },
+      billableCredits,
+    );
+  }
+}
+
+/**
+ * A `SupadataError` that also carries what the failing response reported billing.
+ *
+ * It extends `SupadataError` rather than wrapping it precisely so that every existing
+ * `instanceof SupadataError` / `error.error === …` check keeps working unchanged — including
+ * `metadata.ts`'s `isRetryable`. The extra field is only read by the metering in this module; nothing
+ * downstream needs to know it exists.
+ */
+class BilledSupadataError extends SupadataError {
+  readonly billableCredits: number | null;
+
+  constructor(
+    body: { error: SupadataError["error"]; message?: string; details?: string },
+    billableCredits: number | null,
+  ) {
+    super(body);
+    this.billableCredits = billableCredits;
+  }
+}
+
+/** What a thrown error reported billing, when it happens to know. Never a guess: `null` otherwise. */
+function billedFromError(error: unknown): number | null {
+  return error instanceof BilledSupadataError ? error.billableCredits : null;
 }
 
 /**
@@ -50,21 +167,36 @@ function sleep(ms: number): Promise<void> {
  * Residual risk: a Polish-original video that also carries an English track hands us the translation.
  * `transcript_lang` / `transcript_available_langs` exist to measure how often that happens.
  * Output language is unaffected either way — Polish comes entirely from the LLM prompt.
+ *
+ * The optional `meter` records one `transcript` row for this call plus one `transcript_poll` row per
+ * job-status call, each carrying what Supadata itself reported billing. Optional so existing call
+ * sites compile unchanged.
  */
-export async function fetchTranscript({ url }: { url: string }, apiKey: string): Promise<TranscriptResult> {
-  const supadata = new Supadata({ apiKey });
+export async function fetchTranscript(
+  { url }: { url: string },
+  apiKey: string,
+  meter?: SupadataMeter,
+): Promise<TranscriptResult> {
+  const query = `?url=${encodeURIComponent(url)}&text=true&mode=auto&lang=${TRANSCRIPT_REQUESTED_LANG}`;
 
   try {
-    const result = await supadata.transcript({ url, text: true, mode: "auto", lang: "en" });
+    const { body, billableCredits } = await supadataGet(`/transcript${query}`, apiKey);
+    // Cast at the transport boundary, exactly as `metadata.ts` does for `/v1/metadata`.
+    const result = body as TranscriptOrJobId;
 
     if ("jobId" in result) {
-      return await pollTranscriptJob(supadata, result.jobId);
+      // The `202` is recorded here with whatever it reported; whether the charge lands on it or on the
+      // polls is exactly the open question the ledger exists to answer, so nothing is assumed either way.
+      meter?.record({ operation: "transcript", outcome: "ok", resolvedVia: "job", billableCredits });
+      return await pollTranscriptJob(result.jobId, apiKey, meter);
     }
 
     if (typeof result.content !== "string") {
+      meter?.record({ operation: "transcript", outcome: "unavailable", billableCredits });
       return { ok: false, reason: "unavailable" };
     }
 
+    meter?.record({ operation: "transcript", outcome: "ok", resolvedVia: "inline", billableCredits });
     return {
       ok: true,
       content: result.content,
@@ -74,21 +206,58 @@ export async function fetchTranscript({ url }: { url: string }, apiKey: string):
     };
   } catch (error) {
     if (error instanceof SupadataError && error.error === "transcript-unavailable") {
+      // Billable despite producing nothing (see supadata-transcript.md §Pricing). This row, now
+      // carrying a MEASURED credit figure rather than an assumed one, is the single most valuable
+      // thing this ledger captures.
+      meter?.record({
+        operation: "transcript",
+        outcome: "unavailable",
+
+        billableCredits: billedFromError(error),
+      });
       return { ok: false, reason: "unavailable" };
     }
+    meter?.record({
+      operation: "transcript",
+      outcome: "error",
+
+      billableCredits: billedFromError(error),
+    });
     throw error;
   }
 }
 
-async function pollTranscriptJob(supadata: Supadata, jobId: string): Promise<TranscriptResult> {
+/**
+ * Polls a Whisper job to completion. Polls are documented FREE, but the header is recorded rather than
+ * assumed zero — whether the `202` or the polls carry the charge is precisely what Phase 5 settles.
+ * They stay a distinct `operation` either way, so the two are never conflated in the ledger.
+ */
+async function pollTranscriptJob(jobId: string, apiKey: string, meter?: SupadataMeter): Promise<TranscriptResult> {
   let interval = JOB_POLL_INITIAL_INTERVAL_MS;
 
   for (let attempt = 0; attempt < JOB_POLL_MAX_ATTEMPTS; attempt++) {
     await sleep(interval);
-    const job = await supadata.transcript.getJobStatus(jobId);
+
+    let job: JobResult<Transcript>;
+    let billableCredits: number | null;
+    try {
+      const polled = await supadataGet(`/transcript/${encodeURIComponent(jobId)}`, apiKey);
+      job = polled.body as JobResult<Transcript>;
+      billableCredits = polled.billableCredits;
+    } catch (error) {
+      meter?.record({
+        operation: "transcript_poll",
+        outcome: "error",
+
+        resolvedVia: "job",
+        billableCredits: billedFromError(error),
+      });
+      throw error;
+    }
 
     if (job.status === "completed") {
       if (job.result && typeof job.result.content === "string") {
+        meter?.record({ operation: "transcript_poll", outcome: "ok", resolvedVia: "job", billableCredits });
         return {
           ok: true,
           content: job.result.content,
@@ -97,15 +266,35 @@ async function pollTranscriptJob(supadata: Supadata, jobId: string): Promise<Tra
           resolvedVia: "job",
         };
       }
+      // Completed with nothing: the vendor's answer is that there IS no transcript. Durable.
+      meter?.record({
+        operation: "transcript_poll",
+        outcome: "unavailable",
+
+        resolvedVia: "job",
+        billableCredits,
+      });
       return { ok: false, reason: "unavailable" };
     }
 
     if (job.status === "failed") {
-      return { ok: false, reason: "unavailable" };
+      // The job broke — that says nothing about whether the video has a transcript, so this must never
+      // reach the negative cache.
+      meter?.record({
+        operation: "transcript_poll",
+        outcome: "error",
+
+        resolvedVia: "job",
+        billableCredits,
+      });
+      return { ok: false, reason: "failed" };
     }
 
+    meter?.record({ operation: "transcript_poll", outcome: "ok", resolvedVia: "job", billableCredits });
     interval = Math.min(interval * JOB_POLL_BACKOFF_FACTOR, JOB_POLL_MAX_INTERVAL_MS);
   }
 
-  return { ok: false, reason: "unavailable" };
+  // Budget exhausted while the job was still running. Transient by construction, and likeliest on the
+  // long videos where Whisper runs longest — caching this would lock out exactly the wrong content.
+  return { ok: false, reason: "timeout" };
 }
