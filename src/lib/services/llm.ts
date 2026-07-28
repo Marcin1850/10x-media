@@ -4,8 +4,16 @@ import type { ChannelCharacter } from "@/types";
 
 const SUMMARY_MODEL_SLUG = "anthropic/claude-sonnet-5";
 
+/**
+ * `usage: { include: true }` turns on OpenRouter's usage accounting (S-07). Without it the response
+ * carries no `providerMetadata.openrouter.usage` at all, so `cost` never arrives and every summary is
+ * persisted with unknown spend — which is the gap this slice exists to close.
+ *
+ * The provider is callable as `(modelId, settings)`; the settings object was simply absent before.
+ * Usage accounting adds no latency: the figures ride the response already being parsed.
+ */
 export function getSummaryModel(apiKey: string) {
-  return createOpenRouter({ apiKey })(SUMMARY_MODEL_SLUG);
+  return createOpenRouter({ apiKey })(SUMMARY_MODEL_SLUG, { usage: { include: true } });
 }
 
 const SYSTEM_PROMPTS: Record<ChannelCharacter, string> = {
@@ -83,6 +91,46 @@ const SUMMARY_TIMEOUT_MS = 300_000;
 export interface SummarizeResult {
   text: string;
   model: string;
+  /**
+   * OpenRouter's own reported cost for this call, in USD. Null when usage accounting reported
+   * nothing — a missing figure is telemetry that did not arrive, never a reason to fail a generation
+   * whose work is already done and already paid for.
+   */
+  costUsd: number | null;
+  promptTokens: number | null;
+  completionTokens: number | null;
+}
+
+/** Plain-object narrowing — `typeof null === "object"` and arrays are objects, so both are excluded. */
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/**
+ * Digs `openrouter.usage` out of a step's provider metadata, or null.
+ *
+ * Every hop is checked at runtime rather than typed through. The AI SDK types `providerMetadata` as
+ * nested `JSONValue` keyed by provider name — not as the provider's `OpenRouterUsageAccounting` — and
+ * its static shape says the keys are always present while the runtime says otherwise. A cast or a
+ * non-null assertion here would be a claim about a vendor response this code cannot make.
+ */
+function readUsage(providerMetadata: unknown): Record<string, unknown> | null {
+  const openrouter = asRecord(asRecord(providerMetadata)?.openrouter);
+  return asRecord(openrouter?.usage);
+}
+
+/**
+ * Reads one numeric field out of the usage-accounting object, or null. Every field is optional in the
+ * provider's own type (`cost?: number`), so absence is expected rather than exceptional.
+ *
+ * Non-finite values are rejected too: `cost_usd` is `numeric` and the token columns are `integer`, so
+ * a NaN reaching the persist call would abort the write of a summary already paid for.
+ */
+function readUsageNumber(usage: Record<string, unknown> | null, field: string): number | null {
+  const value = usage?.[field];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 export async function summarize(
@@ -104,5 +152,16 @@ export async function summarize(
     throw new Error(`summarize: model returned empty text (finishReason: ${result.finishReason})`);
   }
 
-  return { text, model: result.finalStep.response.modelId };
+  // Usage accounting (S-07). Absent figures become null and the summary is returned regardless — the
+  // LLM call has already been made and billed by the time we get here, so telemetry that failed to
+  // arrive must never turn a delivered summary into an error.
+  const usage = readUsage(result.finalStep.providerMetadata);
+
+  return {
+    text,
+    model: result.finalStep.response.modelId,
+    costUsd: readUsageNumber(usage, "cost"),
+    promptTokens: readUsageNumber(usage, "promptTokens"),
+    completionTokens: readUsageNumber(usage, "completionTokens"),
+  };
 }
