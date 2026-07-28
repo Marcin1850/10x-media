@@ -35,3 +35,30 @@ shape beyond the findings themselves:
 
 Accepted risk: the `persist_summary` drop-and-recreate window between `db push` and
 `wrangler deploy`, unchanged from S-08.
+
+## Follow-up plan-review triage (2026-07-28)
+
+Four further findings, all fixed. None changed the work's shape — they closed gaps between
+what the plan promised and what its own design delivers:
+
+- **`generation_ms` stops at persistence, not at the response.** `persist_summary` is the
+  only writer, so the value must be frozen before the call; the exclusions (persist round
+  trip, quote cleanup, response construction) are now stated, and the post-persist second
+  write is explicitly rejected to keep telemetry atomic with the summary.
+- **The cache promise is eventual, not absolute.** Concurrent cold misses for the same video
+  can each pay — the existing lease is per-user and cannot coordinate two users on one video.
+  A single-flight lease was declined as premature, but the race is **measured, not assumed
+  rare**: `save_transcript_cache` returns `true` when it overwrote a row younger than the
+  caller's own fetch, and the endpoint logs `[duplicate-transcript-fetch]`. Skew-immune (one
+  Postgres clock plus a Worker-measured duration), no extra round trip, and readable today via
+  Workers observability — a Sentry-style reporter would later upgrade that one call site.
+- **`empty` takes the 30-day window, not the 24-hour one.** The short window exists only
+  because `transcript-unavailable` can stop being true; an instrumental video is permanently
+  wordless, so expiring it daily would re-pay for the same nothing. Constant renamed
+  `TRANSCRIPT_CACHE_UNAVAILABLE_MAX_AGE_SECONDS` to name the outcome rather than "negative".
+- **`plan-brief.md` regenerated** from the current plan, last, so it absorbed all three edits
+  above in one pass.
+
+Plan review verdict: **SOUND**. Two things stay open by design — the unit of
+`x-billable-requests` (Phase 5 run 3 settles it, rename ready) and the real frequency of
+concurrent cold misses (the ledger will show it).

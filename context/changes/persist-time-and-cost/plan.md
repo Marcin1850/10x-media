@@ -2,7 +2,7 @@
 
 ## Overview
 
-Every generation currently produces a summary and forgets everything about how it was made. This change records the facts: how long each external call took, what OpenRouter charged, exactly which Supadata calls were made (including on requests that never produced a summary), and how large the input was. It also stops paying twice for the same transcript by introducing a shared, user-agnostic transcript cache.
+Every generation currently produces a summary and forgets everything about how it was made. This change records the facts: how long each external call took, what OpenRouter charged, exactly which Supadata calls were made (including on requests that never produced a summary), and how large the input was. It also stops re-paying for a transcript **that has already been fetched and cached**, by introducing a shared, user-agnostic transcript cache.
 
 Two consumers justify it. The PRD's "75% good-enough" criterion needs speed and spend alongside content, and **S-09 cannot choose a lever without knowing how often `mode: "auto"` silently falls back to Whisper** — a rate nobody has measured. This slice measures; S-09 bounds.
 
@@ -30,7 +30,9 @@ Two consumers justify it. The PRD's "75% good-enough" criterion needs speed and 
 
 ## Desired End State
 
-Every persisted summary carries: input size in characters, four timings (transcript / LLM / metadata / total), OpenRouter cost and token counts, and a `resolved_via` that distinguishes a paid fetch from a cache reuse. Every real Supadata HTTP call — including ones on requests that returned 422, 413, 409 or 502 — has a row in an append-only ledger carrying **the credits Supadata itself reported billing for that call**. A transcript fetched once is reused by any user for 30 days, then re-fetched and overwritten.
+Every persisted summary carries: input size in characters, four timings (transcript / LLM / metadata / total), OpenRouter cost and token counts, and a `resolved_via` that distinguishes a paid fetch from a cache reuse. Every real Supadata HTTP call — including ones on requests that returned 422, 413, 409 or 502 — has a row in an append-only ledger carrying **the credits Supadata itself reported billing for that call**. A transcript fetched once **and written to the cache** is reused by any user for 30 days, then re-fetched and overwritten.
+
+The reuse guarantee is deliberately *eventual*, not absolute: it holds from the first completed cache write onward. Requests that overlap a cold miss can still each pay — see "Concurrent cold misses" below.
 
 **Verification:** generating the same short video twice yields a second summary with `resolved_via = 'stored'`, near-zero `transcript_ms`, and **no new transcript ledger row** (one metadata row is still expected — only the transcript is cached); `sum(billable_credits)` over `supadata_calls` reconciles against `GET /v1/me`'s `usedCredits` delta.
 
@@ -48,6 +50,7 @@ Every persisted summary carries: input size in characters, four timings (transcr
 - **No cache eviction or pruning.** Rows are overwritten, never deleted.
 - **No *inferred* credit figure, anywhere.** The ledger stores only what Supadata reported for that request (`x-billable-requests`). The `resolved_via` → Whisper formula is not used to price anything — not in a column, not in a document. A retrospective estimate built on it was planned and cut.
 - **No change to what a summary costs the user.** `summaryCost` and both char thresholds are untouched — this slice measures spend, S-09 bounds it.
+- **No single-flight lock on the cache.** Concurrent cold misses for the same video can each pay; the deduplication promise is eventual, from the first cache write onward. Rationale and the follow-up trigger are in Critical Implementation Details.
 - **No retiring of `transcript_quotes`.** It becomes largely redundant once the shared cache lands; removing a hardened path (F17/F24) is a separate change.
 - **No backfill and no pricing of history.** Existing rows keep null telemetry. Spend before the ledger exists stays unmeasured rather than estimated from a formula this slice just discredited.
 
@@ -64,6 +67,14 @@ The transcript cache is a user-agnostic table because the alternative — a colu
 1. The cache **write** happens immediately after a successful fetch and *before* the long-video 409 returns. A user who abandons the confirmation has still paid Supadata; caching first means the money buys something.
 2. The cache **read** happens after the `allowLong` quote check and before `recordTranscriptAttempt`. A cache hit must not consume a rate-limit token — it makes no paid call.
 3. The meter **flush** happens in a `finally` in `POST`, alongside the lease release. Every early return (422, 413, 409, 502, 500) must still write its ledger rows; that spend is precisely what a summary-column design would miss.
+
+**Concurrent cold misses are accepted, not prevented.** The cache is a read followed later by an upsert, with a paid fetch of several seconds in between. Two users requesting the same uncached video in that window both see a miss, both pay Supadata, and both upsert the same `youtube_id`; the primary key resolves the *writes*, not the *spend*. The existing generation lease cannot close this — it is keyed per user by construction (`generation-lock.ts:3-8`), so it never sees two different users on one video.
+
+Closing it would mean a video-scoped single-flight lease: a new cross-user claim, held across a slow external call, needing expiry, stale takeover, and a wait-then-re-read path for the loser. That is a meaningful amount of new distributed-state machinery to buy back a duplicate fetch that requires two users to hit the same uncached video within the same few seconds — a rate this app has no evidence of. **Deliberately deferred, but explicitly instrumented rather than merely assumed rare.**
+
+`save_transcript_cache` detects the collision as a side effect of the write it already performs: it returns `true` when the row it overwrote was written *after this request started fetching*, which is only possible if another request fetched the same video concurrently. The endpoint logs one `[duplicate-transcript-fetch]` warning per occurrence (Phase 4 §2b). Counting those lines is the decision input for a lease — and it is available from day one, because `observability.enabled` is already on. The alternative signal, mining the ledger for duplicate `transcript` rows on one `youtube_id`, stays available as a cross-check but needs a query nobody will run unprompted.
+
+What is *not* acceptable is claiming the race is closed — hence the narrowed wording above.
 
 **Migration & rollback.** Phase 1's migration drops and recreates `persist_summary`, so from the moment it is pushed the deployed Worker calls a signature that no longer exists. This repeats the window S-08 documented and accepted: `persistSummaryAndSettle` throws, the caller refunds the reservation, the user is not charged — but the OpenRouter spend for any generation caught in it is lost. Mitigation is procedural and unchanged: `supabase db push` and `wrangler deploy` are ONE operation in Phase 5, run back to back. Rollback is re-applying `20260725120000_video_metadata.sql`'s function body.
 
@@ -93,13 +104,13 @@ Land every schema change in one migration: two new tables, eight telemetry colum
 
 | `outcome` | What the vendor did | Reuse means |
 | --- | --- | --- |
-| `ok` | Returned usable text | Summarize it — the paid fetch is skipped |
-| `empty` | Returned success with whitespace-only content | 422 for free — an instrumental video is *permanently* wordless, so re-paying for it buys the same nothing |
-| `unavailable` | Said `transcript-unavailable` (or completed a job with no content) | 422 for free — but on a **short window**, see below |
+| `ok` | Returned usable text | Summarize it — the paid fetch is skipped. **30-day window** |
+| `empty` | Returned success with whitespace-only content | 422 for free — an instrumental video is *permanently* wordless, so re-paying for it buys the same nothing. **30-day window, same as `ok`** |
+| `unavailable` | Said `transcript-unavailable` (or completed a job with no content) | 422 for free — but on a **24-hour window**, see below |
 
 `content` stays `not null` and holds `''` for both negative outcomes; the `outcome` column, not the emptiness of `content`, is the thing code branches on. Recording them separately costs one column and preserves the distinction between "we were told there is nothing" and "we were given nothing", which the ledger's analytics would otherwise lose.
 
-**`unavailable` rows carry their own, shorter TTL.** YouTube publishes auto-captions with a lag after upload, so a freshly uploaded video can legitimately answer `transcript-unavailable` now and succeed hours later. Caching that for the full 30 days would lock the video out for a month — and recent videos are a core use case for this app. Only `failed`/`timeout` outcomes are never cached at all (they are transient by construction); `unavailable` is cached briefly because it is *usually* but not *always* permanent.
+**`unavailable` — and only `unavailable` — carries a shorter TTL.** YouTube publishes auto-captions with a lag after upload, so a freshly uploaded video can legitimately answer `transcript-unavailable` now and succeed hours later. Caching that for the full 30 days would lock the video out for a month — and recent videos are a core use case for this app. It is cached briefly because it is *usually* but not *always* permanent. `empty` is not in that category: it is a vendor **success** reporting that the video has no words, which does not change, so it keeps the full 30 days alongside `ok`. Only `failed`/`timeout` are never cached at all — they are transient by construction and say nothing about the video.
 
 *(b) `public.supadata_calls`* — `id uuid primary key default gen_random_uuid()`, `user_id uuid references auth.users (id) on delete set null`, `summary_id uuid references public.summaries (id) on delete set null`, `youtube_id text`, `operation text not null check (operation in ('transcript','transcript_poll','metadata'))`, `outcome text not null check (outcome in ('ok','unavailable','error'))`, `resolved_via text`, `billable_credits integer`, `created_at timestamptz not null default now()`. `billable_credits` is **nullable and stored verbatim** from the response's `x-billable-requests` header: `null` means the vendor reported nothing (or the response never arrived), `0` means it reported free. Keeping those two distinct is what makes a Phase 5 reconciliation gap diagnosable instead of merely visible; comment the column to say so. Both FKs are `set null`, not `cascade`: the operator's bill does not shrink when a user deletes their account or a summary, and erasing the link erases the personal data. Index on `(created_at)` and on `(user_id, created_at)`. Same definer-only RLS treatment as (a).
 
@@ -119,8 +130,12 @@ Land every schema change in one migration: two new tables, eight telemetry colum
 **Intent**: Give the Worker service-role-only entry points for the three new operations, matching how every other definer table in this repo is reached.
 
 **Contract**:
-- `get_transcript_cache(p_youtube_id text, p_max_age_seconds integer, p_negative_max_age_seconds integer) returns table (content text, outcome text, lang text, available_langs text[], resolved_via text, fetched_at timestamptz)` — returns nothing when absent, or when the row is older than the window **that applies to its own `outcome`**: `p_max_age_seconds` for `'ok'`, `p_negative_max_age_seconds` for `'empty'` and `'unavailable'`. Expressing the two windows as separate arguments keeps the policy in the caller's named constants rather than baked into SQL.
-- `save_transcript_cache(p_youtube_id text, p_content text, p_outcome text, p_lang text, p_available_langs text[], p_requested_lang text, p_resolved_via text)` — upsert on `youtube_id`, overwriting **every** field including `fetched_at = now()`. Unlike `persist_summary`'s video upsert this must NOT coalesce: a refresh past the window is exactly the case where the new value must win. A later successful fetch therefore replaces a negative row outright, which is how a video that gains captions heals.
+- `get_transcript_cache(p_youtube_id text, p_max_age_seconds integer, p_unavailable_max_age_seconds integer) returns table (content text, outcome text, lang text, available_langs text[], resolved_via text, fetched_at timestamptz)` — returns nothing when absent, or when the row is older than the window **that applies to its own `outcome`**: `p_max_age_seconds` for `'ok'` **and `'empty'`**, `p_unavailable_max_age_seconds` for `'unavailable'` alone. The split follows the table above: `'empty'` is a *successful* answer about a permanently wordless video, so it earns the same 30 days as `'ok'` — expiring it after a day would re-pay for the same nothing, which is exactly the spend caching an empty exists to stop. Only `'unavailable'` is a claim that can stop being true. Expressing the two windows as separate arguments keeps the policy in the caller's named constants rather than baked into SQL.
+- `save_transcript_cache(p_youtube_id text, p_content text, p_outcome text, p_lang text, p_available_langs text[], p_requested_lang text, p_resolved_via text, p_fetch_duration_ms integer) returns boolean` — upsert on `youtube_id`, overwriting **every** field including `fetched_at = now()`. Unlike `persist_summary`'s video upsert this must NOT coalesce: a refresh past the window is exactly the case where the new value must win. A later successful fetch therefore replaces a negative row outright, which is how a video that gains captions heals.
+
+  The returned boolean is a **duplicate-fetch signal**. Before the upsert, read the existing row's `fetched_at` and return `true` when a row existed and `now() - fetched_at < make_interval(secs => p_fetch_duration_ms / 1000.0)` — i.e. it was written *after this request started fetching*, so another request paid for the same video while ours was in flight. `false` when there was no row, or when the row is older than our fetch (the ordinary 30-day-expiry overwrite).
+
+  This comparison is deliberately built from **one clock plus a duration**, never two clocks: `now()` and `fetched_at` are both Postgres, and `p_fetch_duration_ms` is an elapsed time measured in the Worker. Passing a Worker *timestamp* instead would make the check hostage to skew between the Worker and the database. Note also that N concurrent cold misses produce N−1 `true` returns — exactly the number of *wasted* fetches, since the first writer is the one whose spend was useful.
 - `record_supadata_calls(p_calls jsonb)` — inserts a batch in one statement, so a whole generation's ledger rows cost one round trip.
 
 All three `security definer`, `set search_path = ''`, `revoke all` then `grant execute` to `service_role` only.
@@ -149,6 +164,8 @@ All three `security definer`, `set search_path = ''`, `revoke all` then `grant e
 - `summaries` accepts `resolved_via = 'stored'` and still rejects an unknown value
 - **`transcript_quotes` also accepts `resolved_via = 'stored'`** — check this table explicitly, not just `summaries`; it is the constraint whose failure is silent
 - `transcript_cache` rejects an `outcome` outside `('ok','empty','unavailable')`
+- **The two windows are applied per `outcome`**: with `fetched_at` backdated 48 hours, `get_transcript_cache(id, 2592000, 86400)` still returns an `'ok'` row and an `'empty'` row but returns nothing for an `'unavailable'` row. Test it directly against the RPC — this is the one behaviour where mixing the two windows costs credits silently
+- **`save_transcript_cache` reports duplicate fetches**: called twice in a row for one `youtube_id` with `p_fetch_duration_ms = 60000`, the first returns `false` and the second `true`; with `fetched_at` then backdated a day, a third call returns `false`. Testable deterministically against the RPC — no concurrency needed, because the check is "was the overwritten row younger than my fetch", not "did two things really overlap"
 
 **Implementation Note**: After this phase the local DB no longer matches the deployed Worker's expectations. Do not push to cloud until Phase 5.
 
@@ -199,9 +216,9 @@ Two new services and metering inside the two modules that make Supadata HTTP cal
 
 **Intent**: Read and write the shared transcript cache through the service-role RPCs, with both reuse windows expressed as named constants.
 
-**Contract**: Export two windows — `TRANSCRIPT_CACHE_MAX_AGE_SECONDS = 2_592_000` (30 days, `outcome = 'ok'`) and `TRANSCRIPT_CACHE_NEGATIVE_MAX_AGE_SECONDS = 86_400` (24 hours, `'empty'` and `'unavailable'`) — and two functions taking the admin client: `getCachedTranscript(admin, youtubeId)` returning `{ content, outcome, lang, availableLangs, resolvedVia, fetchedAt } | null`, and `saveCachedTranscript(admin, {...})` returning void. Both **best-effort and never throwing**, mirroring `transcript-guard.ts`: a cache miss on error just means a paid fetch, and a failed write must not fail a generation. Narrow the RPC result at the boundary rather than destructuring `any`, as the existing guards do.
+**Contract**: Export two windows — `TRANSCRIPT_CACHE_MAX_AGE_SECONDS = 2_592_000` (30 days, `outcome = 'ok'` **and `'empty'`**) and `TRANSCRIPT_CACHE_UNAVAILABLE_MAX_AGE_SECONDS = 86_400` (24 hours, `'unavailable'` only) — and two functions taking the admin client: `getCachedTranscript(admin, youtubeId)` returning `{ content, outcome, lang, availableLangs, resolvedVia, fetchedAt } | null`, and `saveCachedTranscript(admin, { ..., fetchDurationMs })` returning `{ duplicateFetch: boolean }`. Both **best-effort and never throwing**, mirroring `transcript-guard.ts`: a cache miss on error just means a paid fetch, and a failed write must not fail a generation. A write that failed returns `{ duplicateFetch: false }` — the signal is an observation, and absence of evidence must not be reported as evidence. Narrow the RPC result at the boundary rather than destructuring `any`, as the existing guards do.
 
-Comment the 24-hour constant with its reason — it is a *risk bound*, not a performance tuning knob. A negative row is a claim about a video that may stop being true (auto-captions arrive late on fresh uploads), so the window caps how long a wrong claim can be served. Widening it trades user-visible correctness for credits; the two constants exist separately so that trade can never be made by accident.
+The constants are split by *how durable the answer is*, not by whether it is positive or negative — which is why the short one is named for `unavailable` rather than for negativity. `'empty'` is a vendor success: the video has no words and never will, so it is as durable as a transcript and takes the 30-day window. `'unavailable'` is the only outcome that can stop being true (auto-captions arrive late on fresh uploads), so its window is a *risk bound*, not a performance tuning knob — it caps how long a wrong claim can be served. Comment it with that reason. Widening it trades user-visible correctness for credits; the two constants exist separately so that trade can never be made by accident, and grouping `'empty'` under the short one would spend credits re-confirming a permanent fact.
 
 #### 2. Supadata call meter and ledger writer
 
@@ -280,6 +297,16 @@ Wire the cache into the transcript acquisition path, measure the four timings, f
 
 *(b) Write.* On a miss, the existing fetch path runs unchanged and `saveCachedTranscript` is called immediately after the fetch resolves, **before** the long-video 409 return at `:318`, so an abandoned confirmation still leaves the paid transcript cached. Every *billable* outcome is cached, not just the useful one: `ok:true` with text → `'ok'`; `ok:true` with whitespace-only content → `'empty'`; `reason: 'unavailable'` → `'unavailable'`. `reason: 'failed'` and `reason: 'timeout'` are **never** written — they say nothing durable about the video.
 
+Pass the measured `transcript_ms` as `fetchDurationMs`. When `saveCachedTranscript` returns `duplicateFetch: true`, emit **one** `console.warn` with a stable, greppable prefix and no free text:
+
+```
+[duplicate-transcript-fetch] youtubeId=<id> fetchMs=<n> userId=<uuid>
+```
+
+This is the only instrumentation for the concurrency race documented in Critical Implementation Details, and it is what turns "we don't know how often this happens" into a number. It has value **before** any error-reporting service is wired up: `observability.enabled: true` is already set (`wrangler.jsonc:12-14`), so Workers retains the line and the Cloudflare observability MCP server can count occurrences per `youtubeId` directly. If an error reporter (Sentry or similar) is added later, this call site is the single place to upgrade to a warning-level event — the prefix is the search key in the meantime, so **do not reword it**.
+
+`console.warn`, not `console.error`: nothing failed and no user is affected. A duplicate fetch means the operator paid twice for one transcript — a cost signal, not an incident. Keep it out of the `catch` paths so it can never be confused with a failure.
+
 *(c) Hoist the whitespace guard.* The rejection at `generate.ts:281-285` currently sits **inside** the fetch branch, so it never sees a cached transcript. Move it below the whole acquisition if/else so it covers all three sources. This is not tidying — it is load-bearing:
 
 - `summaryCost(0)` returns `1` (`summaries.ts:131-133`), so an empty transcript reaching the main path clears the 413 and the 409, **debits a credit, and sends nothing to the LLM**.
@@ -293,7 +320,11 @@ With the guard hoisted, an `'empty'` cache hit fails the same way a fresh empty 
 
 **Intent**: Measure each external call separately plus the request as a whole.
 
-**Contract**: `transcript_ms` brackets whatever produced the transcript — the fetch, the quote read, or the cache read — so a `'stored'` row legitimately reads near zero and `resolved_via` explains why. `llm_ms` brackets `summarize()`. `metadata_ms` brackets `fetchVideoMetadata` (retry and its ~1.2 s sleep included; that delay is real latency the user waited through). `generation_ms` is wall-clock from the start of `runGeneration` to just before the success response. Use `Date.now()` deltas rounded to integers — the columns are `integer`.
+**Contract**: `transcript_ms` brackets whatever produced the transcript — the fetch, the quote read, or the cache read — so a `'stored'` row legitimately reads near zero and `resolved_via` explains why. `llm_ms` brackets `summarize()`. `metadata_ms` brackets `fetchVideoMetadata` (retry and its ~1.2 s sleep included; that delay is real latency the user waited through). Use `Date.now()` deltas rounded to integers — the columns are `integer`.
+
+`generation_ms` is wall-clock from the start of `runGeneration` **to immediately before `persistSummaryAndSettle`** (`generate.ts:411`) — not to the response. The boundary is forced, not chosen: `persist_summary` is the only writer of `summaries`, so a value carried through it must be frozen before the call is made. It therefore **excludes** the persist round trip itself, the `discardTranscriptQuote` cleanup (`:448-450`), and response construction (`:452-460`). Name the variable and comment the column to say so, since "generation time" invites the response-bound reading.
+
+Reaching a true response-bound figure would need a second write after persist — a separate `update` on the row just committed, with its own failure path, breaking the property that telemetry commits atomically with the summary it describes. Not worth it for the few milliseconds between the two points; explicitly rejected here rather than left open.
 
 #### 4. Thread telemetry through persistence
 
@@ -397,15 +428,16 @@ There is no automated test suite in this project (Module-3 deferral), so verific
 3. Repeat with the other character: expect `'stored'`, no new `transcript` row, a new `metadata` row.
 4. A video with no transcript: expect 422, a `transcript`/`unavailable` ledger row with null `summary_id`, no summary, and a `transcript_cache` row with `outcome = 'unavailable'`. Repeat it: expect 422 with **zero** new ledger rows.
 5. A long video (>40k chars) up to the 409, then abandon: expect a cached transcript despite no summary, and ledger rows recorded. Re-run it from cache and confirm the `transcript_quotes` row is written with `resolved_via = 'stored'`.
-6. Live pass per Phase 5, budgeted at 6–9 credits.
+6. Duplicate-fetch signal, without spending credits: call `save_transcript_cache` twice against the local DB (step 1.11), then confirm the endpoint's `[duplicate-transcript-fetch]` branch fires by temporarily forcing the RPC's return to `true`. The concurrent case itself is **not** reproduced deliberately — it costs two real fetches to stage and proves nothing the RPC-level test does not.
+7. Live pass per Phase 5, budgeted at 6–9 credits.
 
-**Deliberately not verified live** (cost): the metadata retry, and the negative cache's 24-hour expiry. Both are exercised locally by reasoning and DB inspection — the expiry by backdating `fetched_at` rather than waiting a day. State this limitation in the verification record rather than implying full coverage.
+**Deliberately not verified live** (cost): the metadata retry, and the `unavailable` cache's 24-hour expiry. Both are exercised locally by reasoning and DB inspection — the expiry by backdating `fetched_at` rather than waiting a day. That local check must confirm **both** halves of the split window: a backdated `unavailable` row expires at 24 hours while a backdated `empty` row of the same age still hits. State this limitation in the verification record rather than implying full coverage.
 
 The Whisper `job` path **is** now verified live (Phase 5 run 3), reversing this plan's earlier position. It was excluded on cost while its only purpose was confirming a price already in the docs; it is included now because it is the sole run that can determine whether `x-billable-requests` reports credits or requests, and every figure the ledger accumulates depends on that answer.
 
 ## Performance Considerations
 
-The cache read adds one DB round trip before a fetch that costs money and seconds — a favourable trade whenever it hits, and negligible when it misses. The ledger costs exactly one round trip per request regardless of how many calls were made, because rows are batched. Usage accounting adds no latency; the figures ride the response already being parsed. Cache growth is unbounded by design (one row per video, up to 200k chars) — accepted at MVP scale and worth revisiting only if the video count grows by orders of magnitude.
+The cache read adds one DB round trip before a fetch that costs money and seconds — a favourable trade whenever it hits, and negligible when it misses. The duplicate-fetch signal is free: it rides the upsert the write already performs, adding one `select` inside a function already touching that row, and no extra round trip. The ledger costs exactly one round trip per request regardless of how many calls were made, because rows are batched. Usage accounting adds no latency; the figures ride the response already being parsed. Cache growth is unbounded by design (one row per video, up to 200k chars) — accepted at MVP scale and worth revisiting only if the video count grows by orders of magnitude.
 
 ## Migration Notes
 
@@ -440,6 +472,8 @@ The migration is additive except for the `persist_summary` swap and the two `res
 - [ ] 1.7 `summaries` accepts `resolved_via = 'stored'` and rejects unknown values
 - [ ] 1.8 `transcript_quotes` also accepts `resolved_via = 'stored'`
 - [ ] 1.9 `transcript_cache` rejects an `outcome` outside `('ok','empty','unavailable')`
+- [ ] 1.10 Windows applied per `outcome`: backdated 48h, `ok` and `empty` still return, `unavailable` does not
+- [ ] 1.11 `save_transcript_cache` returns `false` then `true` on back-to-back calls, and `false` again once `fetched_at` is backdated a day
 
 ### Phase 2: OpenRouter cost instrumentation
 

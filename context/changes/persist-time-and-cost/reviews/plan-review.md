@@ -4,8 +4,8 @@
 - **Plan**: `context/changes/persist-time-and-cost/plan.md`
 - **Mode**: Deep
 - **Date**: 2026-07-28
-- **Verdict**: REVISE → SOUND after triage → **REVISE on follow-up** (2026-07-28)
-- **Findings**: 2 critical, 8 warnings, 0 observations — original 6 triaged; 4 follow-up findings pending
+- **Verdict**: REVISE → SOUND after triage → REVISE on follow-up → **SOUND after follow-up triage** (2026-07-28)
+- **Findings**: 2 critical, 8 warnings, 0 observations — all 10 triaged
 
 ## Verdicts
 
@@ -21,7 +21,7 @@ Reasoning for the movement is at the bottom, under §Triage outcome.
 
 ## Grounding
 
-Grounding: 11/11 existing paths ✓, 6/6 symbol groups ✓, brief↔plan ✗ (F9 follow-up). Progress: 5/5 phases and 39/39 success criteria represented.
+Grounding: 11/11 existing paths ✓, 6/6 symbol groups ✓, brief↔plan ✗ (F9 follow-up — **✓ after follow-up triage**). Progress: 5/5 phases and 39/39 success criteria represented (40/40 after F10 added 1.10).
 
 ## Findings
 
@@ -65,6 +65,7 @@ Grounding: 11/11 existing paths ✓, 6/6 symbol groups ✓, brief↔plan ✗ (F9
 - **Fix**: Explicitly place `saveCachedTranscript` after the whitespace rejection, and reject whitespace-only cache rows as misses.
 - **Reframed during triage (user)**: an empty transcript is a *billable success* and, for instrumental video, the permanent truth — so it should be cached to avoid re-paying, not excluded. Re-grounding also found the finding understated the bug: `summaryCost(0)` returns `1` (`summaries.ts:131-133`), so a cached-empty hit would clear the 413/409 gates, **debit a credit and send an empty transcript to the LLM**. The quote cache is safe today only because `saveTranscriptQuote` runs downstream of the guard; this plan is what makes the path reachable.
 - **Decision**: FIXED via revised Fix A + `ok:false` split — cache empties (`outcome = 'empty'`), hoist the whitespace guard below the whole acquisition if/else, split `TranscriptResult`'s failure arm into `unavailable | failed | timeout`, and negative-cache only `unavailable` on a separate 24-hour window (`TRANSCRIPT_CACHE_NEGATIVE_MAX_AGE_SECONDS`) to bound the fresh-upload/late-auto-captions risk. `failed`/`timeout` are never cached. Plan updated in Phase 1(a), Phase 1 §2 RPCs, Phase 3 §1 and §3(b), Phase 4 §2, Testing Strategy and Progress.
+- **Superseded in part by F10**: this decision grouped `empty` under the 24-hour window along with `unavailable`, which contradicted its own reasoning that an empty transcript is permanent. F10 split them — `empty` takes the 30-day window, and the constant was renamed `TRANSCRIPT_CACHE_UNAVAILABLE_MAX_AGE_SECONDS`.
 
 ### F4 — `'stored'` violates the quote-cache database constraint
 
@@ -163,7 +164,7 @@ Grounding: 11/11 existing paths ✓, 6/6 symbol groups ✓, brief↔plan ✗ (F9
 - **Location**: Phase 4 — Timings; Thread telemetry through persistence
 - **Detail**: The plan defines `generation_ms` as wall-clock time from the start of `runGeneration` to just before the success response (`plan.md:296`), but also requires passing that value into `persistSummaryAndSettle` (`plan.md:298-304`). The actual persist call occurs at `src/pages/api/summaries/generate.ts:411-425`; quote cleanup and response construction happen afterward at `:443-460`. Because `persist_summary` is the only summary writer, a value passed through it must be frozen before persistence and cannot include persistence, cleanup, or the time up to response construction.
 - **Fix**: Redefine the metric as start of `runGeneration` → immediately before `persistSummaryAndSettle` (and state the exclusions explicitly). If true response-bound latency is required, plan a second post-persist write and acknowledge that telemetry is no longer atomic with summary creation.
-- **Decision**: PENDING
+- **Decision**: FIXED — Phase 4 §3 now defines `generation_ms` as `runGeneration` start → immediately before `persistSummaryAndSettle` (`generate.ts:411`), names the boundary as *forced* by `persist_summary` being the only writer, and lists the exclusions (persist round trip, `discardTranscriptQuote` at `:448-450`, response construction at `:452-460`). The post-persist second write is explicitly rejected in the plan rather than left open: it would cost the atomicity of telemetry with the summary it describes for a few milliseconds. Variable name and column comment are required to carry the boundary, since "generation time" invites the response-bound reading.
 
 ### F8 — Shared cache does not serialize concurrent cold misses
 
@@ -182,7 +183,9 @@ Grounding: 11/11 existing paths ✓, 6/6 symbol groups ✓, brief↔plan ✗ (F9
   - Tradeoff: Rare simultaneous requests for the same uncached video can still pay twice.
   - Confidence: HIGH — no hidden caller or video-scoped lock closes the race today.
   - Blind spot: Real production overlap frequency remains unknown.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix B — the promise is narrowed to eventual reuse from the first completed cache write. Overview and Desired End State reworded; a "Concurrent cold misses are accepted, not prevented" block added to Critical Implementation Details; "No single-flight lock on the cache" added to What We're NOT Doing. The deferral is given a data trigger rather than left open-ended: duplicate `transcript` ledger rows for one `youtube_id` seconds apart are the signature, so this slice's own ledger is what would justify a video-scoped lease later.
+- **Note**: Fix A was weighed and declined on cost, not on correctness — a cross-user lease held across a multi-second external call needs expiry, stale takeover and a wait-then-re-read path, which is real distributed-state machinery for a race no one can currently show happens.
+- **Extended after triage (user request)**: the deferral is no longer blind. `save_transcript_cache` now returns a boolean that is `true` when it overwrote a row written *after the caller began fetching* — which is only possible under a concurrent cold miss — and the endpoint logs one `[duplicate-transcript-fetch]` warning per occurrence. The comparison is one Postgres clock plus a Worker-measured *duration*, never two clocks, so it is skew-immune; N overlapping misses yield N−1 warnings, i.e. exactly the count of wasted fetches. It costs no extra round trip (it rides the upsert) and pays off before any error reporter exists, since `observability.enabled` is already set in `wrangler.jsonc:12-14`. The log prefix is declared load-bearing — it is the search key until a Sentry-style reporter upgrades that call site to a warning event. New verification 1.11 tests the RPC deterministically without staging real concurrency.
 
 ### F9 — `plan-brief.md` reverses post-triage decisions
 
@@ -192,7 +195,7 @@ Grounding: 11/11 existing paths ✓, 6/6 symbol groups ✓, brief↔plan ✗ (F9
 - **Location**: `plan-brief.md`
 - **Detail**: The brief still says credits are derived rather than persisted (`plan-brief.md:22`), keeps the retrospective estimate and “no persisted credit figure” (`:32,36-38,48`), budgets 2–3 live credits (`:32,52`), and says the Whisper path remains unverified (`:64`). The triaged plan instead stores the vendor-reported value, removes retrospective pricing, budgets 6–9 credits, requires the job-path run, and adds the negative-cache/failure-reason design. F5 covered only the earlier “no new ledger rows” wording and does not cover this broader post-triage drift.
 - **Fix**: Regenerate `plan-brief.md` from the current plan, including the final decisions, phase names, verification budget, negative-cache behavior, and live-verification scope.
-- **Decision**: PENDING
+- **Decision**: FIXED — `plan-brief.md` rewritten from the current plan, deliberately **last**, so it also absorbs the F7, F8 and F10 edits made in this session rather than needing a second pass. The decisions table now carries the persisted `x-billable-requests` figure, the transport swap, the negative-cache and failure-reason splits, the per-outcome windows, the `generation_ms` boundary and the 6–9 credit budget; Phase 1 is renamed "Schema"; the retrospective estimate moved from in-scope to out-of-scope alongside "no single-flight lock"; the Whisper-path risk is inverted to reflect that it is now verified live.
 
 ### F10 — `empty` uses the short TTL reserved for temporary unavailability
 
@@ -202,4 +205,34 @@ Grounding: 11/11 existing paths ✓, 6/6 symbol groups ✓, brief↔plan ✗ (F9
 - **Location**: Phase 1 cache RPC; Phase 3 transcript cache service
 - **Detail**: The plan describes a whitespace-only successful transcript as permanently wordless (`plan.md:97`) and explains that `unavailable` needs the short window because late captions can make that answer stale (`:102`). The F3 triage record likewise says to negative-cache only `unavailable` for 24 hours. However, `get_transcript_cache` applies `p_negative_max_age_seconds` to both `empty` and `unavailable` (`plan.md:122`), and the service constant repeats that grouping (`:202`). An instrumental video would therefore be re-fetched and re-billed daily, contrary to the accepted reason for caching an empty success.
 - **Fix**: Apply the normal 30-day window to `ok` and `empty`; reserve the 24-hour window for `unavailable`, and update the RPC/service wording and verification accordingly.
-- **Decision**: PENDING
+- **Decision**: FIXED — the third RPC argument is renamed `p_unavailable_max_age_seconds` and the constant `TRANSCRIPT_CACHE_UNAVAILABLE_MAX_AGE_SECONDS`, so the short window is named for the *outcome* it applies to rather than for negativity. The `outcome` table now states each window inline; the TTL paragraph and the Phase 3 service contract both spell out that the split is by **durability of the answer**, not by positive-vs-negative — `empty` is a vendor success about a fact that does not change. New verification 1.10 tests the split directly against the RPC (48h-backdated rows: `ok` and `empty` hit, `unavailable` misses), and the Testing Strategy backdating note now requires both halves. Progress re-synced.
+
+### Follow-up triage outcome (2026-07-28)
+
+| Finding | Decision |
+| --- | --- |
+| F7 — `generation_ms` cannot reach its stated end boundary | FIXED |
+| F8 — Shared cache does not serialize concurrent cold misses | FIXED (Fix B — narrowed promise, deferral given a data trigger) |
+| F9 — `plan-brief.md` reverses post-triage decisions | FIXED (brief regenerated last, absorbing F7/F8/F10) |
+| F10 — `empty` uses the short TTL reserved for temporary unavailability | FIXED |
+
+All four fixes were wording-and-contract edits; no phase was added or removed and no
+implementation work changed shape. Ordering was the user's call: the brief was regenerated
+only after the plan edits landed, so it needed one pass rather than two.
+
+#### Follow-up verdict movement
+
+| Dimension | Before | After |
+| --- | --- | --- |
+| End-State Alignment | FAIL | PASS — `generation_ms` has a reachable boundary, and the cache promise matches what the design delivers |
+| Lean Execution | PASS | PASS — Fix B declined new machinery; nothing added but wording and one verification step |
+| Architectural Fitness | PASS | PASS |
+| Blind Spots | WARNING | PASS — the cold-miss race is named, bounded and given an observable trigger rather than left implicit |
+| Plan Completeness | WARNING | PASS — brief↔plan consistent; Progress re-synced (10/5/9/9/7) |
+
+► **Overall after follow-up triage: SOUND.**
+
+Two things remain deliberately unresolved and are recorded as such rather than as gaps: the
+unit of `x-billable-requests` (settled by Phase 5 run 3, with a rename ready if it is a request
+count) and the real-world frequency of concurrent cold misses (observable from this slice's own
+ledger once rows accumulate).
