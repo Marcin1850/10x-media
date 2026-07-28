@@ -4,8 +4,8 @@
 - **Plan**: `context/changes/persist-time-and-cost/plan.md`
 - **Mode**: Deep
 - **Date**: 2026-07-28
-- **Verdict**: REVISE → **SOUND after triage** (2026-07-28)
-- **Findings**: 1 critical, 5 warnings, 0 observations — 4 fixed, 1 accepted, 1 moot
+- **Verdict**: REVISE → SOUND after triage → **REVISE on follow-up** (2026-07-28)
+- **Findings**: 2 critical, 8 warnings, 0 observations — original 6 triaged; 4 follow-up findings pending
 
 ## Verdicts
 
@@ -21,7 +21,7 @@ Reasoning for the movement is at the bottom, under §Triage outcome.
 
 ## Grounding
 
-Grounding: 11/11 existing paths ✓, 6/6 symbol groups ✓, brief↔plan ✗ (F5). Progress: 5/5 phases and 32/32 success criteria matched.
+Grounding: 11/11 existing paths ✓, 6/6 symbol groups ✓, brief↔plan ✗ (F9 follow-up). Progress: 5/5 phases and 39/39 success criteria represented.
 
 ## Findings
 
@@ -131,3 +131,75 @@ Grounding: 11/11 existing paths ✓, 6/6 symbol groups ✓, brief↔plan ✗ (F5
 | Architectural Fitness | WARNING | PASS — both CHECK constraints widened; transport swap follows `metadata.ts` |
 | Blind Spots | WARNING | PASS — empty/unavailable paths cached and guarded; header unit scheduled for resolution |
 | Plan Completeness | WARNING | PASS — Progress re-synced (9/5/9/9/7) |
+
+---
+
+## Follow-up review (2026-07-28)
+
+- **Mode**: Deep
+- **Verdict**: REVISE
+- **New findings**: 1 critical, 3 warnings, 0 observations
+- **Explicit exclusions**: the accepted `persist_summary` deploy window (F2) and measurement/backfill of historical data were not reconsidered.
+
+### Follow-up verdicts
+
+| Dimension | Verdict |
+| --- | --- |
+| End-State Alignment | FAIL |
+| Lean Execution | PASS |
+| Architectural Fitness | PASS |
+| Blind Spots | WARNING |
+| Plan Completeness | WARNING |
+
+### Follow-up grounding
+
+Grounding: 11/11 existing paths ✓, 6/6 symbol groups ✓, brief↔plan ✗ (F9). Progress: 5/5 phases and 39/39 success criteria represented. Blast-radius sweep found no unmentioned application callers for `fetchTranscript`, `fetchVideoMetadata`, `summarize`, or `persistSummaryAndSettle`; the only existing generation lock is per-user.
+
+### F7 — `generation_ms` cannot reach its stated end boundary
+
+- **Severity**: ⛔ CRITICAL
+- **Impact**: 🟢 LOW — quick decision; fix is obvious and narrowly scoped
+- **Dimension**: End-State Alignment
+- **Location**: Phase 4 — Timings; Thread telemetry through persistence
+- **Detail**: The plan defines `generation_ms` as wall-clock time from the start of `runGeneration` to just before the success response (`plan.md:296`), but also requires passing that value into `persistSummaryAndSettle` (`plan.md:298-304`). The actual persist call occurs at `src/pages/api/summaries/generate.ts:411-425`; quote cleanup and response construction happen afterward at `:443-460`. Because `persist_summary` is the only summary writer, a value passed through it must be frozen before persistence and cannot include persistence, cleanup, or the time up to response construction.
+- **Fix**: Redefine the metric as start of `runGeneration` → immediately before `persistSummaryAndSettle` (and state the exclusions explicitly). If true response-bound latency is required, plan a second post-persist write and acknowledge that telemetry is no longer atomic with summary creation.
+- **Decision**: PENDING
+
+### F8 — Shared cache does not serialize concurrent cold misses
+
+- **Severity**: ⚠️ WARNING
+- **Impact**: 🔴 HIGH — architectural stakes; think carefully before deciding
+- **Dimension**: Blind Spots
+- **Location**: Desired End State; Phase 1 cache RPCs; Phase 4 cache wiring
+- **Detail**: The cache contract is a separate read and upsert (`plan.md:122-124`), and the endpoint flow is miss → paid fetch → save (`plan.md:279-281`). Two different users can both observe a miss, both pay Supadata, and then both upsert the same `youtube_id`; the primary key only resolves the writes. Existing protection is explicitly per-user (`src/pages/api/summaries/generate.ts:75-83`; `src/lib/services/generation-lock.ts:3-8`), so it cannot coordinate this cross-user race. The cache guarantees reuse after population, not the plan's absolute “stops paying twice” promise under concurrent cold misses.
+- **Fix A**: Add a lease-scoped single-flight claim keyed by `youtube_id`, with wait/re-read and stale-takeover behavior.
+  - Strength: Prevents concurrent duplicate provider spend and makes the absolute deduplication promise true.
+  - Tradeoff: Adds shared state, waiting, expiry, and failure-recovery behavior around a slow external call.
+  - Confidence: MEDIUM — the repository has a lease pattern, but only for per-user work; a cross-user video lease is a new contract.
+  - Blind spot: Expected same-video concurrency has not been measured.
+- **Fix B ⭐ Recommended**: Explicitly accept concurrent cold-miss duplication and narrow the promise to sequential/eventual reuse after the first cache write.
+  - Strength: Keeps the MVP cache lean while making its guarantee truthful.
+  - Tradeoff: Rare simultaneous requests for the same uncached video can still pay twice.
+  - Confidence: HIGH — no hidden caller or video-scoped lock closes the race today.
+  - Blind spot: Real production overlap frequency remains unknown.
+- **Decision**: PENDING
+
+### F9 — `plan-brief.md` reverses post-triage decisions
+
+- **Severity**: ⚠️ WARNING
+- **Impact**: 🟢 LOW — quick decision; fix is obvious and narrowly scoped
+- **Dimension**: Plan Completeness
+- **Location**: `plan-brief.md`
+- **Detail**: The brief still says credits are derived rather than persisted (`plan-brief.md:22`), keeps the retrospective estimate and “no persisted credit figure” (`:32,36-38,48`), budgets 2–3 live credits (`:32,52`), and says the Whisper path remains unverified (`:64`). The triaged plan instead stores the vendor-reported value, removes retrospective pricing, budgets 6–9 credits, requires the job-path run, and adds the negative-cache/failure-reason design. F5 covered only the earlier “no new ledger rows” wording and does not cover this broader post-triage drift.
+- **Fix**: Regenerate `plan-brief.md` from the current plan, including the final decisions, phase names, verification budget, negative-cache behavior, and live-verification scope.
+- **Decision**: PENDING
+
+### F10 — `empty` uses the short TTL reserved for temporary unavailability
+
+- **Severity**: ⚠️ WARNING
+- **Impact**: 🟢 LOW — quick decision; fix is obvious and narrowly scoped
+- **Dimension**: Plan Completeness
+- **Location**: Phase 1 cache RPC; Phase 3 transcript cache service
+- **Detail**: The plan describes a whitespace-only successful transcript as permanently wordless (`plan.md:97`) and explains that `unavailable` needs the short window because late captions can make that answer stale (`:102`). The F3 triage record likewise says to negative-cache only `unavailable` for 24 hours. However, `get_transcript_cache` applies `p_negative_max_age_seconds` to both `empty` and `unavailable` (`plan.md:122`), and the service constant repeats that grouping (`:202`). An instrumental video would therefore be re-fetched and re-billed daily, contrary to the accepted reason for caching an empty success.
+- **Fix**: Apply the normal 30-day window to `ok` and `empty`; reserve the 24-hour window for `unavailable`, and update the RPC/service wording and verification accordingly.
+- **Decision**: PENDING
