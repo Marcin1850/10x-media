@@ -509,9 +509,9 @@ The migration is additive except for the `persist_summary` swap and the two `res
 
 #### Automated
 
-- [x] 4.1 Linting passes (`npm run lint`)
-- [x] 4.2 Build and type-check pass (`npm run build`)
-- [x] 4.3 `npx supabase migration up` still applies cleanly from scratch
+- [x] 4.1 Linting passes (`npm run lint`) — aacca30
+- [x] 4.2 Build and type-check pass (`npm run build`) — aacca30
+- [x] 4.3 `npx supabase migration up` still applies cleanly from scratch — aacca30
 
 #### Manual
 
