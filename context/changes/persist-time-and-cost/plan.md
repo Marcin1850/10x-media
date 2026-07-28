@@ -492,26 +492,26 @@ The migration is additive except for the `persist_summary` swap and the two `res
 
 #### Automated
 
-- [x] 3.1 Linting passes (`npm run lint`)
-- [x] 3.2 Build and type-check pass (`npm run build`)
-- [x] 3.3 Meter parameter is optional; existing call sites compile unchanged
-- [x] 3.4 `transcript.ts` no longer calls `supadata.transcript(...)` and still throws `SupadataError` with `transcript-unavailable`
-- [x] 3.5 `TranscriptResult`'s failure arm is `"unavailable" | "failed" | "timeout"`, each site returning the reason matching its cause
+- [x] 3.1 Linting passes (`npm run lint`) — 72d5479
+- [x] 3.2 Build and type-check pass (`npm run build`) — 72d5479
+- [x] 3.3 Meter parameter is optional; existing call sites compile unchanged — 72d5479
+- [x] 3.4 `transcript.ts` no longer calls `supadata.transcript(...)` and still throws `SupadataError` with `transcript-unavailable` — 72d5479
+- [x] 3.5 `TranscriptResult`'s failure arm is `"unavailable" | "failed" | "timeout"`, each site returning the reason matching its cause — 72d5479
 
 #### Manual
 
 - [ ] 3.6 Local generation produces the expected record set (transcript / polls / metadata)
 - [ ] 3.7 Every recorded row carries an integer or null `billableCredits` — never `NaN`, never a throw
 - [ ] 3.8 A video with no transcript still returns `{ ok: false, reason: 'unavailable' }` after the transport swap
-- [x] 3.9 `record_supadata_calls` inserts a hand-built batch including null `user_id`, `summary_id` and `billable_credits`
+- [x] 3.9 `record_supadata_calls` inserts a hand-built batch including null `user_id`, `summary_id` and `billable_credits` — 72d5479
 
 ### Phase 4: Endpoint wiring
 
 #### Automated
 
-- [ ] 4.1 Linting passes (`npm run lint`)
-- [ ] 4.2 Build and type-check pass (`npm run build`)
-- [ ] 4.3 `npx supabase migration up` still applies cleanly from scratch
+- [x] 4.1 Linting passes (`npm run lint`)
+- [x] 4.2 Build and type-check pass (`npm run build`)
+- [x] 4.3 `npx supabase migration up` still applies cleanly from scratch
 
 #### Manual
 

@@ -3,8 +3,10 @@ import type { APIRoute } from "astro";
 import { SUPADATA_API_KEY, OPENROUTER_API_KEY } from "astro:env/server";
 import { createClient } from "@/lib/supabase";
 import { createAdminClient } from "@/lib/supabase-admin";
-import { fetchTranscript } from "@/lib/services/transcript";
+import { fetchTranscript, TRANSCRIPT_REQUESTED_LANG } from "@/lib/services/transcript";
 import { fetchVideoMetadata } from "@/lib/services/metadata";
+import { createSupadataMeter, flushSupadataCalls, type SupadataMeter } from "@/lib/services/supadata-ledger";
+import { getCachedTranscript, saveCachedTranscript } from "@/lib/services/transcript-cache";
 import { summarize } from "@/lib/services/llm";
 import {
   extractYoutubeId,
@@ -95,6 +97,11 @@ export const POST: APIRoute = async (context) => {
     );
   }
 
+  // One meter per request, flushed once below. Spend on a request that never persists a summary is
+  // precisely what columns on `summaries` structurally cannot record, so the meter's lifetime is the
+  // REQUEST's, not the summary's.
+  const meter = createSupadataMeter();
+
   try {
     return await runGeneration({
       supabase,
@@ -107,8 +114,14 @@ export const POST: APIRoute = async (context) => {
       requestId: requestId ?? null,
       supadataKey: SUPADATA_API_KEY,
       openrouterKey: OPENROUTER_API_KEY,
+      meter,
     });
   } finally {
+    // The `finally` IS the contract: the 422, 413, 409, 502 and every 500 must all flush, because
+    // those are the requests whose spend a summary-shaped design would lose. flushSupadataCalls never
+    // throws — a lost ledger row is a lost measurement, not a failed generation, and a rejection here
+    // would replace an already-decided response.
+    await flushSupadataCalls(admin, { userId, youtubeId }, meter);
     await releaseGenerationLease(admin, userId, lease);
   }
 };
@@ -126,6 +139,8 @@ interface GenerationInput {
   /** Passed in rather than re-read from `astro:env`: the POST preflight already proved both non-null. */
   supadataKey: string;
   openrouterKey: string;
+  /** Collects one record per real Supadata HTTP call. Owned and flushed by `POST`, on every exit. */
+  meter: SupadataMeter;
 }
 
 /**
@@ -166,6 +181,52 @@ function respondToRepeatedRequest(result: Awaited<ReturnType<typeof beginGenerat
 }
 
 /**
+ * Writes one freshly fetched outcome into the shared cache and reports a duplicate fetch if the write
+ * found one.
+ *
+ * `saveCachedTranscript` detects the collision as a side effect of the upsert it already performs: it
+ * returns `true` when the row it overwrote was written AFTER our fetch started, which is only possible
+ * if another request paid for the same video while ours was in flight. Concurrent cold misses are
+ * accepted, not prevented — the generation lease is keyed per user by construction and cannot
+ * coordinate two users on one video — but they are MEASURED rather than assumed rare, and counting
+ * these lines is the decision input for whether a video-scoped single-flight lease is ever worth its
+ * distributed-state machinery.
+ *
+ * `console.warn`, not `console.error`: nothing failed and no user is affected. A duplicate fetch means
+ * the operator paid twice for one transcript — a cost signal, not an incident. It is deliberately kept
+ * out of the catch paths so it can never be confused with a failure.
+ *
+ * The prefix is a stable search key. `observability.enabled` is already on, so Workers retains the
+ * line and it can be counted per `youtubeId` today; if an error reporter is added later, this is the
+ * single call site to upgrade to a warning-level event. DO NOT REWORD IT.
+ */
+async function cacheTranscriptOutcome(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  userId: string,
+  youtubeId: string,
+  fetchMs: number,
+  outcome: {
+    content: string;
+    outcome: "ok" | "empty" | "unavailable";
+    lang: string | null;
+    availableLangs: string[] | null;
+    resolvedVia: "inline" | "job" | null;
+  },
+): Promise<void> {
+  const { duplicateFetch } = await saveCachedTranscript(admin, {
+    youtubeId,
+    ...outcome,
+    requestedLang: TRANSCRIPT_REQUESTED_LANG,
+    fetchDurationMs: fetchMs,
+  });
+
+  if (duplicateFetch) {
+    // eslint-disable-next-line no-console
+    console.warn(`[duplicate-transcript-fetch] youtubeId=${youtubeId} fetchMs=${fetchMs} userId=${userId}`);
+  }
+}
+
+/**
  * The generation pipeline proper, extracted so the caller can hold the per-user lock across every
  * exit path with a single `try`/`finally` instead of releasing it before each of the many returns.
  */
@@ -180,7 +241,12 @@ async function runGeneration({
   requestId,
   supadataKey,
   openrouterKey,
+  meter,
 }: GenerationInput): Promise<Response> {
+  // `generation_ms` starts here and is frozen immediately before the persist call — see the comment
+  // at that call site for why the boundary is forced rather than chosen.
+  const generationStartedAt = Date.now();
+
   // Idempotency probe (F22). A retry after an ambiguous failure — request delivered, reply lost —
   // repeats the same request key, and this is where that repeat ends. Run BEFORE the paid transcript
   // fetch: the endpoint cannot price the work until it has the transcript, so waiting until the debit
@@ -235,9 +301,19 @@ async function runGeneration({
   let transcriptLang: string | null;
   let transcriptAvailableLangs: string[] | null;
 
+  // Brackets whatever produced the transcript — the fetch, the quote read, or the shared-cache read.
+  // A `'stored'` row therefore legitimately reads near zero, and `resolved_via` is what explains why.
+  const transcriptStartedAt = Date.now();
+
   // A confirmation retry (allowLong) reuses the transcript cached when the 409 was issued — no second
   // paid fetch and no rate-limit token consumed. Best-effort: a miss just falls through to a re-fetch.
   const cachedQuote = allowLong ? await getTranscriptQuote(admin, userId, youtubeId, character) : null;
+
+  // The shared cache (S-07), read AFTER the per-user quote check and BEFORE the rate limit: a hit
+  // makes no paid call, so it must consume no rate-limit token. Unlike the quote cache this is keyed
+  // by video alone, so it is reused across characters AND across users.
+  const cachedTranscript = cachedQuote ? null : await getCachedTranscript(admin, youtubeId);
+
   if (cachedQuote) {
     content = cachedQuote.content;
     resolvedVia = cachedQuote.resolvedVia;
@@ -247,6 +323,21 @@ async function runGeneration({
     // the 409/confirm/cache route is reachable only above 40,000 characters.
     transcriptLang = cachedQuote.lang;
     transcriptAvailableLangs = cachedQuote.availableLangs;
+  } else if (cachedTranscript) {
+    // A negative hit answers for free what the fetch would have charged for. `'empty'` and
+    // `'unavailable'` both mean the same thing to the user — the same 422 the fetch path returns —
+    // but they are cached on different windows, which the RPC has already applied by the time a row
+    // comes back at all.
+    if (cachedTranscript.outcome !== "ok") {
+      return Response.json({ error: "Transcript unavailable for this video" }, { status: 422 });
+    }
+    content = cachedTranscript.content;
+    // NOT the original fetch's mechanism: this request made no Supadata call, and recording `'inline'`
+    // or `'job'` here would claim a fetch that never happened. `'stored'` is what distinguishes a paid
+    // fetch from a reuse, which is the whole point of widening the column.
+    resolvedVia = "stored";
+    transcriptLang = cachedTranscript.lang;
+    transcriptAvailableLangs = cachedTranscript.availableLangs;
   } else {
     // A real paid fetch. Rate-limit it first; a genuine RPC failure fails the request CLOSED (500)
     // rather than proceed to the very unbounded fetch this guard exists to prevent.
@@ -269,25 +360,62 @@ async function runGeneration({
     // unavailable transcript returns ok:false → 422. Neither has debited a credit yet.
     let transcript: Awaited<ReturnType<typeof fetchTranscript>>;
     try {
-      transcript = await fetchTranscript({ url }, supadataKey);
+      transcript = await fetchTranscript({ url }, supadataKey, meter);
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error("fetchTranscript failed:", error);
       return Response.json({ error: "The transcript service failed. Please try again." }, { status: 502 });
     }
+
+    // Cache immediately, BEFORE the long-video 409 below can return: a user who abandons the
+    // confirmation has still paid Supadata, and caching first is what makes that money buy something.
+    // Every BILLABLE outcome is cached, not just the useful one — but `failed` and `timeout` never
+    // are, because they are transient by construction and say nothing durable about the video.
+    const fetchMs = Date.now() - transcriptStartedAt;
     if (!transcript.ok) {
+      if (transcript.reason === "unavailable") {
+        await cacheTranscriptOutcome(admin, userId, youtubeId, fetchMs, {
+          content: "",
+          outcome: "unavailable",
+          lang: null,
+          availableLangs: null,
+          resolvedVia: null,
+        });
+      }
       return Response.json({ error: "Transcript unavailable for this video" }, { status: 422 });
     }
-    // A whitespace-only (or empty) transcript is effectively "no transcript": summarizing it would
-    // charge a credit for a generic model reply built from nothing. Reject it as unavailable, before
-    // any cost is priced or a credit reserved.
-    if (transcript.content.trim().length === 0) {
-      return Response.json({ error: "Transcript unavailable for this video" }, { status: 422 });
-    }
+
+    await cacheTranscriptOutcome(admin, userId, youtubeId, fetchMs, {
+      content: transcript.content,
+      // A vendor SUCCESS carrying no words. Recorded separately from `unavailable` so the ledger's
+      // analytics keeps the distinction between "we were told there is nothing" and "we were given
+      // nothing" — and so it earns the full 30-day window, since a wordless video stays wordless.
+      outcome: transcript.content.trim().length === 0 ? "empty" : "ok",
+      lang: transcript.lang,
+      availableLangs: transcript.availableLangs,
+      resolvedVia: transcript.resolvedVia,
+    });
+
     content = transcript.content;
     resolvedVia = transcript.resolvedVia;
     transcriptLang = transcript.lang;
     transcriptAvailableLangs = transcript.availableLangs;
+  }
+
+  const transcriptMs = Date.now() - transcriptStartedAt;
+
+  // A whitespace-only (or empty) transcript is effectively "no transcript": summarizing it would
+  // charge a credit for a generic model reply built from nothing. Reject it as unavailable, before
+  // any cost is priced or a credit reserved.
+  //
+  // HOISTED out of the fetch branch (S-07), and load-bearing rather than tidy. `summaryCost(0)`
+  // returns 1, so an empty transcript reaching the main path clears the 413 and the 409, DEBITS a
+  // credit, and sends nothing to the LLM. The quote cache was safe from that only by accident —
+  // `saveTranscriptQuote` runs downstream of this guard, so it can never hold an empty — while the
+  // shared cache is written straight after the fetch and therefore can. Covering all three sources
+  // here is also what makes the `'empty'` cache hit above safe to write as a plain early 422.
+  if (content.trim().length === 0) {
+    return Response.json({ error: "Transcript unavailable for this video" }, { status: 422 });
   }
 
   const transcriptLength = content.length;
@@ -371,6 +499,7 @@ async function runGeneration({
   // before returning so they are never charged for failed work. refundReservation is best-effort,
   // never throws, and is idempotent — a retry cannot credit twice.
   let summary: Awaited<ReturnType<typeof summarize>>;
+  const llmStartedAt = Date.now();
   try {
     summary = await summarize({ transcript: content, character }, openrouterKey);
   } catch (error) {
@@ -379,6 +508,7 @@ async function runGeneration({
     await refundReservation(admin, userId, reservationId);
     return Response.json({ error: "The summarization service failed. Please try again." }, { status: 502 });
   }
+  const llmMs = Date.now() - llmStartedAt;
 
   // Descriptive metadata for the saved row (S-08). Decorative: a failure persists nulls rather than
   // discarding a summary that has already been paid for.
@@ -393,13 +523,18 @@ async function runGeneration({
   // after the debit but before the persistence `try`/`catch` below, so a regression that made it
   // throw would bypass the refund and strand a reservation for reconciliation — a durable ledger
   // row traded for a thumbnail. The redundancy costs three lines.
+  //
+  // `metadata_ms` brackets the whole operation, retry and its ~1.2 s rate-limit sleep included: that
+  // delay is real latency the user waited through, not overhead to be netted out.
   let metadata: Awaited<ReturnType<typeof fetchVideoMetadata>> = null;
+  const metadataStartedAt = Date.now();
   try {
-    metadata = await fetchVideoMetadata({ url }, supadataKey);
+    metadata = await fetchVideoMetadata({ url }, supadataKey, meter);
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("fetchVideoMetadata threw despite being total:", error);
   }
+  const metadataMs = Date.now() - metadataStartedAt;
 
   // Persist AND settle in ONE transaction (F23). These used to be two calls — an RLS-client insert
   // followed by a best-effort settle — which left the ledger indistinguishable from failed work for
@@ -408,6 +543,15 @@ async function runGeneration({
   // mutable evidence besides: owners may delete their own summaries. Deciding the charge inside the
   // transaction that writes the summary removes both windows — a throw here means the rollback
   // persisted nothing, so refunding is unambiguously correct.
+  //
+  // `generation_ms` is frozen HERE, not at the response. The boundary is forced rather than chosen:
+  // `persist_summary` is the only writer of `summaries`, so a value carried through it must exist
+  // before the call is made. It therefore excludes the persist round trip itself, the quote-cache
+  // cleanup below and response construction. Reaching a response-bound figure would need a second
+  // write after persist, with its own failure path, breaking the property that telemetry commits
+  // atomically with the summary it describes — not worth it for those few milliseconds.
+  const generationMs = Date.now() - generationStartedAt;
+
   let persisted: Awaited<ReturnType<typeof persistSummaryAndSettle>>;
   try {
     persisted = await persistSummaryAndSettle(admin, {
@@ -422,6 +566,14 @@ async function runGeneration({
       metadata,
       transcriptLang,
       transcriptAvailableLangs,
+      transcriptChars: transcriptLength,
+      generationMs,
+      transcriptMs,
+      llmMs,
+      metadataMs,
+      costUsd: summary.costUsd,
+      promptTokens: summary.promptTokens,
+      completionTokens: summary.completionTokens,
     });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -439,6 +591,11 @@ async function runGeneration({
     console.error(`persist summary skipped: reservation ${reservationId} for ${userId} was ${persisted.reason}`);
     return Response.json({ error: "Something went wrong saving your summary. Please try again." }, { status: 500 });
   }
+
+  // Link this request's ledger rows to the summary they helped produce. Only the success path can do
+  // this — rows from a request that returned 422/413/409/502 stay unlinked BY DESIGN, since there is
+  // no summary to point at and their spend is exactly what this ledger exists to surface.
+  meter.attachSummary(persisted.summaryId);
 
   // The quote has served its purpose (F24): the confirmation round-trip it was cached for ended in a
   // committed summary, so the transcript body is dropped now rather than lingering for the rest of its

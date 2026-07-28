@@ -199,6 +199,26 @@ export interface PersistSummaryParams {
   transcriptLang?: string | null;
   /** The whole caption-track pool the transcript came from. Diagnostic only — null on the cached-quote path. */
   transcriptAvailableLangs?: string[] | null;
+  /**
+   * Generation telemetry (S-07). All optional and defaulting to null, matching how `metadata` /
+   * `transcriptLang` were added in S-08 — a caller that has not measured something persists null
+   * rather than a fabricated zero.
+   */
+  /** `content.length` — the size of the text this summary was actually built from. */
+  transcriptChars?: number | null;
+  /**
+   * Wall clock to immediately BEFORE this call, not to the response. `persist_summary` is the only
+   * writer of `summaries`, so a value carried through it must be frozen before the call is made.
+   */
+  generationMs?: number | null;
+  /** Brackets whatever produced the transcript — the fetch, the quote read, or the cache read. */
+  transcriptMs?: number | null;
+  llmMs?: number | null;
+  metadataMs?: number | null;
+  /** OpenRouter's own reported figure. Null when usage accounting reported nothing. */
+  costUsd?: number | null;
+  promptTokens?: number | null;
+  completionTokens?: number | null;
 }
 
 /**
@@ -237,6 +257,14 @@ export async function persistSummaryAndSettle(
     metadata = null,
     transcriptLang = null,
     transcriptAvailableLangs = null,
+    transcriptChars = null,
+    generationMs = null,
+    transcriptMs = null,
+    llmMs = null,
+    metadataMs = null,
+    costUsd = null,
+    promptTokens = null,
+    completionTokens = null,
   }: PersistSummaryParams,
 ): Promise<PersistSummaryResult> {
   // The admin client is supabase-js's untyped default (this repo has no generated Database types), so
@@ -260,17 +288,18 @@ export async function persistSummaryAndSettle(
     p_published_at: metadata?.publishedAt ?? null,
     p_transcript_lang: transcriptLang,
     p_transcript_available_langs: transcriptAvailableLangs,
-    // Telemetry (S-07). Passed as nulls here so this call site matches the 23-argument signature the
-    // Phase 1 migration created — the RPC has no defaults, and a 15-argument call would resolve to no
-    // function at all. Phase 4 replaces these with the measured values.
-    p_transcript_chars: null,
-    p_generation_ms: null,
-    p_transcript_ms: null,
-    p_llm_ms: null,
-    p_metadata_ms: null,
-    p_cost_usd: null,
-    p_prompt_tokens: null,
-    p_completion_tokens: null,
+    // Telemetry (S-07). Committed in the SAME transaction as the summary it describes — which is why
+    // `generationMs` stops before this call rather than measuring to the response: reaching a
+    // response-bound figure would need a second write after persist, with its own failure path,
+    // breaking that atomicity for the few milliseconds between the two points.
+    p_transcript_chars: transcriptChars,
+    p_generation_ms: generationMs,
+    p_transcript_ms: transcriptMs,
+    p_llm_ms: llmMs,
+    p_metadata_ms: metadataMs,
+    p_cost_usd: costUsd,
+    p_prompt_tokens: promptTokens,
+    p_completion_tokens: completionTokens,
   })) as {
     data: { outcome: string; video_id: string | null; summary_id: string | null }[] | null;
     error: { message: string } | null;
