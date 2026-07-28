@@ -32,6 +32,15 @@ interface SummaryRow {
   model: string | null;
   resolved_via: TranscriptResolvedVia | null;
   reservation_id: string | null;
+  /** Generation telemetry (S-07). Nullable throughout — rows predating the columns keep nulls. */
+  transcript_chars: number | null;
+  generation_ms: number | null;
+  transcript_ms: number | null;
+  llm_ms: number | null;
+  metadata_ms: number | null;
+  cost_usd: number | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
   created_at: string;
 }
 
@@ -105,6 +114,14 @@ export interface AppDatabase {
           p_published_at: string | null;
           p_transcript_lang: string | null;
           p_transcript_available_langs: string[] | null;
+          p_transcript_chars: number | null;
+          p_generation_ms: number | null;
+          p_transcript_ms: number | null;
+          p_llm_ms: number | null;
+          p_metadata_ms: number | null;
+          p_cost_usd: number | null;
+          p_prompt_tokens: number | null;
+          p_completion_tokens: number | null;
         };
         Returns: { outcome: string; video_id: string | null; summary_id: string | null }[];
       };
@@ -243,6 +260,17 @@ export async function persistSummaryAndSettle(
     p_published_at: metadata?.publishedAt ?? null,
     p_transcript_lang: transcriptLang,
     p_transcript_available_langs: transcriptAvailableLangs,
+    // Telemetry (S-07). Passed as nulls here so this call site matches the 23-argument signature the
+    // Phase 1 migration created — the RPC has no defaults, and a 15-argument call would resolve to no
+    // function at all. Phase 4 replaces these with the measured values.
+    p_transcript_chars: null,
+    p_generation_ms: null,
+    p_transcript_ms: null,
+    p_llm_ms: null,
+    p_metadata_ms: null,
+    p_cost_usd: null,
+    p_prompt_tokens: null,
+    p_completion_tokens: null,
   })) as {
     data: { outcome: string; video_id: string | null; summary_id: string | null }[] | null;
     error: { message: string } | null;

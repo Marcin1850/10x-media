@@ -1,7 +1,16 @@
 export type ChannelCharacter = "informational" | "educational";
 
-/** How Supadata resolved the transcript fetch — observed fetch mechanism only, not a claim about native-caption vs Whisper-generated origin (Supadata's API doesn't expose that). */
-export type TranscriptResolvedVia = "inline" | "job";
+/**
+ * How the transcript was obtained. `"inline"` / `"job"` are the observed Supadata fetch mechanism
+ * only — not a claim about native-caption vs Whisper-generated origin (Supadata's API doesn't expose
+ * that). `"stored"` (S-07) is not a fetch mechanism at all: it means the transcript came from the
+ * shared `transcript_cache` and NO paid Supadata call was made, which is what explains a near-zero
+ * `transcript_ms` on the summary row.
+ */
+export type TranscriptResolvedVia = "inline" | "job" | "stored";
+
+/** What a real Supadata fetch can report — `"stored"` is excluded, since a cache hit made no call. */
+export type FetchedResolvedVia = Exclude<TranscriptResolvedVia, "stored">;
 
 export interface Video {
   id: string;
@@ -51,5 +60,22 @@ export interface Summary {
   content: string;
   model: string | null;
   resolved_via: TranscriptResolvedVia | null;
+  /**
+   * Generation telemetry (S-07). All nullable: rows written before the telemetry landed keep nulls,
+   * and no backfill prices history from a formula this slice deliberately discredited.
+   */
+  /** Character count of the transcript this summary was actually built from. */
+  transcript_chars: number | null;
+  /** Wall clock to immediately before the persist call — NOT to the response. See the column comment. */
+  generation_ms: number | null;
+  /** Time spent acquiring the transcript: the fetch, the quote read, or the cache read. */
+  transcript_ms: number | null;
+  llm_ms: number | null;
+  /** Includes the metadata retry and its ~1.2 s rate-limit sleep — real latency the user waited through. */
+  metadata_ms: number | null;
+  /** OpenRouter's own reported cost, never a figure computed from tokens and a price table. */
+  cost_usd: number | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
   created_at: string;
 }

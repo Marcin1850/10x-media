@@ -460,20 +460,20 @@ The migration is additive except for the `persist_summary` swap and the two `res
 
 #### Automated
 
-- [ ] 1.1 Migration applies cleanly on a fresh local DB (`npx supabase migration up`)
-- [ ] 1.2 Linting passes (`npm run lint`)
-- [ ] 1.3 Build passes (`npm run build`)
-- [ ] 1.4 Exactly one `persist_summary` exists in `pg_proc`
-- [ ] 1.5 `persist_summary` is service_role-only (authenticated execute privilege is false)
-- [ ] 1.6 Both new tables have RLS enabled and zero policies
+- [x] 1.1 Migration applies cleanly on a fresh local DB (`npx supabase migration up`)
+- [x] 1.2 Linting passes (`npm run lint`)
+- [x] 1.3 Build passes (`npm run build`)
+- [x] 1.4 Exactly one `persist_summary` exists in `pg_proc`
+- [x] 1.5 `persist_summary` is service_role-only (authenticated execute privilege is false)
+- [x] 1.6 Both new tables have RLS enabled and zero policies
 
 #### Manual
 
-- [ ] 1.7 `summaries` accepts `resolved_via = 'stored'` and rejects unknown values
-- [ ] 1.8 `transcript_quotes` also accepts `resolved_via = 'stored'`
-- [ ] 1.9 `transcript_cache` rejects an `outcome` outside `('ok','empty','unavailable')`
-- [ ] 1.10 Windows applied per `outcome`: backdated 48h, `ok` and `empty` still return, `unavailable` does not
-- [ ] 1.11 `save_transcript_cache` returns `false` then `true` on back-to-back calls, and `false` again once `fetched_at` is backdated a day
+- [x] 1.7 `summaries` accepts `resolved_via = 'stored'` and rejects unknown values
+- [x] 1.8 `transcript_quotes` also accepts `resolved_via = 'stored'`
+- [x] 1.9 `transcript_cache` rejects an `outcome` outside `('ok','empty','unavailable')`
+- [x] 1.10 Windows applied per `outcome`: backdated 48h, `ok` and `empty` still return, `unavailable` does not
+- [x] 1.11 `save_transcript_cache` returns `false` then `true` on back-to-back calls, and `false` again once `fetched_at` is backdated a day
 
 ### Phase 2: OpenRouter cost instrumentation
 

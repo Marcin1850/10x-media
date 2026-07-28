@@ -1,7 +1,7 @@
 ---
 change_id: persist-time-and-cost
 title: Persist generation time and provider cost per summary (S-07)
-status: plan_reviewed
+status: implementing
 created: 2026-07-28
 updated: 2026-07-28
 archived_at: null
