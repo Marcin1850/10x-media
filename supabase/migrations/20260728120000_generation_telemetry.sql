@@ -121,7 +121,11 @@ alter table public.supadata_calls enable row level security;
 revoke all on table public.supadata_calls from public, anon, authenticated;
 
 create index if not exists supadata_calls_created_idx on public.supadata_calls (created_at);
+-- Leads with user_id, so it also supports that FK's `set null` action on account deletion.
 create index if not exists supadata_calls_user_time_idx on public.supadata_calls (user_id, created_at);
+-- summary_id has no such coverage from the indexes above. Without it, deleting a summary scans this
+-- append-only ledger in full to apply `on delete set null`.
+create index if not exists supadata_calls_summary_idx on public.supadata_calls (summary_id);
 
 -- ---------------------------------------------------------------------------------------------
 -- 3. Telemetry columns on summaries. Additive and idempotent, matching the `model` / `resolved_via`
@@ -252,6 +256,14 @@ declare
   previous_fetched_at timestamptz;
   duplicate boolean := false;
 begin
+  -- Serialization point for the duplicate-fetch signal. On a cold miss the row does not exist yet,
+  -- so `for update` has nothing to lock; a transaction-scoped advisory lock keyed by the video is
+  -- what orders the read/compare/upsert across concurrent cold writers. Without it two cold
+  -- transactions both read a null fetched_at and both return false, so the wasted fetch goes
+  -- unmeasured and the promised N-1 signal silently under-reports. This serializes only the cheap
+  -- cache-write decision — the paid fetch already happened before this call.
+  perform pg_advisory_xact_lock(hashtext(p_youtube_id));
+
   select c.fetched_at into previous_fetched_at
   from public.transcript_cache c
   where c.youtube_id = p_youtube_id;

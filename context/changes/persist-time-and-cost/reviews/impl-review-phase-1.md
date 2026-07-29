@@ -27,6 +27,13 @@
 - Local database inspection — PASS: exactly one `persist_summary`; `authenticated` cannot execute it; `transcript_cache` and `supadata_calls` both have RLS enabled and zero policies; both `resolved_via` constraints admit `stored`.
 - Phase 1 manual criteria 1.7–1.11 are marked complete in `## Progress` at commit `4a1b49c`.
 
+### Post-triage (2026-07-29)
+
+Both findings were fixed in `supabase/migrations/20260728120000_generation_telemetry.sql`. Because the migration is already recorded as applied, `supabase migration up` is a no-op for it — the amended `save_transcript_cache` and the new index were applied to the local database directly (targeted `create or replace` / `create index`, no reset), so the local schema matches the file. A clean environment picks both up from the migration as written. Added verification:
+
+- Two-session advisory-lock probe — PASS: session B blocked on session A's open transaction and returned `true`; A returned `false`. N concurrent cold misses now yield N−1 trues.
+- `pg_indexes` for `supadata_calls` — PASS: `supadata_calls_summary_idx` present.
+
 ## Findings
 
 ### F1 — Duplicate-fetch signal misses genuine concurrent cold misses
@@ -41,7 +48,7 @@
   - Tradeoff: Concurrent cache writes for the same video briefly queue at the RPC boundary; the migration must be re-applied locally after amendment.
   - Confidence: HIGH — the race follows directly from PostgreSQL statement ordering, and the repository already uses explicit serialization where an RPC reads before deciding.
   - Blind spot: A dedicated two-session concurrency check has not yet been added to the verification steps.
-- **Decision**: PENDING
+- **Decision**: FIXED — `perform pg_advisory_xact_lock(hashtext(p_youtube_id));` added as the first statement in `save_transcript_cache`, before the `select`. Unqualified to match the file's existing `now()` / `make_interval()` usage under `search_path = ''`. Applied to the local database as a targeted `create or replace` (no reset). The blind spot was closed: a two-session probe held the lock in an open transaction in session A while session B called the same video — B blocked ~2.5s and returned `true` while A returned `false`, i.e. 2 concurrent cold misses produced exactly 1 `true`. Probe rows deleted.
 
 ### F2 — Ledger foreign key lacks a supporting index
 
@@ -51,4 +58,4 @@
 - **Location**: supabase/migrations/20260728120000_generation_telemetry.sql:98
 - **Detail**: `supadata_calls.summary_id` uses `ON DELETE SET NULL`, but the ledger has no index beginning with `summary_id`. As the append-only table grows, deleting a summary must scan it to enforce and apply the foreign key action. Existing foundational tables index their foreign-key-leading columns.
 - **Fix**: Add `create index if not exists supadata_calls_summary_idx on public.supadata_calls (summary_id);`.
-- **Decision**: PENDING
+- **Decision**: FIXED — index added next to the existing two, with a comment noting that `supadata_calls_user_time_idx` already covers the `user_id` FK and `summary_id` had no equivalent. Created on the local database and confirmed present in `pg_indexes`.
