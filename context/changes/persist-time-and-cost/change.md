@@ -62,3 +62,36 @@ what the plan promised and what its own design delivers:
 Plan review verdict: **SOUND**. Two things stay open by design — the unit of
 `x-billable-requests` (Phase 5 run 3 settles it, rename ready) and the real frequency of
 concurrent cold misses (the ledger will show it).
+
+## Local verification pass, Phases 2–4 (2026-07-29)
+
+All eleven manual Progress rows (2.4–4.9) verified against the local stack: five generations
+plus DB inspection. Every row passed as written; no implementation defect surfaced. The
+`transcript_quotes` `'stored'` write (4.9) was confirmed by querying the table directly — the
+one check whose failure would have been invisible from the client.
+
+To reach a genuine vendor `transcript-unavailable` for rows 4.6/4.7, `mode` was temporarily
+flipped to `native` for two runs and reverted (`git diff` clean). Necessary because `auto`
+falls back silently, so an ordinary caption-less video never returns that error.
+
+**Phase 5 run 3 is cancelled — its question was answered early and its premise was false.**
+Amended in `plan.md` §Phase 5 and recorded in `docs/supadata-billable-requests.md` §Measured:
+
+- **`x-billable-requests` reports credits, not a request count.** One `mode=generate` request
+  reported `2` and moved `usedCredits` by exactly 2. `billable_credits` keeps its name; the
+  conditional rename that Phase 5 mandated is void. Six measurements agreed.
+- **A `206 transcript-unavailable` is billed 1 credit and carries no header at all** — observed
+  three times. So the ledger records `null` for a known-billable call by design, and any
+  reconciliation must add 1 per `unavailable` row. The documented "included in every API
+  response" is false as written.
+- **`mode=generate` did not generate**, in either direction: it returned inline captions on a
+  captioned video (2 credits) and `206` on a caption-less one (1 credit). Five submit attempts
+  across three videos produced no `202`, so the `job` path stayed unreachable and is now left to
+  real traffic rather than a paid run. Cause not established — plan tier or unobtainable audio.
+
+That last point lands on **S-09**, whose headline lever is switching `mode`. It must
+re-establish what the modes actually do before planning around them.
+
+Deliberately not treated as a defect: YouTube auto-captions an instrumental as the single token
+`"you"`, which passes the whitespace guard and is summarized as an ordinary transcript. Owner's
+call — a 3-character transcript is a real transcript, and summarizing it is the user's choice.

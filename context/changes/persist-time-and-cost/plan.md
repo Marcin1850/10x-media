@@ -373,7 +373,7 @@ Close the RPC-swap window with a back-to-back push and deploy, then spend a smal
 
 **File**: `context/changes/persist-time-and-cost/reviews/manual-verification.md`
 
-**Intent**: Prove the numbers are real against production, at a budgeted cost of roughly **6–9 Supadata credits** — the higher figure buys the one answer no cheaper run can produce (see run 3).
+**Intent**: Prove the numbers are real against production, at a budgeted cost of roughly **2–3 Supadata credits** — runs 1 and 2 only. The original 6–9 budget existed to buy run 3's answer; that answer was obtained before rollout for 6 credits of local probing, so it is no longer purchased here (see run 3).
 
 **Contract**: Read `GET /v1/me` before and after **each** run, not just at the ends; per-run deltas are what make an individual row's header value falsifiable.
 
@@ -381,16 +381,15 @@ Close the RPC-swap window with a back-to-back push and deploy, then spend a smal
 
 *Run 2 — same video, other character.* Writes `resolved_via = 'stored'`, no `transcript` row, and a `metadata` row (metadata is still fetched — only the transcript is cached).
 
-*Run 3 — a short video with no captions, forcing the `job`/Whisper path.* **This run exists to settle what `x-billable-requests` actually counts**, and runs 1 and 2 cannot: on a native call a request count and a credit count are both `1`, so they agree no matter which the header reports. Pick the shortest caption-less video that will do (~1–2 min, so 2–4 credits). Read off:
+*Run 3 — **cancelled**; amended 2026-07-29 after local measurement.* Both halves of this run's design are now obsolete, one because it succeeded early and one because it was wrong.
 
-| `usedCredits` delta | Header reported | Conclusion |
-| --- | --- | --- |
-| `2 × ceil(min)` | the same figure | the header is **credits** — `billable_credits` is correctly named and self-sufficient |
-| `2 × ceil(min)` | `1` | the header is a **request count** — rename the column `billable_requests`, and `resolved_via` + `duration_seconds` stay load-bearing for costing |
+**Its question is already answered.** Run 3 existed to settle whether `x-billable-requests` reports credits or a request count. A direct spot probe settled it before rollout: one `mode=generate` request reported `x-billable-requests: 2` and moved `usedCredits` by exactly 2. A single HTTP call cannot be two requests, so **the header reports credits**. `billable_credits` keeps its name, **no rename is pending**, and the conditional rename this section used to mandate is void. Six measurements agreed; the record is `docs/supadata-billable-requests.md` §Measured.
 
-Record the answer in `docs/supadata-billable-requests.md` §Unverified and rename the column **before** any further rows accumulate — a column whose unit is discovered after people have reasoned from it is the same failure mode F1 raised about `resolved_via`.
+**Its premise was also false.** The run assumed a caption-less video forces the `job`/Whisper path. Measured: a caption-less video returns `206 transcript-unavailable` under `mode=auto` **and** under `mode=generate`, and five submit attempts across three videos produced **no `202` at all`**. Buying credits to "force" the job path is not a reliable procedure, so no budget is allocated to attempting it.
 
-**`sum(billable_credits)` over the new rows must equal the total `usedCredits` delta.** A mismatch is a finding, not a failure: record which rows came back `null` and which call shapes they belonged to, since that is what `docs/supadata-billable-requests.md` §"which responses" leaves open (the `202`, the free polls, the error responses). Run 3 doubles as the test for whether polls are genuinely free.
+What remains unknown is narrow: whether the `202` and the job-status polls carry the header. **Do not spend credits hunting it.** If the path is reachable on this account, ordinary traffic reaches it and the ledger records the answer at no extra cost; if it is not reachable, there is nothing to measure. After the first weeks of real use, check whether any `supadata_calls` row carries `resolved_via = 'job'` or `operation = 'transcript_poll'` — an empty result is itself the finding, and S-09 should treat "the job path may be unreachable on this plan" as an open question rather than an assumption in either direction.
+
+**`sum(billable_credits)` over the new rows must equal the total `usedCredits` delta, *plus* one credit for every `outcome = 'unavailable'` row.** That correction is not a fudge — it is a measured property: a `206 transcript-unavailable` is billed 1 credit and carries **no header**, so it is recorded `null` by design and the raw sum under-counts by exactly the number of such rows. A gap that does *not* resolve to those rows is a genuine finding: record which rows came back `null` and which call shapes they belonged to, since the `202` and the job polls remain unobserved (`docs/supadata-billable-requests.md` §"which responses").
 
 #### 3. Tracker sync
 
@@ -409,10 +408,10 @@ Record the answer in `docs/supadata-billable-requests.md` §Unverified and renam
 
 #### Manual Verification:
 
-- All three live runs behave exactly as specified above, and the total `usedCredits` delta matches `sum(billable_credits)`; any gap is attributed to specific null-valued rows rather than left unexplained
+- Both live runs behave exactly as specified above, and the total `usedCredits` delta matches `sum(billable_credits)` plus one credit per `unavailable` row; any remaining gap is attributed to specific null-valued rows rather than left unexplained
 - Telemetry on the live rows is plausible: `llm_ms` dominates on a short native video, `cost_usd` is in the ~1–2 ¢ range observed for this model
-- **The header's unit is settled by run 3** and recorded in `docs/supadata-billable-requests.md`; if it is a request count, the column is renamed before any further rows accumulate
-- Whether `resolved_via = 'job'` is a usable Whisper proxy is answered from run 3's measured figures
+- **The header's unit is already settled** (credits) and recorded in `docs/supadata-billable-requests.md` §Measured — no rename, nothing to re-derive here
+- Whether `resolved_via = 'job'` is a usable Whisper proxy stays **open and unbudgeted**: the job path could not be forced locally, so it is answered by observing real traffic, not by a paid run
 - Roadmap and Linear both reflect the landed state
 
 ---
@@ -433,7 +432,7 @@ There is no automated test suite in this project (Module-3 deferral), so verific
 
 **Deliberately not verified live** (cost): the metadata retry, and the `unavailable` cache's 24-hour expiry. Both are exercised locally by reasoning and DB inspection — the expiry by backdating `fetched_at` rather than waiting a day. That local check must confirm **both** halves of the split window: a backdated `unavailable` row expires at 24 hours while a backdated `empty` row of the same age still hits. State this limitation in the verification record rather than implying full coverage.
 
-The Whisper `job` path **is** now verified live (Phase 5 run 3), reversing this plan's earlier position. It was excluded on cost while its only purpose was confirming a price already in the docs; it is included now because it is the sole run that can determine whether `x-billable-requests` reports credits or requests, and every figure the ledger accumulates depends on that answer.
+The Whisper `job` path is **not** verified, and the attempt to verify it was abandoned on evidence rather than on cost (amended 2026-07-29). This plan twice changed position here: first excluding the path as too expensive, then including it as the sole way to learn what `x-billable-requests` counts. Both are now moot. The unit question was settled without it, and the path itself proved **unforceable** — a caption-less video returns `206` rather than a job under both `auto` and `generate`, in five attempts across three videos. It is therefore left to real traffic, and its absence from `supadata_calls` is itself informative.
 
 ## Performance Considerations
 
@@ -485,8 +484,8 @@ The migration is additive except for the `persist_summary` swap and the two `res
 
 #### Manual
 
-- [ ] 2.4 A real generation yields non-null cost and token counts
-- [ ] 2.5 Reported `promptTokens` is plausible against the submitted transcript length
+- [x] 2.4 A real generation yields non-null cost and token counts — 219d734
+- [x] 2.5 Reported `promptTokens` is plausible against the submitted transcript length — 219d734
 
 ### Phase 3: Supadata instrumentation — cache and ledger
 
@@ -500,9 +499,9 @@ The migration is additive except for the `persist_summary` swap and the two `res
 
 #### Manual
 
-- [ ] 3.6 Local generation produces the expected record set (transcript / polls / metadata)
-- [ ] 3.7 Every recorded row carries an integer or null `billableCredits` — never `NaN`, never a throw
-- [ ] 3.8 A video with no transcript still returns `{ ok: false, reason: 'unavailable' }` after the transport swap
+- [x] 3.6 Local generation produces the expected record set (transcript / polls / metadata) — 72d5479
+- [x] 3.7 Every recorded row carries an integer or null `billableCredits` — never `NaN`, never a throw — 72d5479
+- [x] 3.8 A video with no transcript still returns `{ ok: false, reason: 'unavailable' }` after the transport swap — 72d5479
 - [x] 3.9 `record_supadata_calls` inserts a hand-built batch including null `user_id`, `summary_id` and `billable_credits` — 72d5479
 
 ### Phase 4: Endpoint wiring
@@ -515,12 +514,12 @@ The migration is additive except for the `persist_summary` swap and the two `res
 
 #### Manual
 
-- [ ] 4.4 Local generation persists all eight telemetry columns, plausibly valued
-- [ ] 4.5 Second generation of the same video returns `'stored'`, near-zero `transcript_ms`, no `transcript` ledger row
-- [ ] 4.6 A forced 422 writes a `transcript`/`unavailable` ledger row with null `summary_id` and a `transcript_cache` row with `outcome = 'unavailable'`
-- [ ] 4.7 Repeating that 422 video returns 422 with zero new ledger rows
-- [ ] 4.8 Cache row exists with correct `fetched_at` and `requested_lang`
-- [ ] 4.9 A long video served from cache reaches the 409 and its `transcript_quotes` row is written with `resolved_via = 'stored'`
+- [x] 4.4 Local generation persists all eight telemetry columns, plausibly valued — aacca30
+- [x] 4.5 Second generation of the same video returns `'stored'`, near-zero `transcript_ms`, no `transcript` ledger row — aacca30
+- [x] 4.6 A forced 422 writes a `transcript`/`unavailable` ledger row with null `summary_id` and a `transcript_cache` row with `outcome = 'unavailable'` — aacca30
+- [x] 4.7 Repeating that 422 video returns 422 with zero new ledger rows — aacca30
+- [x] 4.8 Cache row exists with correct `fetched_at` and `requested_lang` — aacca30
+- [x] 4.9 A long video served from cache reaches the 409 and its `transcript_quotes` row is written with `resolved_via = 'stored'` — aacca30
 
 ### Phase 5: Rollout and live verification
 

@@ -15,6 +15,8 @@ Two properties matter for the ledger:
 1. **Per-request, not per-account.** Unlike `GET /v1/me`'s `usedCredits` (a billing-period running total), this is the cost of *the request that returned it*. It is the only vendor surface that attributes spend to a single call.
 2. **"Included in every API response."** The docs make no exception for error responses. That is what lets a 206 `transcript-unavailable` — billable at 1 credit (`../../persist-video-metadata/docs/supadata-transcript.md:81`) — carry a *measured* cost rather than an assumed one.
 
+> ⚠️ **Property 2 is false as documented.** Measured 2026-07-29: the 206 `transcript-unavailable` response carries **no** `x-billable-requests` header, yet is still billed 1 credit. The one call shape whose cost this header was most needed for is precisely the one that does not report it. See §Measured below before relying on property 2 anywhere.
+
 ### What it settles that `resolved_via` cannot
 
 | Question | `resolved_via` | `x-billable-requests` |
@@ -25,7 +27,11 @@ Two properties matter for the ledger:
 
 The `job` path is the specific trap: a long native-caption video can return a `202` job and be billed 1 credit, while `resolved_via = 'job'` would price it at `2 × ceil(duration/60)`. Phase 1's retrospective estimate is therefore an upper bound by construction — and the header is what turns Phase 5 from "the estimate looks plausible" into a reconciliation.
 
-## ⚠️ Unverified: is the value credits or a request count?
+## ✅ Resolved 2026-07-29: the value is **credits**
+
+> **Settled by spot probe.** One `mode=generate` request returned `x-billable-requests: 2` and moved `usedCredits` by exactly 2. A single HTTP call can never be "2 requests", so the header tracks **credits**, not a request count. `billable_credits` is correctly named — **no rename**, and the Phase 5 §5.5 rename branch is closed. Six independent measurements agree; see §Measured.
+
+The original question is kept below because the reasoning still explains *why* a native-only reconciliation could not have settled it.
 
 **The name and the documentation disagree.** The header is called `x-billable-requests`, but the only sentence describing it frames it as the way to monitor *credit usage*. Those diverge exactly where it matters most:
 
@@ -39,17 +45,72 @@ So if the header reports a request *count*, it does **not** settle the native-vs
 
 This does not change the ledger's shape: the value is recorded verbatim either way, and `operation` / `outcome` carry the attribution regardless. It changes what Phase 5 proves. **The reconciliation settles it mechanically**: on a native short video the two readings are identical (1 = 1), so run the comparison on a video that takes the `job` path — if `usedCredits` moves by `2 × ceil(duration/60)` while the header reported `1`, it is a count. Record the answer here.
 
-Until then, treat the column name `billable_credits` as provisional; if it turns out to be a count, rename to `billable_requests` before the ledger accumulates rows anyone reasons from.
+~~Until then, treat the column name `billable_credits` as provisional; if it turns out to be a count, rename to `billable_requests` before the ledger accumulates rows anyone reasons from.~~ — **superseded**: the name stands, see the resolution above.
 
 ## ⚠️ Unverified: which responses actually carry it
 
 The doc sentence is the *only* statement Context7 surfaces about this header. Nothing in the docs or the OpenAPI spec confirms its value on:
 
-- the initial **`202` job-accepted** response (is the credit charged at submission, at completion, or split?);
-- **`GET /transcript/:jobId`** polls, which are documented free (`supadata-transcript.md:80`) and should therefore report `0`;
-- **4xx/5xx** bodies — "every API response" implies yes, but a `401`/`429` plausibly bills nothing.
+- ⬜ **still open** — the initial **`202` job-accepted** response (is the credit charged at submission, at completion, or split?); unreached, see §Measured Finding 3;
+- ⬜ **still open** — **`GET /transcript/:jobId`** polls, which are documented free (`supadata-transcript.md:80`) and should therefore report `0`; unreached for the same reason;
+- ✅ **answered 2026-07-29** — **4xx/5xx** bodies: a `206 transcript-unavailable` is billed 1 credit and carries **no header at all**. "Every API response" is false as written.
 
 **These are implementation-time findings, not blockers.** The column is nullable and the value is recorded verbatim; a missing or absent header stores `null`, which is honestly distinguishable from a measured `0`. Phase 5's `GET /v1/me` delta is the cross-check: if the summed ledger disagrees with `usedCredits`, the disagreement localises to whichever call shape returned `null`.
+
+## ✅ Measured — local verification pass, 2026-07-29
+
+Phase 2–4 manual verification (`../plan.md` rows 2.4–4.9) ran five generations against the local stack and reconciled them against `GET /v1/me`. `usedCredits` moved **48 → 55**, and all 7 credits attribute:
+
+| Response observed | `x-billable-requests` | Actually billed |
+| --- | --- | --- |
+| `200` native transcript (`inline`) | `1` | 1 |
+| `200` metadata | `1` | 1 |
+| **`206` `transcript-unavailable`** | **absent** | **1** — by reconciliation |
+| `200` `GET /v1/me` | absent | 0 (free endpoint) |
+| `524` gateway timeout, no vendor body | absent | **unmeasured** — see below |
+
+```
+ledger sum(billable_credits) = 4   (transcript+metadata run A, metadata run B, transcript run E1)
++ 2  direct curl probes, outside the app
++ 1  the 206 unavailable, recorded null
+= 7 = the usedCredits delta ✓
+```
+
+**The headline finding: an error response can be billed and report nothing.** The 206 is billable at 1 credit exactly as `supadata-transcript.md:81` says, but sends no header — so it lands in the ledger as `null`, not `1`. This is the first real payoff of keeping `null` distinct from `0`: the reconciliation gap was localisable to a single known call shape instead of being an unexplained discrepancy. Resolves the third bullet above (4xx/5xx) in the *opposite* direction to what "every API response" implied.
+
+**One caveat on the table:** the `524`'s cost is unknown, **not zero**. That failure preceded the baseline `/v1/me` read, so it sits inside the 48 rather than inside the measured delta. It is excluded from the reconciliation above rather than counted as free. (The app handled it correctly regardless: 502 to the user, no debit, and an `outcome='error'` ledger row with `null` credits.)
+
+### Spot probes — direct against the vendor, same day
+
+The generation pass could only exercise native/inline calls, where a credit figure and a request count are both `1` and therefore agree. Seven further probes were run with `curl`, bypassing the app, to break that tie and to reach the `job` path.
+
+**Finding 1 — the header reports credits.** Decisive measurement:
+
+| Probe | `x-billable-requests` | `usedCredits` delta |
+| --- | --- | --- |
+| `mode=generate` on a captioned 2:55 video | **`2`** | **2** |
+| metadata | `1` | 1 |
+| native transcript | `1` | 1 |
+
+One request, header `2`, billed 2. A request *count* cannot exceed 1 for a single call, so the value is credits. Across the whole day six measurements agreed and none contradicted.
+
+**Finding 2 — `206 transcript-unavailable` never carries the header.** Observed three times on two different videos, always absent, always billed 1. This is a stable property of that response shape, not a glitch, so `null` for a *known-billable* call is the permanent steady state rather than a transient gap.
+
+**Finding 3 — `mode=generate` does not reliably generate.** Documented as "always generate transcript using AI". Observed:
+
+| Video | `mode=generate` returned | Cost |
+| --- | --- | --- |
+| has native captions (2:55) | `200` **inline**, `availableLangs: ["en"]`, no `jobId` | 2 |
+| **no** native captions (2:39 instrumental) | **`206 transcript-unavailable`** | 1 |
+
+Neither produced a job. The caption-less case is the striking one: the documented purpose of `generate` is exactly that video, and it declined. Cause **not established** — plausibly the Free plan excludes AI generation, plausibly the audio was unobtainable (copyright-restricted music). Recorded as an observation, not a diagnosis.
+
+Two consequences follow:
+
+- **S-09's lever is in doubt.** Switching `mode` is S-09's headline instrument for bounding spend. On this account `generate` did not behave as documented in either direction, so S-09 must re-establish what the modes actually do before planning around them.
+- **The `job` path stayed unreachable.** Five submit attempts across three videos, zero `202` responses. The `202` and `GET /transcript/:jobId` polls therefore remain **unobserved** — the one gap this file still carries. If the path is genuinely unreachable on this plan, `resolved_via = 'job'` and `operation = 'transcript_poll'` rows will simply never appear in production either, and the ledger will record the answer for free if they ever do.
+
+The `202` job-accepted response and the `GET /transcript/:jobId` polls remain unobserved — no local video took the job path.
 
 ## Why the SDK cannot supply it
 
@@ -112,4 +173,4 @@ const billableCredits = parsed !== null && Number.isFinite(parsed) ? parsed : nu
 - `GET /v1/me` → `{ organizationId, plan, maxCredits, usedCredits }` — billing-period totals; the reconciliation counterpart, not a substitute. See `../../persist-video-metadata/docs/supadata-account-limits.md`.
 - Per-credit prices (1 native / 2-per-minute generated / 1 metadata / free polls / 1 for a billable `transcript-unavailable`): `../../persist-video-metadata/docs/supadata-transcript.md` §Pricing.
 
-**Source:** Supadata docs (`docs.supadata.ai/get-transcript`, `/api-reference/endpoint/account/me`) via Context7 `/llmstxt/supadata_ai_llms_txt` and `/supadata-ai/js`, 2026-07-28; plus direct inspection of the installed `@supadata/js@1.4.0` bundle.
+**Source:** Supadata docs (`docs.supadata.ai/get-transcript`, `/api-reference/endpoint/account/me`) via Context7 `/llmstxt/supadata_ai_llms_txt` and `/supadata-ai/js`, 2026-07-28; plus direct inspection of the installed `@supadata/js@1.4.0` bundle. §Measured adds live observations from the 2026-07-29 local verification pass (5 generations + 2 direct probes, reconciled against `GET /v1/me`).
