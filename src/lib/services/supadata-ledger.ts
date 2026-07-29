@@ -133,6 +133,16 @@ export async function flushSupadataCalls(
 export function readBillableCredits(response: Response): number | null {
   const raw = response.headers.get("x-billable-requests");
   if (raw === null) return null;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) ? parsed : null;
+
+  // Deliberately NOT `Number.parseInt`, which reads a valid PREFIX and discards the rest: it turns
+  // `"1oops"` and `"1.5"` into `1`, inventing a precise-looking measurement out of a value the vendor
+  // did not send. This ledger's whole claim is that the figure is measured rather than inferred, so a
+  // header we cannot read in full has to become `null` — honestly unreported — not a plausible guess.
+  if (!/^\d+$/.test(raw.trim())) return null;
+
+  // The column is a PostgreSQL `integer`. An out-of-range value would fail the cast inside
+  // `record_supadata_calls`, and because the flush is ONE batch insert, that failure would discard
+  // every other row for the request — losing good measurements to one bad header.
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) && parsed <= 2_147_483_647 ? parsed : null;
 }

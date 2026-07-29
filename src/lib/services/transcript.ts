@@ -42,6 +42,27 @@ const JOB_POLL_MAX_ATTEMPTS = 12; // ~4 minutes of total coverage at 12 subreque
 const SUPADATA_BASE_URL = "https://api.supadata.ai/v1";
 
 /**
+ * Wall-clock deadlines for one Supadata request. Same mechanism and rationale as
+ * `metadata.ts`'s `METADATA_TIMEOUT_MS` and `llm.ts`'s `SUMMARY_TIMEOUT_MS`: Cloudflare caps only CPU
+ * time, and waiting on a subrequest is not CPU time, so an unbounded `fetch` has nothing bounding it.
+ * Attempt-count bounding (`JOB_POLL_MAX_ATTEMPTS`) does not help — it counts attempts that RESOLVE,
+ * and one that never resolves outlives the 600s generation lease and can overlap a successor.
+ *
+ * The initial limit is 90s, not 60s. The vendor documents the synchronous path as taking "up to 60
+ * seconds" for AI-generated transcripts (videos past 20 minutes go async and return a `202` instead),
+ * so 60s is the documented CEILING, not a safe deadline — and the same paragraph warns that a
+ * timed-out request still consumes credits, which makes aborting early strictly worse than waiting.
+ * 90s clears that ceiling by half while staying just under the ~100s Cloudflare origin timeout that
+ * produced the observed `524` (`docs/supadata-billable-requests.md`), so we give up at roughly the
+ * point the vendor's own edge does.
+ *
+ * A poll is a cheap job-status read with no transcription behind it, so it gets the same 10s as the
+ * metadata lookup. Worst case for the whole operation stays ~5.5 minutes, well inside the lease.
+ */
+const TRANSCRIPT_TIMEOUT_MS = 90_000;
+const JOB_POLL_TIMEOUT_MS = 10_000;
+
+/**
  * The `lang` this module asks for. Exported so the caller can record it as the cache row's
  * `requested_lang` without restating the literal — a diagnostic record of what was asked for, which
  * would otherwise silently drift from what is actually sent.
@@ -58,6 +79,31 @@ function isErrorBody(body: unknown): body is { error: SupadataError["error"]; me
 }
 
 /**
+ * Shape guards for the two SUCCESSFUL bodies this module reads. They exist because a `2xx` body is
+ * still an external input: `"jobId" in result` and `job.status` are property accesses that THROW on
+ * `null` or a primitive, and a throw at that point escapes the transport with the already-read
+ * `x-billable-requests` figure discarded — a real, paid call recorded as `null`, or under the wrong
+ * operation. Running the guards inside `supadataGet` converts that into a `BilledSupadataError` that
+ * still carries the header, so every caller's existing metering records the truth.
+ *
+ * Deliberately PERMISSIVE about everything the callers already handle: a `content` that is not a
+ * string is a legitimate `unavailable` answer, not a schema failure, and a transcript that arrives
+ * with an odd `lang` is still a transcript worth the credit already spent. These reject only bodies
+ * whose shape makes the branch itself unevaluable.
+ */
+function isTranscriptOrJobId(body: unknown): body is TranscriptOrJobId {
+  if (typeof body !== "object" || body === null) return false;
+  // A job acceptance is only actionable if the id is a string — we put it straight into a URL path.
+  return "jobId" in body ? typeof body.jobId === "string" : true;
+}
+
+function isJobResult(body: unknown): body is JobResult<Transcript> {
+  // `status` must be a readable string: every branch of the poll loop turns on it, and a missing one
+  // would silently read as "still running" and burn the remaining poll budget on a broken job.
+  return typeof body === "object" && body !== null && typeof (body as { status?: unknown }).status === "string";
+}
+
+/**
  * One raw Supadata GET, with the response's `x-billable-requests` figure alongside the parsed body.
  *
  * This module left `@supadata/js` for a direct `fetch` (S-07) for exactly one reason: the SDK funnels
@@ -70,10 +116,25 @@ function isErrorBody(body: unknown): body is { error: SupadataError["error"]; me
  * and every caller depend on them: non-2xx with a JSON body → `new SupadataError(body)`; non-2xx
  * without → `SupadataError({ error: 'internal-error', … })`; 2xx with a non-JSON content-type → the
  * same. Nothing downstream can tell the transport changed.
+ *
+ * A blown `timeoutMs` rejects `fetch` itself with a `TimeoutError`, which is deliberately NOT wrapped
+ * in a `BilledSupadataError`: no response arrived, so nothing was reported, and `billedFromError`
+ * correctly yields `null` rather than inventing a figure. The caller's existing metering records the
+ * failed call and the endpoint maps it to the same 502 as any other transport failure.
+ *
+ * `isValid` runs on the parsed 2xx body INSIDE this boundary, so a malformed success leaves as a
+ * `BilledSupadataError` still carrying the header, exactly like a malformed failure. A `2xx` is not a
+ * promise of a readable shape, and the caller must not have to defend against one.
  */
-async function supadataGet(path: string, apiKey: string): Promise<{ body: unknown; billableCredits: number | null }> {
+async function supadataGet<T>(
+  path: string,
+  apiKey: string,
+  timeoutMs: number,
+  isValid: (body: unknown) => body is T,
+): Promise<{ body: T; billableCredits: number | null }> {
   const response = await fetch(`${SUPADATA_BASE_URL}${path}`, {
     headers: { "x-api-key": apiKey, "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   // Read before any throw: an error response is still a billable call, and the row recording it is the
@@ -105,8 +166,9 @@ async function supadataGet(path: string, apiKey: string): Promise<{ body: unknow
     );
   }
 
+  let body: unknown;
   try {
-    return { body: (await response.json()) as unknown, billableCredits };
+    body = (await response.json()) as unknown;
   } catch (error) {
     throw new BilledSupadataError(
       {
@@ -117,6 +179,19 @@ async function supadataGet(path: string, apiKey: string): Promise<{ body: unknow
       billableCredits,
     );
   }
+
+  if (!isValid(body)) {
+    throw new BilledSupadataError(
+      {
+        error: "internal-error",
+        message: "Unexpected response shape",
+        details: `Supadata returned ${response.status} with a body this endpoint cannot read`,
+      },
+      billableCredits,
+    );
+  }
+
+  return { body, billableCredits };
 }
 
 /**
@@ -179,31 +254,18 @@ export async function fetchTranscript(
 ): Promise<TranscriptResult> {
   const query = `?url=${encodeURIComponent(url)}&text=true&mode=auto&lang=${TRANSCRIPT_REQUESTED_LANG}`;
 
+  // The try covers ONLY the initial `/transcript` request. Polling is deliberately outside it: a poll
+  // failure is recorded by `pollTranscriptJob` as `transcript_poll/error` and rethrown, and if that
+  // rethrow landed in this catch it would write a SECOND `transcript/error` row for an HTTP call that
+  // never happened — double-counting the same failure's reported credits. One row per real call.
+  let result: TranscriptOrJobId;
+  let billableCredits: number | null;
   try {
-    const { body, billableCredits } = await supadataGet(`/transcript${query}`, apiKey);
-    // Cast at the transport boundary, exactly as `metadata.ts` does for `/v1/metadata`.
-    const result = body as TranscriptOrJobId;
-
-    if ("jobId" in result) {
-      // The `202` is recorded here with whatever it reported; whether the charge lands on it or on the
-      // polls is exactly the open question the ledger exists to answer, so nothing is assumed either way.
-      meter?.record({ operation: "transcript", outcome: "ok", resolvedVia: "job", billableCredits });
-      return await pollTranscriptJob(result.jobId, apiKey, meter);
-    }
-
-    if (typeof result.content !== "string") {
-      meter?.record({ operation: "transcript", outcome: "unavailable", billableCredits });
-      return { ok: false, reason: "unavailable" };
-    }
-
-    meter?.record({ operation: "transcript", outcome: "ok", resolvedVia: "inline", billableCredits });
-    return {
-      ok: true,
-      content: result.content,
-      lang: result.lang,
-      availableLangs: result.availableLangs,
-      resolvedVia: "inline",
-    };
+    // Narrowed at the transport boundary rather than cast: a bare cast made `"jobId" in result` a
+    // property access on an unvalidated external value, and its throw discarded the header (F4).
+    const response = await supadataGet(`/transcript${query}`, apiKey, TRANSCRIPT_TIMEOUT_MS, isTranscriptOrJobId);
+    result = response.body;
+    billableCredits = response.billableCredits;
   } catch (error) {
     if (error instanceof SupadataError && error.error === "transcript-unavailable") {
       // Billable despite producing nothing (see supadata-transcript.md §Pricing). This row, now
@@ -225,6 +287,27 @@ export async function fetchTranscript(
     });
     throw error;
   }
+
+  if ("jobId" in result) {
+    // The `202` is recorded here with whatever it reported; whether the charge lands on it or on the
+    // polls is exactly the open question the ledger exists to answer, so nothing is assumed either way.
+    meter?.record({ operation: "transcript", outcome: "ok", resolvedVia: "job", billableCredits });
+    return await pollTranscriptJob(result.jobId, apiKey, meter);
+  }
+
+  if (typeof result.content !== "string") {
+    meter?.record({ operation: "transcript", outcome: "unavailable", billableCredits });
+    return { ok: false, reason: "unavailable" };
+  }
+
+  meter?.record({ operation: "transcript", outcome: "ok", resolvedVia: "inline", billableCredits });
+  return {
+    ok: true,
+    content: result.content,
+    lang: result.lang,
+    availableLangs: result.availableLangs,
+    resolvedVia: "inline",
+  };
 }
 
 /**
@@ -241,8 +324,13 @@ async function pollTranscriptJob(jobId: string, apiKey: string, meter?: Supadata
     let job: JobResult<Transcript>;
     let billableCredits: number | null;
     try {
-      const polled = await supadataGet(`/transcript/${encodeURIComponent(jobId)}`, apiKey);
-      job = polled.body as JobResult<Transcript>;
+      const polled = await supadataGet(
+        `/transcript/${encodeURIComponent(jobId)}`,
+        apiKey,
+        JOB_POLL_TIMEOUT_MS,
+        isJobResult,
+      );
+      job = polled.body;
       billableCredits = polled.billableCredits;
     } catch (error) {
       meter?.record({

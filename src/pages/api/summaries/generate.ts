@@ -207,7 +207,8 @@ async function cacheTranscriptOutcome(
   fetchMs: number,
   outcome: {
     content: string;
-    outcome: "ok" | "empty" | "unavailable";
+    outcome: "ok" | "empty" | "unavailable" | "too_long";
+    contentChars?: number | null;
     lang: string | null;
     availableLangs: string[] | null;
     resolvedVia: "inline" | "job" | null;
@@ -305,6 +306,12 @@ async function runGeneration({
   // A `'stored'` row therefore legitimately reads near zero, and `resolved_via` is what explains why.
   const transcriptStartedAt = Date.now();
 
+  // Frozen inside each branch, the moment the transcript is IN HAND, and never recomputed afterwards.
+  // Taking it once below the branches instead would fold the cache-write RPC into the measurement —
+  // the column would then read as "time to source the transcript AND store it", which is neither what
+  // the plan specifies nor comparable across the three sources, since only the fetch path writes.
+  let transcriptMs: number;
+
   // A confirmation retry (allowLong) reuses the transcript cached when the 409 was issued — no second
   // paid fetch and no rate-limit token consumed. Best-effort: a miss just falls through to a re-fetch.
   const cachedQuote = allowLong ? await getTranscriptQuote(admin, userId, youtubeId, character) : null;
@@ -323,11 +330,17 @@ async function runGeneration({
     // the 409/confirm/cache route is reachable only above 40,000 characters.
     transcriptLang = cachedQuote.lang;
     transcriptAvailableLangs = cachedQuote.availableLangs;
+    transcriptMs = Date.now() - transcriptStartedAt;
   } else if (cachedTranscript) {
     // A negative hit answers for free what the fetch would have charged for. `'empty'` and
     // `'unavailable'` both mean the same thing to the user — the same 422 the fetch path returns —
     // but they are cached on different windows, which the RPC has already applied by the time a row
     // comes back at all.
+    // A `'too_long'` row is the 413 answer itself, cached. It holds no body by design (F6), so it is
+    // answered here rather than falling through to the hard-cap gate below, which reads `content`.
+    if (cachedTranscript.outcome === "too_long") {
+      return Response.json({ error: "This video's transcript is too long to summarize." }, { status: 413 });
+    }
     if (cachedTranscript.outcome !== "ok") {
       return Response.json({ error: "Transcript unavailable for this video" }, { status: 422 });
     }
@@ -338,6 +351,7 @@ async function runGeneration({
     resolvedVia = "stored";
     transcriptLang = cachedTranscript.lang;
     transcriptAvailableLangs = cachedTranscript.availableLangs;
+    transcriptMs = Date.now() - transcriptStartedAt;
   } else {
     // A real paid fetch. Rate-limit it first; a genuine RPC failure fails the request CLOSED (500)
     // rather than proceed to the very unbounded fetch this guard exists to prevent.
@@ -371,10 +385,12 @@ async function runGeneration({
     // confirmation has still paid Supadata, and caching first is what makes that money buy something.
     // Every BILLABLE outcome is cached, not just the useful one — but `failed` and `timeout` never
     // are, because they are transient by construction and say nothing durable about the video.
-    const fetchMs = Date.now() - transcriptStartedAt;
+    // The ONE measurement of the paid fetch: persisted on the summary row and handed to the cache as
+    // `fetchDurationMs`, so the two can never disagree about how long the same fetch took.
+    transcriptMs = Date.now() - transcriptStartedAt;
     if (!transcript.ok) {
       if (transcript.reason === "unavailable") {
-        await cacheTranscriptOutcome(admin, userId, youtubeId, fetchMs, {
+        await cacheTranscriptOutcome(admin, userId, youtubeId, transcriptMs, {
           content: "",
           outcome: "unavailable",
           lang: null,
@@ -385,7 +401,25 @@ async function runGeneration({
       return Response.json({ error: "Transcript unavailable for this video" }, { status: 422 });
     }
 
-    await cacheTranscriptOutcome(admin, userId, youtubeId, fetchMs, {
+    // Past the hard cap the BODY is not cached — only the verdict (F6). Storing it would put rows in
+    // `transcript_cache` that exceed the 200k bound the table promises, to be re-read in full on every
+    // later hit and thrown away for the same 413. Caching the verdict still spares the second attempt
+    // the paid fetch, which is the whole point of the cache; `content_chars` keeps the measurement.
+    // Written here, ahead of the generic gate below, because that gate runs after the body would
+    // already have been stored.
+    if (transcript.content.length > HARD_MAX_TRANSCRIPT_CHARS) {
+      await cacheTranscriptOutcome(admin, userId, youtubeId, transcriptMs, {
+        content: "",
+        outcome: "too_long",
+        contentChars: transcript.content.length,
+        lang: transcript.lang,
+        availableLangs: transcript.availableLangs,
+        resolvedVia: transcript.resolvedVia,
+      });
+      return Response.json({ error: "This video's transcript is too long to summarize." }, { status: 413 });
+    }
+
+    await cacheTranscriptOutcome(admin, userId, youtubeId, transcriptMs, {
       content: transcript.content,
       // A vendor SUCCESS carrying no words. Recorded separately from `unavailable` so the ledger's
       // analytics keeps the distinction between "we were told there is nothing" and "we were given
@@ -401,8 +435,6 @@ async function runGeneration({
     transcriptLang = transcript.lang;
     transcriptAvailableLangs = transcript.availableLangs;
   }
-
-  const transcriptMs = Date.now() - transcriptStartedAt;
 
   // A whitespace-only (or empty) transcript is effectively "no transcript": summarizing it would
   // charge a credit for a generic model reply built from nothing. Reject it as unavailable, before
@@ -423,6 +455,10 @@ async function runGeneration({
 
   // Hard-cap gate: reject pathologically long transcripts before any debit or LLM call. This — not
   // summaryCost, which only prices — is what bounds worst-case token cost/latency.
+  //
+  // The fetch branch now applies this cap earlier, so it can cache the verdict instead of the body
+  // (F6). This one is NOT redundant: it still covers the quote-cache path and any `'ok'` cache row
+  // written before that change, whose body can exceed the cap.
   if (transcriptLength > HARD_MAX_TRANSCRIPT_CHARS) {
     return Response.json({ error: "This video's transcript is too long to summarize." }, { status: 413 });
   }

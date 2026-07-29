@@ -36,8 +36,17 @@ export const TRANSCRIPT_CACHE_MAX_AGE_SECONDS = 2_592_000;
  */
 export const TRANSCRIPT_CACHE_UNAVAILABLE_MAX_AGE_SECONDS = 86_400;
 
-/** What the vendor did. Code branches on this, never on whether `content` is empty. */
-export type TranscriptCacheOutcome = "ok" | "empty" | "unavailable";
+/**
+ * What the vendor did, and what this app can do with it. Code branches on this, never on whether
+ * `content` is empty.
+ *
+ * `'too_long'` is the odd one: the vendor SUCCEEDED and the text is real, but it exceeds
+ * `HARD_MAX_TRANSCRIPT_CHARS` and will never be summarized, so the row records the size and drops the
+ * body (F6). Caching the rejection rather than the payload is what keeps the deduplication promise —
+ * a second attempt on the same over-long video answers 413 for free instead of re-paying Supadata —
+ * while bounding what the table can hold.
+ */
+export type TranscriptCacheOutcome = "ok" | "empty" | "unavailable" | "too_long";
 
 export interface CachedTranscriptRow {
   content: string;
@@ -50,7 +59,7 @@ export interface CachedTranscriptRow {
 }
 
 function isCacheOutcome(value: unknown): value is TranscriptCacheOutcome {
-  return value === "ok" || value === "empty" || value === "unavailable";
+  return value === "ok" || value === "empty" || value === "unavailable" || value === "too_long";
 }
 
 function isFetchedResolvedVia(value: unknown): value is FetchedResolvedVia {
@@ -117,9 +126,19 @@ export async function getCachedTranscript(
 
 export interface SaveCachedTranscriptParams {
   youtubeId: string;
-  /** `''` for both negative outcomes — the column is `not null` and `outcome` is what code reads. */
+  /**
+   * `''` for both negative outcomes AND for `'too_long'` — the column is `not null` and `outcome` is
+   * what code reads. A `'too_long'` body is deliberately discarded rather than stored: the app can
+   * never summarize it, so keeping it would cost storage and read bandwidth to deliver a 413.
+   */
   content: string;
   outcome: TranscriptCacheOutcome;
+  /**
+   * Observed transcript length. Only meaningful for `'too_long'`, where the body is gone and this is
+   * the sole surviving record of how far over the cap it was; `null` elsewhere, where `content`
+   * answers it directly. Diagnostic — gates nothing.
+   */
+  contentChars?: number | null;
   lang: string | null;
   availableLangs: string[] | null;
   /** Which `lang` the app asked for. Diagnostic only — gates nothing. */
@@ -154,6 +173,7 @@ export async function saveCachedTranscript(
     youtubeId,
     content,
     outcome,
+    contentChars = null,
     lang,
     availableLangs,
     requestedLang,
@@ -171,6 +191,7 @@ export async function saveCachedTranscript(
       p_requested_lang: requestedLang,
       p_resolved_via: resolvedVia,
       p_fetch_duration_ms: Math.round(fetchDurationMs),
+      p_content_chars: contentChars,
     })) as { data: boolean | null; error: { message: string } | null };
 
     if (error) {
