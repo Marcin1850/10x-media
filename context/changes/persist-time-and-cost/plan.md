@@ -532,6 +532,6 @@ The migration is additive except for the `persist_summary` swap and the two `res
 
 - [ ] 5.3 All three live runs behave as specified; total `usedCredits` delta matches `sum(billable_credits)`, any gap attributed to specific null rows
 - [ ] 5.4 Live telemetry values are plausible (`llm_ms` dominates, `cost_usd` ~1–2 ¢)
-- [ ] 5.5 Header unit settled by run 3 and recorded in `docs/supadata-billable-requests.md`; column renamed if it is a request count
+- [x] 5.5 Header unit settled by run 3 and recorded in `docs/supadata-billable-requests.md`; column renamed if it is a request count — d0d08b5
 - [ ] 5.6 `resolved_via`-as-Whisper-proxy question answered from run 3's measured figures
 - [ ] 5.7 Roadmap (status, At a glance, Backlog Handoff) and Linear both updated
