@@ -50,3 +50,10 @@
 - **Problem**: Work lands on master
 - **Rule**: Always create a new branch when /10x-new skill is used
 - **Applies to**: new
+
+## Nigdy nie kasuj danych z lokalnej bazy bez zgody — najpierw nieniszcząca alternatywa
+
+- **Context**: Każda komenda kasująca lub nadpisująca dane w lokalnym środowisku dev (`supabase db reset`, `drop`, `truncate`, nadpisanie pliku) — niezależnie od tego, czy jest częścią planu, czy doraźnym sprawdzeniem stanu.
+- **Problem**: Lokalne dane (użytkownicy, `videos`, `summaries`) to zasób testowy zbudowany realnym kosztem — odtworzenie podsumowań kosztuje kredyty Supadata i OpenRouter oraz czas. Dodatkowo destrukcyjna komenda przerwana w połowie zostawia bazę niespójną (tu: schemat cofnięty do pierwszej migracji), więc naprawa wymaga kolejnego pełnego resetu.
+- **Rule**: Nigdy nie uruchamiaj destrukcyjnej komendy na lokalnej bazie bez wyraźnej zgody. Najpierw sięgnij po nieniszczącą alternatywę (`supabase migration up`, zapytanie do `pg_catalog`); jeśli krok naprawdę wymaga czystej bazy, poproś o zgodę i wyjaśnij, co zostanie utracone.
+- **Applies to**: implement, impl-review
