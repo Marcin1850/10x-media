@@ -1,6 +1,6 @@
 # Supadata — transcript endpoint (`GET /v1/transcript`)
 
-**REST base:** `https://api.supadata.ai/v1` · **Auth:** `x-api-key` header · Context7: `/llmstxt/supadata_ai_llms_txt` · **Fetched 2026-07-25**
+**REST base:** `https://api.supadata.ai/v1` · **Auth:** `x-api-key` header · Context7: `/llmstxt/supadata_ai_llms_txt` · **Fetched 2026-07-25** · **re-checked 2026-07-29** (parameters, pricing and error enum unchanged; §Latency added)
 
 **Role here:** the app already calls this (`src/lib/services/transcript.ts:30`). Captured because two open questions live in its parameters — S-09's cost guardrail (`mode`) and S-08's `language` column (`lang`). Extends `../../transcript-llm-probe/docs/supadata.md`, which covers SDK/REST usage and remains accurate.
 
@@ -72,6 +72,20 @@ So the source language cannot be learned from Supadata *before* choosing a track
 ```
 
 `TranscriptResult` in `src/lib/services/transcript.ts:4-6` keeps `content` and `lang` but has **no field for `availableLangs`**, and the call site (`src/pages/api/summaries/generate.ts:260`) discards `lang` too — so the app has never recorded which language it actually summarised from. Adding both is part of S-08.
+
+## Latency — added 2026-07-29 (S-07 impl-review finding F2)
+
+Documented at `docs.supadata.ai/get-transcript`, §Latency:
+
+> Native transcripts resolve at normal latency; **AI-generated transcripts can take up to 60 seconds**. **Videos exceeding 20 minutes** trigger an asynchronous job, returning `202` with a job id. Developers should account for these latencies to prevent timeouts, as **timed-out requests still consume credits**.
+
+Three consequences, all of which the earlier capture missed:
+
+1. **60 seconds is the vendor's own ceiling for the synchronous path, so it is not a usable client deadline.** A deadline set *at* the documented maximum aborts responses the API was still entitled to deliver. `src/lib/services/transcript.ts` therefore uses **90s** for the initial request — half again over the ceiling, and just under the ~100s Cloudflare origin timeout behind the `524` observed on 2026-07-29 (`../../persist-time-and-cost/docs/supadata-billable-requests.md`), so the app gives up at roughly the point the vendor's edge does. Job-status polls carry no transcription behind them and get **10s**, matching `metadata.ts`.
+2. **A client-side timeout is not free.** The abort cancels our wait, not the vendor's work or its billing — so an over-tight deadline converts a slow success into a paid nothing. This is the reason the limit is set generously rather than defensively.
+3. **The `202` job path is gated on video length (>20 min), not on caption availability.** This is the missing half of "the job path stayed unobserved": every local probe ran on 2–3 minute videos, which cannot reach it regardless of `mode`. It also bounds `mode: "generate"`'s exposure — under 20 minutes it answers inline (as the 2:55 probe did), so the poller is reachable only on long videos, exactly where 2 credits/minute hurts most.
+
+Before this, the module bounded itself only by attempt count (`JOB_POLL_MAX_ATTEMPTS`), which counts attempts that *resolve* and so does nothing about one that never does. Cloudflare caps only CPU time, and waiting on a subrequest is not CPU time.
 
 ## Pricing
 

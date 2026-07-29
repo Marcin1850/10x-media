@@ -61,6 +61,8 @@ Two captures disagree and one contradicts itself:
 | Context7 extraction, 2026-07-25 | Basic free 100/mo @ 1 req/s · Pro **$9 → 1,000** @ 50 req/s · … · Supa **$897 → 1,000,000**; intermediate Ultra / Mega / Giga tiers |
 | Same extraction, second snippet | Supa @ **100 req/s** — while the first says up to **500 req/s** on Giga |
 
-Either pricing changed in the intervening three weeks or the extraction is lossy; the self-contradiction on throughput says at least one snippet is unreliable. **Do not plan against these numbers.** `GET /v1/me` and supadata.ai/pricing are the authorities. The per-credit operation costs above were consistent across every source and are safe to reason with — it is only the plan/price/throughput table that is in doubt.
+Either pricing changed in the intervening three weeks or the extraction is lossy; the self-contradiction on throughput says at least one snippet is unreliable. **Do not plan against these numbers.**
+
+> **Re-checked 2026-07-29.** A fresh Context7 query reproduced the 2026-07-25 extraction *identically* — Basic free 100/mo @ 1 req/s, Pro $9 → 1,000 @ 50 req/s, Supa $897 → 1,000,000 @ 100 req/s. A stable extraction is evidence against "lossy", which shifts the 07-05 vs 07-25 disagreement toward a **real pricing change** in that window. The internal throughput contradiction persists, so the warning below stands unchanged; the free tier's **1 req/s** — the only figure this project's code depends on — has now been seen three times without variation. `GET /v1/me` and supadata.ai/pricing are the authorities. The per-credit operation costs above were consistent across every source and are safe to reason with — it is only the plan/price/throughput table that is in doubt.
 
 **Source:** Supadata docs (`docs.supadata.ai/api-reference/endpoint/account/me`, `supadata.ai/playground`) via Context7 + one live `GET /v1/me` call, 2026-07-25.

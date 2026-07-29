@@ -78,7 +78,7 @@ ledger sum(billable_credits) = 4   (transcript+metadata run A, metadata run B, t
 
 **The headline finding: an error response can be billed and report nothing.** The 206 is billable at 1 credit exactly as `supadata-transcript.md:81` says, but sends no header — so it lands in the ledger as `null`, not `1`. This is the first real payoff of keeping `null` distinct from `0`: the reconciliation gap was localisable to a single known call shape instead of being an unexplained discrepancy. Resolves the third bullet above (4xx/5xx) in the *opposite* direction to what "every API response" implied.
 
-**One caveat on the table:** the `524`'s cost is unknown, **not zero**. That failure preceded the baseline `/v1/me` read, so it sits inside the 48 rather than inside the measured delta. It is excluded from the reconciliation above rather than counted as free. (The app handled it correctly regardless: 502 to the user, no debit, and an `outcome='error'` ledger row with `null` credits.)
+**One caveat on the table:** the `524`'s cost is unknown, **not zero**. The vendor's §Latency paragraph (re-fetched 2026-07-29, see `../../persist-video-metadata/docs/supadata-transcript.md#latency`) states plainly that **timed-out requests still consume credits** — so "unknown" here leans billable rather than free, and a client-side deadline can only ever cancel our *wait*, never the charge. That is why S-07's `TRANSCRIPT_TIMEOUT_MS` was set to 90s rather than to the documented 60s ceiling: on this endpoint an over-tight deadline manufactures exactly this row — a paid call with no result and no header. That failure preceded the baseline `/v1/me` read, so it sits inside the 48 rather than inside the measured delta. It is excluded from the reconciliation above rather than counted as free. (The app handled it correctly regardless: 502 to the user, no debit, and an `outcome='error'` ledger row with `null` credits.)
 
 ### Spot probes — direct against the vendor, same day
 
@@ -111,6 +111,8 @@ Two consequences follow:
 - **The `job` path stayed unreachable.** Five submit attempts across three videos, zero `202` responses. The `202` and `GET /transcript/:jobId` polls therefore remain **unobserved** — the one gap this file still carries. If the path is genuinely unreachable on this plan, `resolved_via = 'job'` and `operation = 'transcript_poll'` rows will simply never appear in production either, and the ledger will record the answer for free if they ever do.
 
 The `202` job-accepted response and the `GET /transcript/:jobId` polls remain unobserved — no local video took the job path.
+
+**✅ Why, answered 2026-07-29 (docs re-fetch).** Not an account restriction and not chance: the vendor gates the async job on **video length > 20 minutes** (`../../persist-video-metadata/docs/supadata-transcript.md#latency`). Every probe above ran on a 2–3 minute video, so none of them could have reached the job path in any `mode` — which also explains Finding 3's caption-less `generate` returning `206` inline rather than a job. The path is therefore **reachable, just untested**: a >20-minute video would produce the `202` and the polls on this same plan. `operation = 'transcript_poll'` rows will appear in production the first time a user submits a long video, and the ledger will record the open credit question for free when they do.
 
 ## Why the SDK cannot supply it
 

@@ -436,11 +436,15 @@ The Whisper `job` path is **not** verified, and the attempt to verify it was aba
 
 ## Performance Considerations
 
-The cache read adds one DB round trip before a fetch that costs money and seconds — a favourable trade whenever it hits, and negligible when it misses. The duplicate-fetch signal is free: it rides the upsert the write already performs, adding one `select` inside a function already touching that row, and no extra round trip. The ledger costs exactly one round trip per request regardless of how many calls were made, because rows are batched. Usage accounting adds no latency; the figures ride the response already being parsed. Cache growth is unbounded by design (one row per video, up to 200k chars) — accepted at MVP scale and worth revisiting only if the video count grows by orders of magnitude.
+The cache read adds one DB round trip before a fetch that costs money and seconds — a favourable trade whenever it hits, and negligible when it misses. The duplicate-fetch signal is free: it rides the upsert the write already performs, adding one `select` inside a function already touching that row, and no extra round trip. The ledger costs exactly one round trip per request regardless of how many calls were made, because rows are batched. Usage accounting adds no latency; the figures ride the response already being parsed. Cache growth is unbounded by design (one row per video, up to 200k chars) — accepted at MVP scale and worth revisiting only if the video count grows by orders of magnitude. **The 200k bound is enforced as of the addendum below; before it, the row size was merely assumed.**
 
 ## Migration Notes
 
 The migration is additive except for the `persist_summary` swap and the two `resolved_via` CHECK replacements. No backfill: existing summaries keep null telemetry and their spend stays unpriced. `transcript_cache` starts empty, so the first generation after rollout always pays — the cache earns from the second one onward, and the negative cache earns only from a repeated request for a video that has no transcript.
+
+### Addendum — 2026-07-29, impl-review phases 2–4 finding F6
+
+A **second migration** joins Phase 1's: `supabase/migrations/20260729120000_transcript_cache_too_long.sql` adds a fourth `transcript_cache.outcome` value, `'too_long'`, plus a nullable `content_chars` diagnostic column, and drops/recreates `save_transcript_cache` with a ninth argument (`p_content_chars`) rather than overloading it. Phase 4's endpoint wiring applies `HARD_MAX_TRANSCRIPT_CHARS` in the fetch branch *before* the cache write, storing the verdict with an empty body, and answers a `'too_long'` hit with 413 directly. Without this the endpoint cached every successful body ahead of the hard-cap gate, so the table could retain rows far past the 200k the Performance section promises — re-read in full on each later hit only to be discarded for the same 413. `'too_long'` takes the 30-day window by falling through `get_transcript_cache`'s `case` unchanged: a transcript does not get shorter, so unlike `'unavailable'` the claim cannot stop being true. Rollback requires deleting `outcome = 'too_long'` rows before the old CHECK can be restored — safe, since the cache is a spend optimisation, not a source of truth. **For Phase 5**: `content_chars` hands S-09 the over-cap size distribution at no extra cost.
 
 ## References
 
