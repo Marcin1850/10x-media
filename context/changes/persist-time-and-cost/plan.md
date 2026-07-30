@@ -428,7 +428,7 @@ There is no automated test suite in this project (Module-3 deferral), so verific
 4. A video with no transcript: expect 422, a `transcript`/`unavailable` ledger row with null `summary_id`, no summary, and a `transcript_cache` row with `outcome = 'unavailable'`. Repeat it: expect 422 with **zero** new ledger rows.
 5. A long video (>40k chars) up to the 409, then abandon: expect a cached transcript despite no summary, and ledger rows recorded. Re-run it from cache and confirm the `transcript_quotes` row is written with `resolved_via = 'stored'`.
 6. Duplicate-fetch signal, without spending credits: call `save_transcript_cache` twice against the local DB (step 1.11), then confirm the endpoint's `[duplicate-transcript-fetch]` branch fires by temporarily forcing the RPC's return to `true`. The concurrent case itself is **not** reproduced deliberately — it costs two real fetches to stage and proves nothing the RPC-level test does not.
-7. Live pass per Phase 5, budgeted at 6–9 credits.
+7. Live pass per Phase 5, budgeted at 2–3 credits (runs 1 and 2 only; run 3 cancelled 2026-07-29).
 
 **Deliberately not verified live** (cost): the metadata retry, and the `unavailable` cache's 24-hour expiry. Both are exercised locally by reasoning and DB inspection — the expiry by backdating `fetched_at` rather than waiting a day. That local check must confirm **both** halves of the split window: a backdated `unavailable` row expires at 24 hours while a backdated `empty` row of the same age still hits. State this limitation in the verification record rather than implying full coverage.
 
@@ -534,8 +534,8 @@ A **second migration** joins Phase 1's: `supabase/migrations/20260729120000_tran
 
 #### Manual
 
-- [ ] 5.3 All three live runs behave as specified; total `usedCredits` delta matches `sum(billable_credits)`, any gap attributed to specific null rows
+- [ ] 5.3 Both live runs behave as specified; total `usedCredits` delta matches `sum(billable_credits)` plus one credit per `unavailable` row, any remaining gap attributed to specific null rows
 - [ ] 5.4 Live telemetry values are plausible (`llm_ms` dominates, `cost_usd` ~1–2 ¢)
 - [x] 5.5 Header unit settled by run 3 and recorded in `docs/supadata-billable-requests.md`; column renamed if it is a request count — d0d08b5
-- [ ] 5.6 `resolved_via`-as-Whisper-proxy question answered from run 3's measured figures
+- [ ] 5.6 `resolved_via`-as-Whisper-proxy question recorded as open and unbudgeted — answered by observing real traffic, not a paid run — and handed to S-09
 - [ ] 5.7 Roadmap (status, At a glance, Backlog Handoff) and Linear both updated
