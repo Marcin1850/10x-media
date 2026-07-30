@@ -529,13 +529,13 @@ A **second migration** joins Phase 1's: `supabase/migrations/20260729120000_tran
 
 #### Automated
 
-- [ ] 5.1 `npx supabase migration list --linked` shows local and remote in sync
-- [ ] 5.2 `wrangler deploy` reports a new version and a live generation returns without a 500
+- [x] 5.1 `npx supabase migration list --linked` shows local and remote in sync
+- [x] 5.2 `wrangler deploy` reports a new version and a live generation returns without a 500
 
 #### Manual
 
-- [ ] 5.3 Both live runs behave as specified; total `usedCredits` delta matches `sum(billable_credits)` plus one credit per `unavailable` row, any remaining gap attributed to specific null rows
-- [ ] 5.4 Live telemetry values are plausible (`llm_ms` dominates, `cost_usd` ~1–2 ¢)
+- [x] 5.3 Both live runs behave as specified; total `usedCredits` delta matches `sum(billable_credits)` plus one credit per `unavailable` row, any remaining gap attributed to specific null rows
+- [x] 5.4 Live telemetry values are plausible (`llm_ms` dominates, `cost_usd` ~1–2 ¢)
 - [x] 5.5 Header unit settled by run 3 and recorded in `docs/supadata-billable-requests.md`; column renamed if it is a request count — d0d08b5
-- [ ] 5.6 `resolved_via`-as-Whisper-proxy question recorded as open and unbudgeted — answered by observing real traffic, not a paid run — and handed to S-09
-- [ ] 5.7 Roadmap (status, At a glance, Backlog Handoff) and Linear both updated
+- [x] 5.6 `resolved_via`-as-Whisper-proxy question recorded as open and unbudgeted — answered by observing real traffic, not a paid run — and handed to S-09
+- [x] 5.7 Roadmap (status, At a glance, Backlog Handoff) and Linear both updated
