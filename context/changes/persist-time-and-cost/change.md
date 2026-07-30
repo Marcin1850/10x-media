@@ -1,7 +1,7 @@
 ---
 change_id: persist-time-and-cost
 title: Persist generation time and provider cost per summary (S-07)
-status: impl_reviewed
+status: implemented
 created: 2026-07-28
 updated: 2026-07-30
 archived_at: null
@@ -95,3 +95,32 @@ re-establish what the modes actually do before planning around them.
 Deliberately not treated as a defect: YouTube auto-captions an instrumental as the single token
 `"you"`, which passes the whitespace guard and is summarized as an ordinary transcript. Owner's
 call — a 3-character transcript is a real transcript, and summarizing it is the user's choice.
+
+## Phase 5 — live in production (2026-07-30)
+
+Rollout was `supabase db push --linked` immediately followed by `wrangler deploy` (Worker
+`d6fd806d-4029-4f31-ba13-7ea2d7cfaba7`), run as one operation to close the `persist_summary` swap
+window. Live pass cost **3 Supadata credits** against the 2–3 budget. Record:
+`reviews/manual-verification.md`.
+
+**The slice's central claim held against the vendor's own billing.** A second generation of the
+same video moved `usedCredits` by exactly 1 — the transcript came from the shared cache for free,
+and only metadata was paid. Reconciliation closed exactly (`sum(billable_credits)` 3 = measured
+delta 3, no gap). `cost_usd` proved *exactly* reproducible from token counts at Sonnet 5's
+introductory rate, to the last digit on both runs.
+
+Two findings the plan did not predict, both handed to S-09 (roadmap Backlog Handoff + MAR-15):
+
+- **The metadata retry fired, and the failed attempt was billed 0.** So `billable_credits = null`
+  now has two observed meanings — billed-but-unreported (the `206`, 1 credit) and not-billed-at-all
+  (a failed metadata call). They are indistinguishable without `outcome`, which is why the
+  reconciliation formula is per-outcome rather than a flat sum.
+- **Metadata is now the entire cost of a repeat generation.** `fetchVideoMetadata` runs
+  unconditionally (`generate.ts:568`) even though S-08 already persists the same fields to `videos`
+  — run 2 re-paid a credit for data already in the database. Caching it the way transcripts are now
+  cached is a candidate lever for S-09, with the caveat that the call's placement is documented as
+  load-bearing for three separate reasons.
+
+A pre-flight check worth repeating: the Phase 1 review triage had applied its two fixes to the
+*local* database as targeted DDL. Both were confirmed present in the migration files before pushing
+— had they lived only locally, production would have silently received the unfixed versions.
