@@ -4,6 +4,8 @@
 
 Turn a list of YouTube videos into summaries that tell you what's actually worth watching — and give you the key content of the ones you skip, so you don't have to watch them at all. Summaries are generated in Polish and adapted to the character of the channel (informational vs. educational).
 
+> **Status: MVP / learning project.** 10xMedia is built as the course project for [10xDevs](https://www.10xdevs.pl/) 3.0. It is intentionally scoped to a single end-to-end flow, not fully hardened for production, and some operations are manual by design (credit refills, deploys of secrets). Expect rough edges and breaking changes. See [Project status](#project-status) for details.
+
 ## Tech Stack
 
 - [Astro](https://astro.build/) v6 - Modern web framework with server-first rendering
@@ -303,6 +305,17 @@ Required repository secrets:
 | `CLOUDFLARE_ACCOUNT_ID` | Deploy step |
 
 The build does not need the Supadata or OpenRouter keys — every variable in the `astro:env` schema is declared `optional`, so the build succeeds without them.
+
+## Project status
+
+This is an MVP developed during the **10xDevs 3.0** course, where it doubles as the sandbox for practising AI-assisted development workflows (`context/` holds the change plans driving that work).
+
+What that means in practice:
+
+- **Scope is deliberately narrow** — one flow: paste YouTube links → get Polish summaries.
+- **No self-serve billing** — summary credits are granted manually by an operator.
+- **Not fully production-hardened** — no automated test suite yet, limited error recovery.
+- **Breaking changes are expected** — migrations may be rewritten rather than layered.
 
 ## License
 
