@@ -9,6 +9,12 @@ archived_at: null
 
 ## Notes
 
+**Plan review triaged 2026-07-31** — all 7 findings fixed in `plan.md`; verdict RETHINK → SOUND. Two
+were structural: the per-generation ceiling is **3** credits, not 2 (metadata's retry is separately
+billed), and the budget breaker is an **atomic reservation** under the singleton row, not a read
+followed by a spend. Phase 3 grew accordingly — `supadata_reservations`, reserve/settle RPCs, a
+settlement obligation on every paid path, and a client 503 change. Re-estimate Phase 3 before starting.
+
 S-09 from roadmap
 
 Source: `context/foundation/roadmap.md` §S-09 — **design is locked, not open**. The `Decisions

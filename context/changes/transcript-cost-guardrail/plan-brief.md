@@ -21,10 +21,12 @@ budget.
 
 ## Desired End State
 
-A generation costs at most **2** Supadata credits, and **0** on a warm video — a bound known before any
-work starts rather than discovered afterwards. A caption-less video gets its own message saying so. When
-the monthly plan is nearly exhausted, paid work is refused before it starts and a structured event is
-emitted through a seam a monitoring tool can later receive.
+A generation costs at most **3** Supadata credits (**2** typically; the third is metadata's billable
+retry, which the breaker cannot gate because it happens inside `fetchVideoMetadata`), and **0** on a warm
+video — a bound known before any work starts rather than discovered afterwards. A caption-less video gets
+its own message saying so. When the monthly plan is nearly exhausted, paid work is refused before it
+starts — **atomically, so concurrent requests cannot each spend the same last credit** — and a structured
+event is emitted through a seam a monitoring tool can later receive.
 
 ## Key Decisions Made
 
@@ -34,18 +36,26 @@ emitted through a seam a monitoring tool can later receive.
 | `mode` configurability | Hard-coded constant, no env var | A secret toggle re-enables the expensive path with no trace in code | Roadmap D2 |
 | Negative-cache window | 24 h → 2 h | A day is too long to wait for a freshly published video's captions | Roadmap D4 |
 | Metadata cache shape | Full `metadata_cache` keyed by `youtube_id` | `videos` is per-user and cascades — one deletion would evict shared data | Roadmap D6 |
-| Metadata fetch placement | Lookup hoisted early, fetch unmoved | A hit removes the request; the miss path's two other reasons still hold | Roadmap D7 |
+| Metadata fetch placement | Lookup hoisted to `:317-322` (after the 402 gate), fetch unmoved | A hit removes the request; the miss path's two other reasons still hold | Roadmap D7 |
 | Notification | One swappable function, no receiver yet | Monitoring tool lands later; warn is decorative until then | Roadmap D5b |
 | **Cache-hit marker** | **`summaries.metadata_via` column** | Literal symmetry with S-07's `resolved_via`; costs a `persist_summary` swap | **Plan** |
 | **Breaker at the metadata call** | **Gate it too — skip metadata, keep the summary** | On a warm transcript the metadata call *is* the first paid call; refusing post-debit to protect a thumbnail is worse | **Plan** |
-| **Stop threshold** | **`remaining < 2`** | Derived from the worst-case envelope, not picked — needs no retuning | **Plan** |
+| **Stop threshold** | **`remaining < 3`** | Derived from the worst-case envelope (1 transcript + 2 metadata, the second being the retry), not picked | **Plan** |
 | **Unreadable budget state** | **Fail open, and report it** | A `/v1/me` outage must not break a product whose transcript API is fine | **Plan** |
-| **Verification budget** | **~4 credits, live** | Proves the envelope against the vendor's own billing, as S-07 did | **Plan** |
+| **Verification budget** | **~4 credits live, ≤6 worst case** | Proves the envelope against the vendor's own billing, as S-07 did | **Plan** |
+| **Breaker mechanics** | **Atomic reserve/settle under the singleton row** | A read-then-spend breaker bounds nothing: ledger rows only flush in `POST.finally`, so a request's own spend is invisible to every concurrent one | **Review F2** |
+| **Live accounting source** | **Reservations, not `supadata_calls`** | The ledger is stale by the duration of the work it would bound, and `error` + null header means *unknown*, not zero | **Review F2** |
+| **Reservation size** | **Transcript 1, metadata 2** | The breaker cannot gate the retry *inside* `fetchVideoMetadata`, but it can refuse to start unless both requests fit | **Review F1+F2** |
+| **Refresh spacing** | **Refresh-claiming caller waits `RETRY_DELAY_MS`** | An in-line `/v1/me` lands directly before the paid call on a 1 req/s plan; one request per TTL pays it | **Review F3** |
+| **Budget service totality** | **Never throws; `AbortSignal.timeout`; response narrowed** | The second check sits *after* the debit and the LLM call, where a throw bypasses the refund | **Review F4** |
+| **Refusal status** | **`503`, with the client preferring `serverError`** | `case 503` currently hardcodes "isn't configured", so the breaker's copy would never reach a user | **Review F6** |
 
 ## Scope
 
 **In scope:** `mode: "native"`; a dedicated 422 for caption-less videos (server *and* client); the 2 h
-negative-cache window; `metadata_cache` + `metadata_via`; the budget breaker and its notification seam.
+negative-cache window; `metadata_cache` + `metadata_via`; the budget breaker as an atomic
+reserve/settle (`supadata_budget` + `supadata_reservations`), its 503 refusal end to end (server *and*
+client), and its notification seam.
 
 **Out of scope:** what a summary costs the *user* in app credits (S-05); upgrading the Supadata plan;
 delivering the notification anywhere (D5b); backfilling the cache (D11); negative-caching metadata
@@ -56,18 +66,24 @@ failures (D9); injection screening (S-10).
 Three guards on the existing pipeline, no restructuring:
 
 ```
-request → transcript quote → transcript_cache ─┐
-                             metadata_cache ───┤ (both free; hits skip everything below)
-                                               ↓
-                          [breaker] → transcript fetch (1 credit)
-                                               ↓
-                             debit → LLM → [breaker] → metadata fetch (1 credit)
-                                               ↓
-                                  persist_summary (+ metadata_via)
+request → 402 gate → transcript quote → transcript_cache ─┐
+                                        metadata_cache ───┤ (both free; hits skip everything below)
+                                                          ↓
+              [reserve 1] → rate limit → transcript fetch → [settle]
+                                                          ↓
+                    debit → LLM → [reserve 2] → metadata fetch → [settle]
+                                                          ↓
+                                     persist_summary (+ metadata_via)
 ```
 
 Both breaker points sit on **miss** paths only: a cache hit costs nothing, so blocking it would break
 the product for no saving.
+
+Each `[reserve]` locks the singleton `supadata_budget` row `for update`, counts outstanding reservations
+at their **maximum** (an unknown outcome stays charged), and either hands back a reservation id or
+refuses with a 503. Each `[settle]` is a `finally` obligation, records the real billed figure, and never
+deletes its row — a stale sweep and the next `/v1/me` refresh are what clear them. The reserve precedes
+the rate-limit check so a refusal costs the user no transcript attempt.
 
 ## Phases at a Glance
 
@@ -75,11 +91,16 @@ the product for no saving.
 | --- | --- | --- |
 | 1. Lever A + 422 split | The cost bound itself; caption-less videos get their own copy | The client discards the server's 422 string — miss it and the copy never ships |
 | 2. `metadata_cache` + marker | Repeat generations stop paying for metadata | `persist_summary` drop+recreate at 24 params; a stale overload if done with `create or replace` |
-| 3. Budget breaker | Fleet-level bound + notification seam | The ledger delta must branch on `outcome`; a flat sum under-counts the billable 206 |
+| 3. Budget breaker | Fleet-level bound (atomic) + notification seam | A settle leaked on an error path holds credit hostage until the sweep; and the reserve must be *before* the rate-limit check |
 | 4. Deploy + verify | Live, reconciled against `GET /v1/me` | The push/deploy window: between the two commands, every generation fails after the LLM is paid for |
 
 **Prerequisites:** S-01, S-07, S-08 — all shipped. No new Worker secrets.
-**Estimated effort:** ~4 sessions, one per phase, with a manual gate between each.
+
+**Estimated effort:** ~5 sessions with a manual gate between each — **Phase 3 is now roughly two**, not
+one. Review F2 turned it from "one table, two RPCs, one service" into a second table, reserve/settle
+RPCs with a stale sweep, a settlement obligation on every paid exit path, a fourth file
+(`GenerateSummaryForm.tsx`), and a concurrency assertion that has to be written by hand because nothing
+else in the repo tests it.
 
 ## Open Risks & Assumptions
 
@@ -94,9 +115,18 @@ the product for no saving.
   user-visible correctness; C is its counterweight. If C is ever dropped, revisit D4 in the same breath.
 - **D1 is permanent.** Under `native`, `resolved_via = 'job'` can never appear, so S-07's "is the job
   path reachable?" hand-over becomes unanswerable. Accepted knowingly.
+- **`/v1/me`'s rate bucket is assumed, not confirmed.** The vendor docs do not say whether it shares the
+  transcript endpoints' 1 req/s limit. The plan takes the conservative reading and isolates the wait in
+  one constant, so it is a one-line deletion if Phase 4 shows the endpoint is exempt.
+- **The reservation sweep window is a guess bounded by the transcript poll.** Set it too short and it
+  un-reserves a call that is still running, reopening the race the reservation exists to close. Erring
+  long only makes the breaker temporarily over-conservative — so err long.
 
 ## Success Criteria (Summary)
 
 - A repeat generation of the same video moves `usedCredits` by **0**, verified against the vendor.
-- A cold generation costs at most 2 credits, and the ledger reconciles exactly with `GET /v1/me`.
+- A cold generation costs at most 3 credits (2 without a metadata retry), and the ledger reconciles
+  exactly with `GET /v1/me`.
 - A user submitting a caption-less video is told *that*, not a generic failure.
+- Two concurrent reserves against a one-generation budget produce one reservation and one refusal —
+  never two. This is the property that distinguishes a fleet bound from an advisory one.

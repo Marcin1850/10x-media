@@ -84,14 +84,22 @@ derived from this table must branch on `outcome`.
 
 ## Desired End State
 
-Per-generation Supadata spend is bounded at **2 credits** and knowable before any work starts:
+Per-generation Supadata spend is bounded at **3 credits** and knowable before any work starts:
 
 | Case | Transcript | Metadata | Total |
 | --- | --- | --- | --- |
 | Cold video with captions | 1 | 1 | **2** |
+| Cold video with captions, metadata retried | 1 | 2 | **3** |
 | Cold video without captions | 1 | — (422 exits first) | **1** |
 | Warm video, both windows | 0 | 0 | **0** |
 | Caption-less retry past the 2 h window | 1 | — | **1** |
+
+**The bound is 3, not 2, and the difference is metadata's retry.** `fetchVideoMetadata` retries a
+retryable failure once (`metadata.ts:169-178`), and that retry is **a second billable request** — the
+helper's own comment says so (`:43-46`) and is the stated reason S-07 meters inside `requestMetadata`
+rather than per generation. The breaker sits *in front of* the helper, so it cannot gate a retry that
+happens inside it. Two credits is the **typical** cold cost; three is the **ceiling**, and every number
+downstream (the stop reserve, the verification budget) is derived from three.
 
 Verified by: a live pass reconciling `GET /v1/me`'s `usedCredits` delta against the per-outcome ledger
 total for the same window, plus `summaries.metadata_via` showing `'stored'` on the repeat.
@@ -139,8 +147,20 @@ the second check point whether it is needed at all. Phase 4 is the single deploy
 
 ## Critical Implementation Details
 
-**The ledger delta must branch on `outcome`.** The breaker's "spend since the stored reading" figure
-cannot be `sum(billable_credits)`: a `206 transcript-unavailable` is billed 1 credit and reports no
+**The breaker does not do live arithmetic over `supadata_calls`.** This is the single most important
+structural decision in Phase 3 and the natural design is the wrong one. `supadata_calls` rows are held
+in an in-memory meter and flushed once in `POST.finally` (`generate.ts:100-125`), so during the entire
+paid window of a request its own spend is invisible to every other request. A breaker that reads the
+ledger is reading a figure that is stale by exactly the duration of the work it is trying to bound.
+`created_at` compounds it: it is the batch's *insertion* time, not the HTTP call's, so it cannot be
+compared against a `/v1/me` snapshot boundary without racing it. And `outcome = 'error'` with a null
+header means **unknown**, not zero — a ledger-derived total silently reads a possible charge as free.
+
+So live accounting moves to **reservations**, written synchronously at call time (below), and the
+ledger keeps its original job: telemetry and after-the-fact reconciliation.
+
+**Where the ledger total *is* still used — Phase 4's reconciliation — it must branch on `outcome`.**
+It cannot be `sum(billable_credits)`: a `206 transcript-unavailable` is billed 1 credit and reports no
 header, while a failed metadata call is billed 0 and also reports no header — both land as `null`. A
 flat sum under-counts exactly the outcome that costs money. The per-outcome shape is load-bearing and
 must not be simplified back:
@@ -331,10 +351,19 @@ populates the per-user `videos` row.
 
 **Contract**: Three edits.
 
-The **lookup is hoisted early** (D7) — placed alongside the existing transcript-cache lookup around
-`:317-322`, ahead of the 413/409/402 exit gates. It is a free DB read, so none of the three reasons
-documented at `:552-556` for the *fetch's* placement apply to it; and Phase 3 depends on knowing before
-the debit whether metadata will be a paid call.
+The **lookup is hoisted early** (D7) — placed alongside the existing transcript-cache lookup at
+`:317-322`, which means **after** the 402 balance gate (`:290-292`) and **before** the 413/409 exits.
+Note the correction: the 402 gate is upstream of those lookups, not downstream, so "ahead of all three
+exit gates" is not a placement that exists. After-402 is also the right place on its own merits — a user
+with no credits should not trigger even a free read — and it still lands before the debit, which is all
+Phase 3 needs. It is a free DB read, so none of the three reasons documented at `:552-556` for the
+*fetch's* placement apply to it.
+
+**`metadata_ms` is measured where the work happens, not where the variable is declared.** Bracket the
+early DB read, carry the duration forward in a `metadataMs` variable, and on a **miss** overwrite it with
+the late HTTP fetch's duration — the existing bracket at `:565-573` stays exactly as it is and simply
+wins when it runs. So a `'stored'` row reports the DB read (near zero) and a `'fetched'` row reports the
+HTTP call including its retry sleep, which is precisely what `metadata_via` exists to disambiguate.
 
 The **fetch does not move** (D7). At `:565-573`, `fetchVideoMetadata` is called only when the lookup
 missed; the surrounding `try`/`catch`, the `metadata_ms` bracket, and the comment block at `:552-556`
@@ -394,32 +423,67 @@ cache hit costs 0 and is never blocked.
 
 ### Changes Required:
 
-#### 1. Migration — budget reading table and RPCs
+#### 1. Migration — budget reading, reservations, and RPCs
 
 **File**: `supabase/migrations/20260731130000_supadata_budget.sql`
 
 **Intent**: Persist the last `GET /v1/me` reading so it can be refreshed lazily instead of called
-in-line on every request, and compute spend since that reading from the ledger.
+in-line on every request, and make "is there budget for this call?" an **atomic reserve**, not a read
+followed later by a spend.
 
-**Contract**: Three parts, all additive — **no function is dropped**, so this migration opens no
-deploy window of its own.
+**Contract**: Five parts, all additive — **no function is dropped**, so this migration opens no deploy
+window of its own.
 
-*`public.supadata_budget`* — a single row. `max_credits`, `used_credits`, `read_at`, and a `singleton
-boolean primary key default true check (singleton)` so a second row is impossible by construction. RLS
-enabled, no policies, `revoke all` — definer-only like every other guard table here.
+*`public.supadata_budget`* — a single row. `max_credits`, `used_credits`, `read_at`,
+`refresh_claimed_at`, and a `singleton boolean primary key default true check (singleton)` so a second
+row is impossible by construction. RLS enabled, no policies, `revoke all` — definer-only like every
+other guard table here. **This row is also the fleet's serialization point**: every reserve locks it
+`for update`, which is what turns concurrent read/evaluate/spend into a queue. That is the whole reason
+a singleton is right here rather than merely tidy.
 
-*`get_supadata_budget(p_max_age_seconds integer)`* — returns the stored reading plus the per-outcome
-ledger delta since `read_at`, and whether the reading is stale. The delta **must** use the
-`case`-per-outcome form in Critical Implementation Details, not `sum(billable_credits)`. Returning both
-in one call keeps the endpoint to a single round trip on the common path.
+*`public.supadata_reservations`* — one row per *in-flight or recently settled* paid provider call:
+`reservation_id uuid primary key default gen_random_uuid()`, `credits integer not null` (the maximum
+the call could bill), `actual_credits integer` (null until settled, and **null also means "settled but
+unknown"** — see below), `settled boolean not null default false`, `created_at timestamptz not null
+default now()`. Same definer-only treatment. Indexed on `created_at` for the sweep and the delta.
+
+*`reserve_supadata_credits(p_credits integer, p_stop_reserve integer, p_reading_max_age_seconds integer,
+p_stale_seconds integer)`* — the breaker itself, and the only place the decision is made. In order,
+inside one transaction:
+
+1. **Sweep** reservations older than `p_stale_seconds` that are still unsettled. A Worker killed
+   mid-call leaves a row behind, and without a sweep that row wedges the breaker permanently. This is
+   the same reasoning and the same shape as `acquire_generation_lease`'s stale sweep
+   (`20260720170000_generation_lock_lease.sql:44-46`) — reuse it rather than inventing a variant.
+2. **`select … from supadata_budget where singleton for update`** — the serialization point.
+3. Compute `remaining = max_credits - used_credits - outstanding`, where `outstanding` is
+   `sum(coalesce(actual_credits, credits))` over reservations created since `read_at`. The
+   `coalesce` is the pessimism that makes this correct: an unsettled call and a settled-but-unknown
+   one both count at their reserved **maximum**, so an ambiguous failure is charged rather than
+   forgiven. Only a call that reported a real `x-billable-requests` value gets counted at its actual
+   figure.
+4. Decide: refuse if `remaining - p_credits < p_stop_reserve`; otherwise insert the reservation row
+   and return its id.
+5. Also return `should_refresh` — true when the reading is older than `p_reading_max_age_seconds`
+   **and** no other caller has claimed the refresh (stamping `refresh_claimed_at` under the same lock).
+   This is what makes the refresh, and therefore D5a's warn, fire **once** per TTL across the fleet
+   instead of once per concurrently-stale reader.
+
+*`settle_supadata_reservation(p_reservation_id uuid, p_actual_credits integer)`* — marks the row
+settled and records the real figure, or leaves `actual_credits` null when the vendor reported none.
+**It never deletes the row**: deleting it before the ledger flush would open a window where the spend
+is visible nowhere at all. Rows are cleared by the next `/v1/me` refresh, which supersedes them.
 
 *`save_supadata_budget(p_max_credits integer, p_used_credits integer)`* — upsert the singleton row with
-`read_at = now()`.
+`read_at = now()`, clear `refresh_claimed_at`, and **delete reservations created before the new
+`read_at`** — the fresh vendor reading already contains their spend, so keeping them would double-count.
+This deletion is what keeps the reservation table bounded without a separate pruning job.
 
 Why neither source suffices alone (D5): `/v1/me` is authoritative but is an HTTP call that would land
-directly before the transcript fetch and break the 1 req/s spacing `generate.ts:552-556` maintains, while
-`supadata_calls` is free and instant but does not know when the vendor's billing period resets, so a
-purely ledger-derived total drifts out of phase.
+directly before the transcript fetch and break the 1 req/s spacing `generate.ts:552-556` maintains,
+while reservations are free and instant but do not know when the vendor's billing period resets, so a
+purely local total drifts out of phase. The reading anchors; the reservations track spend since the
+anchor.
 
 #### 2. Budget service
 
@@ -430,16 +494,74 @@ purely ledger-derived total drifts out of phase.
 **Contract**: Exports the three constants with their reasoning, plus two functions.
 
 Constants: `BUDGET_READING_MAX_AGE_SECONDS = 900` (15 min); `BUDGET_WARN_FRACTION = 0.8`;
-`BUDGET_STOP_RESERVE = 2`. The stop reserve is **derived, not picked** — 2 is the worst-case cost of one
-generation under lever A (1 transcript + 1 metadata), so refusing when `max - used - delta < 2` is exactly
-the condition under which a generation could overdraw the plan. Its comment must say so, or the number
-will be retuned by someone who reads it as arbitrary.
+`BUDGET_STOP_RESERVE = 3`. The stop reserve is **derived, not picked** — 3 is the worst-case cost of one
+generation under lever A: 1 transcript plus **up to 2** metadata requests, because `fetchVideoMetadata`
+retries a retryable failure once and that retry is separately billed (`metadata.ts:169-178`). Refusing
+when `max - used - delta < 3` is exactly the condition under which a generation could overdraw the plan.
+Its comment must carry the derivation *including why metadata counts twice* — otherwise the next reader
+counts one metadata call, "corrects" it to 2, and reopens the overdraw this constant exists to close.
 
-`checkBudget(admin, apiKey)` — reads the stored row; if stale, calls `GET /v1/me` in-line, saves the new
-reading, and evaluates **warn** (D5a: only on refresh, at most once per TTL, which is what removes the
-need for a `warned_at` column or period-reset logic — a naive "fire whenever above threshold" would be
-one issue with thousands of events). Evaluates **stop** on **every** call with the ledger delta included:
-it is the protection, so it must be exact to the call. Returns whether paid work may proceed.
+Also `RESERVATION_STALE_SECONDS` — the sweep window for an abandoned reservation. It must exceed the
+longest a paid call can legitimately take (`METADATA_TIMEOUT_MS` is 10 s, the transcript path polls with
+backoff and is the long one), because a sweep that fires early un-reserves a call that is still running
+and reopens the race. Erring long costs a temporarily over-conservative breaker; erring short costs
+correctness. Reuse `acquire_generation_lease`'s 600 s default unless the transcript poll ceiling argues
+otherwise.
+
+`reserveBudget(admin, apiKey, credits)` — the whole breaker in one call. It invokes
+`reserve_supadata_credits`, which decides atomically and hands back either a `reservationId` or a
+refusal. When the RPC reports `should_refresh`, **this caller and only this caller** performs
+`GET /v1/me`, saves the reading, and evaluates **warn** (D5a). The refresh claim under the row lock is
+what enforces "at most once per TTL" across the fleet, and it is why no `warned_at` column or
+period-reset logic is needed — a naive "fire whenever above threshold" would be one incident emitting
+thousands of events.
+
+**A refresh must be spaced from the paid call that follows it.** This is the one place the plan would
+otherwise contradict itself: `generate.ts:552-556` documents keeping the two Supadata requests seconds
+apart because the plan allows 1 req/s, and an in-line `/v1/me` lands directly in front of the transcript
+fetch. So the refreshing caller — and only it — waits `RETRY_DELAY_MS` (1200 ms, the interval
+`metadata.ts:6` already uses for exactly this limit; import it rather than restating the number) after
+`/v1/me` returns, before `reserveBudget` hands back its decision. Because the refresh is claimed by one
+caller per TTL, this cost is paid by roughly one request every 15 minutes, not per request. Every other
+caller reads the stored row and waits for nothing.
+
+**Unverified**: whether `/v1/me` shares the transcript endpoints' rate bucket at all. The vendor docs in
+`context/changes/persist-video-metadata/docs/supadata-account-limits.md` do not say, so this assumes it
+does — the conservative reading. If Phase 4 shows `/v1/me` is exempt, the wait can be deleted; it is
+deliberately one constant in one place so that deletion is trivial.
+
+`settleBudget(admin, reservationId, actualCredits)` — records what the call actually billed. It must be
+invoked on **every** exit from the paid call, including the throwing ones, for the same reason the
+meter flush lives in `POST.finally`: a reservation that is never settled is a credit the fleet keeps
+believing is spent until the sweep window elapses. Pass `null` when the vendor reported no
+`x-billable-requests` header — that is "unknown", and the RPC deliberately keeps counting it at the
+reserved maximum rather than treating it as free.
+
+**Reserve the maximum, not the expectation.** The transcript call reserves 1. The metadata call
+reserves **2**, because `fetchVideoMetadata` may retry once and that retry is separately billed
+(`metadata.ts:169-178`). This is where the 3-credit ceiling stops being an aspiration and becomes
+enforced: the breaker cannot gate a retry that happens inside the helper, but it *can* refuse to start a
+metadata call unless both requests fit.
+
+**Total by contract, like every other provider service here.** `reserveBudget` and `settleBudget` are
+typed to resolve, never reject — the same guarantee `fetchVideoMetadata` carries and for a sharper
+reason: the second breaker call sits **after** the user has been debited and the LLM has been paid for,
+where a throw bypasses the refund path and strands both the app-credit reservation and the provider
+reservation. Three concrete requirements, none of them inferable from "fails open" alone:
+
+- `GET /v1/me` runs under `AbortSignal.timeout`, mirroring `METADATA_TIMEOUT_MS`
+  (`metadata.ts:30`). A hung bookkeeping call must not outlive the request it is advising. Pick a
+  **shorter** deadline than metadata's 10 s — this call is advisory, and waiting ten seconds to learn
+  we cannot learn anything is worse than failing open in two.
+- The response is **narrowed at the boundary**, not destructured on faith. A vendor that changes the
+  shape of `usedCredits`/`limit` must produce a reported failure, not `NaN` arithmetic that silently
+  computes a remaining balance nobody can trust.
+- Every transport rejection, non-2xx status, non-JSON body and schema mismatch is caught, reported
+  through the seam, and answered with "proceed".
+
+The RPC calls are held to the same standard: a Supabase error on reserve fails open, and a failure to
+**settle** is reported but never thrown — the sweep is the backstop that makes an unsettled row
+self-correcting rather than permanent.
 
 **Fails open.** If neither a stored reading nor `/v1/me` is available, the call returns "proceed" — a
 vendor outage on a free bookkeeping endpoint must not break a product whose transcript API is fine.
@@ -469,19 +591,47 @@ surfaces via the stop threshold — users seeing an error, the worst channel and
 **Contract**: Two call sites, both on a **miss** path.
 
 *Before the transcript fetch* — inside the `else` branch that performs a real paid fetch (`:355`
-onward), after the rate-limit check and before `fetchTranscript`. Never at the endpoint entrance: a
-cache hit costs 0 and blocking it would break the product for no saving. On a trip, return a distinct
-status with operator-shaped copy — the user should learn the service is temporarily unable to process
-new videos, not see a generic failure. Reuse `messageForStatus`'s `serverError` preference rather than
-adding a client branch.
+onward), and specifically **before `recordTranscriptAttempt`**, not after it. That RPC records a
+*paid-fetch attempt* against a ten-attempt window; ordering the budget check behind it means a run of
+budget refusals — which make no Supadata call at all — burns a user's transcript allowance for work
+that never happened. Reserve first, record the attempt only once the reservation is in hand and the
+real fetch is about to run. Never at the endpoint entrance either: a cache hit costs 0 and blocking it
+would break the product for no saving.
+
+Reserve **1**; settle in a `finally` around the fetch so a throw still releases it. On a trip, return
+**503** with operator-shaped copy — the user should learn the service is temporarily unable to process
+new videos, not see a generic failure. 503 is the right code (the service genuinely cannot do the work
+right now) and it is already the endpoint's "generation is unavailable" status, so no new branch is
+needed on the client — but see the file below, because today it discards the server's string.
 
 *Before `fetchVideoMetadata`* — only reached when Phase 2's lookup missed. This point exists because on
 a warm transcript with cold metadata, the metadata call **is** the first paid call: a breaker sitting only
 in front of the transcript fetch is bypassed on exactly the traffic Phase 2's cache is designed to create.
-On a trip here the generation is **not** refused — the user has already been debited and the LLM already
+Reserve **2** here (the retry), settle with the real total once the helper returns or throws. On a trip
+here the generation is **not** refused — the user has already been debited and the LLM already
 paid for, so refusing to protect a decorative thumbnail would be strictly worse. Skip the call, persist
 nulls exactly as a metadata failure already does, and record `metadata_via = 'skipped_budget'` so the
 degraded row explains itself.
+
+#### 4. The client's 503 handling
+
+**File**: `src/components/summaries/GenerateSummaryForm.tsx`
+
+**Intent**: Without this the breaker's copy never reaches a user — the same trap Phase 1 fixes for 422,
+in a second place.
+
+**Contract**: `case 503` currently returns the hardcoded `"Summary generation isn't configured."` and
+drops `serverError` entirely (`:78-79`). It becomes `return serverError ?? "Summary generation isn't
+configured.";` — joining 429, 500 and 400. The comment follows the 429 precedent and names the two
+causes that now answer 503: a missing service-role key (genuinely a configuration problem) and a
+tripped budget breaker (a temporary capacity problem), which are different messages and must not be
+collapsed into the configuration one. The fallback still covers a non-JSON 503.
+
+**Settlement is a `finally` obligation, not a happy-path step.** Both sites already sit inside
+`try`/`catch` blocks that swallow provider failures; the settle call belongs in the `finally` of each,
+alongside the same reasoning `POST.finally` carries for the meter flush. A reservation leaked on the
+error path is invisible until the sweep, and the error paths are exactly the ones a budget guard exists
+to survive.
 
 ### Success Criteria:
 
@@ -489,22 +639,39 @@ degraded row explains itself.
 
 - Migration applies cleanly: `npx supabase migration up`
 - `supadata_budget` cannot hold a second row (attempting an insert fails)
-- The delta RPC returns 1 for an `unavailable` row with a null header, and 0 for an `error` row with a
-  null header — the per-outcome branch, verified directly rather than assumed
+- The reconciliation total returns 1 for an `unavailable` row with a null header, and 0 for an `error`
+  row with a null header — the per-outcome branch, verified directly rather than assumed
+- **Concurrent reserves do not overdraw**: with the budget seeded so only one generation fits, two
+  `reserve_supadata_credits` calls issued from separate sessions return one id and one refusal — never
+  two ids. This is the finding the reservation exists to close; assert it directly in SQL.
+- An unsettled reservation older than `RESERVATION_STALE_SECONDS` is swept, and the credit returns to
+  the pool
+- A settled reservation with `actual_credits = null` still counts at its reserved maximum
 - Type checking and lint pass: `npm run lint`
 - Build succeeds: `npm run build`
 
 #### Manual Verification:
 
 - With `BUDGET_STOP_RESERVE` temporarily raised past the remaining balance, a cold video is refused
-  **before** any Supadata call — verified by `usedCredits` not moving.
+  **before** any Supadata call — verified by `usedCredits` not moving — and the UI shows the breaker's
+  503 message, not the "isn't configured" fallback.
+- Repeated budget refusals leave the transcript rate-limit window untouched: after several refusals a
+  successful generation still runs, rather than hitting a 429 the user never earned.
 - Under the same override, a **warm** video still generates successfully. This is the D5 reshape that
   matters most: the breaker gates spend, not the request.
 - Under the same override with a warm transcript and cold metadata: the summary is produced,
   `metadata_via = 'skipped_budget'`, and no `metadata` ledger row is written.
+- A completed generation leaves **no unsettled reservation** behind, and a generation forced to throw
+  mid-fetch leaves none either — the `finally` obligation, checked rather than assumed.
+- A `/v1/me` refresh clears reservations created before the new `read_at` (no double-counting).
 - With the stored reading deleted and an invalid API key, generation **proceeds** and the unreadable
   state is reported (fail-open, visibly).
-- The warn event fires at most once per TTL, not once per request.
+- A `/v1/me` that hangs past the timeout, and one that returns a malformed body, both fail open and
+  report — neither throws, and neither leaves a reservation stranded.
+- The warn event fires at most once per TTL, not once per request — including when two stale readers
+  arrive together, where exactly one claims the refresh.
+- A generation that triggers the refresh still succeeds: the paid call that follows `/v1/me` does not
+  come back `limit-exceeded`.
 
 **Implementation Note**: Pause here for manual confirmation. The overrides must be reverted before Phase 4.
 
@@ -533,13 +700,19 @@ breaker uses the existing `SUPADATA_API_KEY`.
 **File**: `context/changes/transcript-cost-guardrail/reviews/manual-verification.md` (new)
 
 **Intent**: Prove the cost envelope against the vendor's own billing, the way S-07 proved cross-user
-transcript reuse. Budget: **~4 credits**.
+transcript reuse. Budget: **~4 credits**, worst case **6** if a metadata retry fires on both metadata
+steps.
 
 **Contract**: Record `GET /v1/me` before and after each step, alongside the per-outcome ledger total for
-the same window; the two must agree. Four steps: a cold captioned video (expect +2); an immediate repeat
-of it (expect **+0** — both caches hit, `resolved_via = 'stored'` and `metadata_via = 'stored'`); a
-caption-less video (expect +1, a 422, and the **new** D3 copy visible in the UI); one metadata-only case
-where the transcript is warm but metadata is cold (expect +1).
+the same window; the two must agree. Four steps: a cold captioned video (expect +2, or +3 if metadata
+retried — two `metadata` ledger rows is the tell); an immediate repeat of it (expect **+0** — both caches
+hit, `resolved_via = 'stored'` and `metadata_via = 'stored'`); a caption-less video (expect +1, a 422,
+and the **new** D3 copy visible in the UI); one metadata-only case where the transcript is warm but
+metadata is cold (expect +1, or +2 on a retry).
+
+A step that comes in one credit *over* its expectation is not a discrepancy if the ledger shows two
+`metadata` rows — that is the 3-credit ceiling being exercised, and it is worth recording when it
+happens, since nothing else in this slice can tell us how often the retry actually fires.
 
 The document must state what was **not** verified live and why: the stop threshold cannot be reached
 without spending ~95 credits, so Phase 3 verified it by overriding the constant; and D1 means the Whisper
@@ -556,7 +729,7 @@ job path is now unreachable by construction and will never be verified at all.
 
 #### Manual Verification:
 
-- Total spend for the pass is within the ~4-credit budget.
+- Total spend for the pass is within the ~4-credit budget (≤6 if metadata retries fire).
 - The repeat generation moves `usedCredits` by **0** — the headline claim.
 - The caption-less video shows the new copy to the user, not the client fallback.
 - `roadmap.md` §S-09 status and the Linear issue both reflect completion.
@@ -572,9 +745,11 @@ tier, and structured manual passes as the real coverage.
 **SQL assertions worth writing directly** (Phases 2 and 3, cheap and repeatable):
 
 - One `persist_summary` overload, not two, after the swap.
-- `metadata_cache` and `supadata_budget` reachable by `service_role` only.
-- The delta RPC's per-outcome branch, against hand-inserted `unavailable`/`error` rows with null headers.
-  This is the one piece of logic where a plausible-looking simplification silently under-counts.
+- `metadata_cache`, `supadata_budget` and `supadata_reservations` reachable by `service_role` only.
+- The reconciliation total's per-outcome branch, against hand-inserted `unavailable`/`error` rows with
+  null headers. This is the one piece of logic where a plausible-looking simplification under-counts.
+- **The concurrent-reserve assertion** (two sessions, one seat). Everything else in Phase 3 can be
+  checked by reading the code; this one cannot, and it is the property the reservation table exists for.
 
 **Manual scenarios by phase**: caption-less 422 copy and the 2 h window (P1); cache hit / miss and the
 D12 `videos` write (P2); the three breaker cases and fail-open (P3); the four-step credit pass (P4).
@@ -583,7 +758,11 @@ D12 `videos` write (P2); the three breaker cases and fail-open (P3); the four-st
 
 Each cache lookup adds one Supabase round trip to a request that already makes several, and removes an
 HTTP call to an external vendor when it hits — net faster on a hit, negligibly slower on a miss. The
-breaker adds one round trip on the miss path and one `GET /v1/me` per 15-minute TTL, never per request.
+breaker adds two round trips per paid call (reserve, then settle) and one `GET /v1/me` per 15-minute
+TTL, never per request. All reserves serialize behind one row lock — acceptable because the lock is
+held only for arithmetic, never across an HTTP call, and because this fleet makes at most a few paid
+calls per minute. If that stops being true, the lock is the first thing to measure.
+`supadata_reservations` stays small by construction: every refresh deletes the rows it supersedes.
 
 `metadata_cache` grows one small row per distinct video, with no body — unlike `transcript_cache`, which
 needed a `too_long` outcome to bound its rows. No pruning is needed at MVP scale.
@@ -597,7 +776,8 @@ is purely additive.
 **Rollback**: reverting Phase 1 is a one-word change back to `auto` plus the copy. Reverting Phase 2
 requires restoring the 23-argument `persist_summary` and dropping `metadata_via`; existing rows carrying
 a non-null `metadata_via` are harmless to the old function, which simply never writes it. Reverting Phase
-3 is code-only — the tables can be left in place, unread.
+3 is code-only — the three tables can be left in place, unread. A stranded `supadata_reservations` row
+after a Phase 3 revert affects nothing, because nothing reads it once the service is gone.
 
 ## References
 
@@ -652,18 +832,27 @@ a non-null `metadata_via` are harmless to the old function, which simply never w
 
 - [ ] 3.1 Migration applies cleanly
 - [ ] 3.2 `supadata_budget` cannot hold a second row
-- [ ] 3.3 Delta RPC returns 1 for `unavailable`/null-header, 0 for `error`/null-header
-- [ ] 3.4 Type checking and lint pass
-- [ ] 3.5 Build succeeds
+- [ ] 3.3 Reconciliation total returns 1 for `unavailable`/null-header, 0 for `error`/null-header
+- [ ] 3.4 Concurrent reserves do not overdraw — one id, one refusal, never two ids
+- [ ] 3.5 A stale unsettled reservation is swept and its credit returns to the pool
+- [ ] 3.6 A settled reservation with `actual_credits = null` still counts at its reserved maximum
+- [ ] 3.7 Type checking and lint pass
+- [ ] 3.8 Build succeeds
 
 #### Manual
 
-- [ ] 3.6 Cold video refused before any Supadata call under an overridden reserve
-- [ ] 3.7 Warm video still generates under the same override
-- [ ] 3.8 Warm transcript + cold metadata: summary produced, `metadata_via = 'skipped_budget'`
-- [ ] 3.9 Unreadable budget state: generation proceeds and the state is reported (fail-open)
-- [ ] 3.10 Warn fires at most once per TTL
-- [ ] 3.11 Overrides reverted
+- [ ] 3.9 Cold video refused before any Supadata call under an overridden reserve, with the breaker's
+      own 503 copy visible in the UI — not the "isn't configured" fallback
+- [ ] 3.10 A budget refusal consumes no transcript rate-limit attempt
+- [ ] 3.11 Warm video still generates under the same override
+- [ ] 3.12 Warm transcript + cold metadata: summary produced, `metadata_via = 'skipped_budget'`
+- [ ] 3.13 No unsettled reservation survives a completed generation or a mid-fetch throw
+- [ ] 3.14 A `/v1/me` refresh clears reservations created before the new `read_at`
+- [ ] 3.15 Unreadable budget state: generation proceeds and the state is reported (fail-open)
+- [ ] 3.16 A hung and a malformed `/v1/me` both fail open, report, and strand no reservation
+- [ ] 3.17 Warn fires at most once per TTL, including for two simultaneous stale readers
+- [ ] 3.18 A refresh-triggering generation still succeeds — no `limit-exceeded` on the paid call
+- [ ] 3.19 Overrides reverted
 
 ### Phase 4: Deploy and live verification
 
@@ -675,7 +864,7 @@ a non-null `metadata_via` are harmless to the old function, which simply never w
 
 #### Manual
 
-- [ ] 4.4 Total spend within the ~4-credit budget
+- [ ] 4.4 Total spend within the ~4-credit budget (≤6 if metadata retries fire)
 - [ ] 4.5 Repeat generation moves `usedCredits` by 0
 - [ ] 4.6 Caption-less video shows the new copy live
 - [ ] 4.7 `roadmap.md` §S-09 and the Linear issue reflect completion

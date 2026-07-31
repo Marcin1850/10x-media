@@ -4,19 +4,24 @@
 - **Plan**: `context/changes/transcript-cost-guardrail/plan.md`
 - **Mode**: Deep
 - **Date**: 2026-07-31
-- **Verdict**: RETHINK
-- **Findings**: 2 critical, 5 warnings, 0 observations
+- **Verdict**: RETHINK → **SOUND after triage** (all 7 findings fixed in the plan, 2026-07-31)
+- **Findings**: 2 critical, 5 warnings, 0 observations — 7 fixed, 0 skipped, 0 accepted, 0 dismissed
 - **Excluded by user**: deployment-window concerns; historical-data measurement
 
 ## Verdicts
 
-| Dimension | Verdict |
-|-----------|---------|
-| End-State Alignment | FAIL |
-| Lean Execution | PASS |
-| Architectural Fitness | FAIL |
-| Blind Spots | WARNING |
-| Plan Completeness | WARNING |
+| Dimension | Before triage | After fixes |
+|-----------|---------------|-------------|
+| End-State Alignment | FAIL | PASS |
+| Lean Execution | PASS | PASS |
+| Architectural Fitness | FAIL | PASS |
+| Blind Spots | WARNING | PASS |
+| Plan Completeness | WARNING | PASS |
+
+The two FAILs were structural, not cosmetic, and both fixes changed the plan's shape rather than its
+wording: the cost ceiling is now 3 (F1, metadata's billable retry), and the breaker is now an atomic
+reservation rather than read-then-spend (F2). Phase 3 is materially larger than it was — a second table,
+two more RPCs, a settlement obligation on every paid path, and a fourth file. Re-estimate before starting.
 
 ## Grounding
 
@@ -41,7 +46,9 @@
   - Tradeoff: Reopens the locked cost guarantee and reduces monthly capacity.
   - Confidence: HIGH.
   - Blind spot: Future retries would require changing the ceiling again.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix B — ceiling raised to 3 in Desired End State (new row + derivation
+  paragraph), `BUDGET_STOP_RESERVE = 3` with the "metadata counts twice" reasoning attached, Phase 4
+  verification budget ~4 / ≤6, criterion 4.4 and `plan-brief.md` updated to match.
 
 ### F2 — The proposed breaker cannot provide a fleet-wide bound
 
@@ -60,7 +67,13 @@
   - Tradeoff: It no longer bounds the fleet; overrun remains possible.
   - Confidence: HIGH.
   - Blind spot: A safe margin depends on peak concurrency.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A — Phase 3 rebuilt around an atomic reservation. New
+  `supadata_reservations` table; `reserve_supadata_credits` sweeps, locks the singleton `for update`,
+  counts outstanding at `coalesce(actual_credits, credits)` (unknown stays pessimistically charged),
+  and hands the refresh claim to exactly one caller (warn dedupe). `settle_*` never deletes; refresh
+  deletes superseded rows. The breaker no longer does live arithmetic over `supadata_calls` — that
+  total is re-scoped to Phase 4 reconciliation. Transcript reserves 1, metadata reserves 2 (F1's
+  retry). Settlement is a `finally` obligation. Concurrent-reserve assertion added to Phase 3.
 
 ### F3 — Inline `/v1/me` refresh violates the documented rate limit
 
@@ -74,7 +87,9 @@
   - Tradeoff: Adds roughly 1.2 seconds to the request that performs a refresh.
   - Confidence: HIGH — the contradiction appears inside the plan itself.
   - Blind spot: Confirm whether `/v1/me` shares the same rate bucket; the plan currently assumes it does.
-- **Decision**: PENDING
+- **Decision**: FIXED — the refresh-claiming caller waits `RETRY_DELAY_MS` (reused from `metadata.ts:6`)
+  after `/v1/me` before the reserve decision returns; ~one request per 15 min pays it. The shared-bucket
+  assumption is now stated as unverified with a note on how to delete the wait if Phase 4 disproves it.
 
 ### F4 — `checkBudget` is not explicitly total or time-bounded
 
@@ -88,7 +103,10 @@
   - Tradeoff: Requires choosing a bounded timeout.
   - Confidence: HIGH — existing provider services already establish this pattern.
   - Blind spot: Exact timeout remains a tuning choice.
-- **Decision**: PENDING
+- **Decision**: FIXED — the budget service is now specified as total by contract, with `AbortSignal.timeout`
+  (shorter than metadata's 10 s, since the call is advisory), boundary narrowing of the response instead
+  of faith-destructuring, and report-then-proceed on every transport/status/schema failure. Settle
+  failures are reported, never thrown; the sweep is named as the backstop. Criterion 3.17 added.
 
 ### F5 — Budget refusal consumes a transcript rate-limit attempt
 
@@ -98,7 +116,8 @@
 - **Location**: Phase 3 — First endpoint checkpoint
 - **Detail**: The plan places `checkBudget` after `recordTranscriptAttempt`, although that RPC records a paid-fetch attempt. Repeated budget refusals can exhaust the ten-attempt window without any transcript call.
 - **Fix**: On a cache miss, check and reserve the provider budget first; record the transcript attempt only immediately before the real fetch.
-- **Decision**: PENDING
+- **Decision**: FIXED — Phase 3's first checkpoint now sits explicitly *before* `recordTranscriptAttempt`,
+  with the reasoning attached. Criterion 3.10 added.
 
 ### F6 — Budget-refusal HTTP behavior is unresolved
 
@@ -108,7 +127,9 @@
 - **Location**: Phase 3 — Endpoint wiring
 - **Detail**: "Return a distinct status" leaves the implementer to choose it. The likely `503` currently discards `serverError`, so the promised operator-specific message would not reach the user.
 - **Fix**: Specify `503` and change `case 503` to `return serverError ?? "Summary generation isn't configured.";`.
-- **Decision**: PENDING
+- **Decision**: FIXED — 503 pinned, and Phase 3 gained a fourth file (`GenerateSummaryForm.tsx`) making
+  `case 503` prefer `serverError`, with a comment naming the two causes that now answer 503. Criterion
+  3.9 extended to check the breaker's copy reaches the UI.
 
 ### F7 — Metadata lookup placement and timing contradict each other
 
@@ -118,4 +139,6 @@
 - **Location**: Phase 2 — Endpoint wiring
 - **Detail**: The lookup is said to happen around lines 317–322 and ahead of the 402 exit, but the 402 exit is at lines 290–292. The plan also promises that `metadata_ms` measures the early database read while requiring the existing late timing bracket to remain unchanged.
 - **Fix**: Place the lookup after the 402 gate, time it there, carry `metadataMs` forward, and overwrite that duration with the late HTTP-fetch duration on a miss.
-- **Decision**: PENDING
+- **Decision**: FIXED — Phase 2 now states the lookup lands after the 402 gate (`:290-292`) and before
+  the 413/409 exits, corrects the impossible "ahead of all three gates" placement, and specifies the
+  `metadataMs` carry-forward/overwrite so the existing late bracket stays untouched.
