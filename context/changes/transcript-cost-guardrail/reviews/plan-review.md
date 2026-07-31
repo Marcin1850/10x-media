@@ -29,6 +29,11 @@ two more RPCs, a settlement obligation on every paid path, and a fourth file. Re
 
 ## Findings
 
+> **Phase numbering**: the `Location` fields below refer to the plan **as reviewed** (four phases). After
+> triage the breaker was split in two, so the plan now has five: what these findings call "Phase 3" is
+> now Phase 3 (the reservation ledger) plus Phase 4 (wiring the breaker), and the old Phase 4 (deploy +
+> live verification) is Phase 5. Locations are left unrewritten so the record matches what was reviewed.
+
 ### F1 — Metadata retry breaks the 2-credit ceiling
 
 - **Severity**: ⛔ CRITICAL

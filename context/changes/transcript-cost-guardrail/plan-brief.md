@@ -91,16 +91,24 @@ the rate-limit check so a refusal costs the user no transcript attempt.
 | --- | --- | --- |
 | 1. Lever A + 422 split | The cost bound itself; caption-less videos get their own copy | The client discards the server's 422 string — miss it and the copy never ships |
 | 2. `metadata_cache` + marker | Repeat generations stop paying for metadata | `persist_summary` drop+recreate at 24 params; a stale overload if done with `create or replace` |
-| 3. Budget breaker | Fleet-level bound (atomic) + notification seam | A settle leaked on an error path holds credit hostage until the sweep; and the reserve must be *before* the rate-limit check |
-| 4. Deploy + verify | Live, reconciled against `GET /v1/me` | The push/deploy window: between the two commands, every generation fails after the LLM is paid for |
+| 3. Reservation ledger | The atomic mechanism, provable in SQL, called by nothing yet | The concurrency assertion needs two open sessions — a single-session test passes while proving nothing |
+| 4. Wiring the breaker | The bound made real: two check points, 503 end to end | A settle leaked on an error path holds credit hostage until the sweep; and the reserve must be *before* the rate-limit check |
+| 5. Deploy + verify | Live, reconciled against `GET /v1/me` | The push/deploy window: between the two commands, every generation fails after the LLM is paid for |
 
 **Prerequisites:** S-01, S-07, S-08 — all shipped. No new Worker secrets.
 
-**Estimated effort:** ~5 sessions with a manual gate between each — **Phase 3 is now roughly two**, not
-one. Review F2 turned it from "one table, two RPCs, one service" into a second table, reserve/settle
-RPCs with a stale sweep, a settlement obligation on every paid exit path, a fourth file
-(`GenerateSummaryForm.tsx`), and a concurrency assertion that has to be written by hand because nothing
-else in the repo tests it.
+**Estimated effort:** ~5 sessions, one per phase, with a manual gate between each. Review F2 roughly
+doubled the breaker's size — a second table, reserve/settle RPCs with a stale sweep, a settlement
+obligation on every paid exit path, a fourth file (`GenerateSummaryForm.tsx`), and a concurrency
+assertion that has to be written by hand because nothing else in the repo tests it — so it is split
+across two phases rather than crammed into one.
+
+**Why 3 and 4 are separate.** The split follows the line where verification changes character. Phase 3's
+central property is a *database* property: two concurrent reserves against a one-generation budget yield
+one reservation and one refusal. That is provable in two psql sessions in minutes, and the migration is
+purely additive, so it needs no deploy coordination. Bundled with the wiring it would instead be
+verified last, through the UI, where a failure looks like any other failure. It is also a clean revert
+boundary: dropping Phase 4 leaves Phase 3's tables in place and unread.
 
 ## Open Risks & Assumptions
 
@@ -117,7 +125,7 @@ else in the repo tests it.
   path reachable?" hand-over becomes unanswerable. Accepted knowingly.
 - **`/v1/me`'s rate bucket is assumed, not confirmed.** The vendor docs do not say whether it shares the
   transcript endpoints' 1 req/s limit. The plan takes the conservative reading and isolates the wait in
-  one constant, so it is a one-line deletion if Phase 4 shows the endpoint is exempt.
+  one constant, so it is a one-line deletion if Phase 5's live pass shows the endpoint is exempt.
 - **The reservation sweep window is a guess bounded by the transcript poll.** Set it too short and it
   un-reserves a call that is still running, reopening the race the reservation exists to close. Erring
   long only makes the breaker temporarily over-conservative — so err long.

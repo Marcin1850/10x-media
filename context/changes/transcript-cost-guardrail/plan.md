@@ -127,13 +127,20 @@ emits a structured event through one function that a monitoring tool can later r
 
 ## Implementation Approach
 
-Four phases, ordered by dependency and by how much each can be verified on its own.
+Five phases, ordered by dependency and by how much each can be verified on its own.
 
 Phase 1 is the headline bound and needs no migration — it is the cheapest fix for the live exposure and
 touches three files. Phase 2 adds the metadata cache, which is where the repeat-generation saving
-actually comes from, and carries the one risky migration step (the `persist_summary` swap). Phase 3 adds
-the breaker on top, and depends on Phase 2 having hoisted the metadata lookup — that lookup is what tells
-the second check point whether it is needed at all. Phase 4 is the single deploy + live verification gate.
+actually comes from, and carries the one risky migration step (the `persist_summary` swap).
+
+**Phases 3 and 4 are the breaker, split along the line where its verification changes character.** Phase
+3 is the reservation ledger — a migration whose central property (concurrent reserves cannot overdraw) is
+provable in two psql sessions, with nothing calling it yet. Phase 4 wires that mechanism into the
+endpoint, and depends on Phase 2 having hoisted the metadata lookup, since that lookup is what tells the
+second check point whether it is needed at all. Splitting them keeps a database-provable invariant from
+being verified through a UI, and keeps the phase that touches the paid pipeline small enough to review.
+
+Phase 5 is the single deploy + live verification gate.
 
 **Two honest caveats, carried from the roadmap rather than quietly dropped:**
 
@@ -159,7 +166,7 @@ header means **unknown**, not zero — a ledger-derived total silently reads a p
 So live accounting moves to **reservations**, written synchronously at call time (below), and the
 ledger keeps its original job: telemetry and after-the-fact reconciliation.
 
-**Where the ledger total *is* still used — Phase 4's reconciliation — it must branch on `outcome`.**
+**Where the ledger total *is* still used — Phase 5's reconciliation — it must branch on `outcome`.**
 It cannot be `sum(billable_credits)`: a `206 transcript-unavailable` is billed 1 credit and reports no
 header, while a failed metadata call is billed 0 and also reports no header — both land as `null`. A
 flat sum under-counts exactly the outcome that costs money. The per-outcome shape is load-bearing and
@@ -181,7 +188,7 @@ function. Getting this wrong leaves a stale 23-argument overload callable.
 **Phase 2 opens a push/deploy window.** Between `supabase db push --linked` and `wrangler deploy`, the
 live Worker calls a `persist_summary` signature that no longer exists, and every generation fails at
 persist — after the LLM has been paid for. S-07 and S-08 both flagged this as their riskiest step and
-both ran the two commands back to back. Phase 4 does the same.
+both ran the two commands back to back. Phase 5 does the same.
 
 **`metadata_ms` semantics change on a hit.** The column currently brackets a real HTTP call including
 its ~1.2 s rate-limit retry sleep. On a cache hit it will bracket a DB read and read near zero — the
@@ -316,7 +323,7 @@ and is already visible in the ledger. No advisory lock, for the same reason.
 
 *`summaries.metadata_via`* — `text`, nullable, `check (metadata_via is null or metadata_via in
 ('fetched', 'stored', 'skipped_budget'))`. Null on rows predating this migration. `'skipped_budget'` is
-written by Phase 3 and is declared here so the constraint is not altered twice; nothing writes it yet.
+written by Phase 4 and is declared here so the constraint is not altered twice; nothing writes it yet.
 A column comment must state that `metadata_ms` is only comparable across `'fetched'` rows.
 
 *`persist_summary` swap, 23 → 24 arguments* — `drop function` with the **full old signature**, then
@@ -409,17 +416,23 @@ is what explains a near-zero `metadata_ms`. `summaries.ts` gains the field on `S
 - A cache row aged past 30 days (by editing `fetched_at` directly) produces a fresh fetch.
 
 **Implementation Note**: Pause here for manual confirmation before starting Phase 3. Nothing is deployed
-yet — the `persist_summary` swap reaches production in Phase 4.
+yet — the `persist_summary` swap reaches production in Phase 5.
 
 ---
 
-## Phase 3: The budget breaker
+## Phase 3: The reservation ledger
 
 ### Overview
 
-Refuse to start paid work when the monthly Supadata plan is nearly exhausted, and emit a structured
-event when it is close or tripped. Minimal form (D5): the breaker gates **spend, not the request** — a
-cache hit costs 0 and is never blocked.
+Build the atomic mechanism and prove it **before anything depends on it**. This phase is a migration and
+nothing else: no service, no endpoint change, no user-visible behaviour. The app does not call these RPCs
+when the phase ends.
+
+That is the point of the split. The property this whole lever rests on — two concurrent reserves against
+a one-generation budget yield one reservation and one refusal — is a database property, provable in two
+psql sessions in minutes. Bundled with the wiring it would be verified last, through the UI, where a
+failure is indistinguishable from a dozen other things. Verified here it is a closed question before a
+single call site exists.
 
 ### Changes Required:
 
@@ -485,7 +498,52 @@ while reservations are free and instant but do not know when the vendor's billin
 purely local total drifts out of phase. The reading anchors; the reservations track spend since the
 anchor.
 
-#### 2. Budget service
+### Success Criteria:
+
+#### Automated Verification:
+
+- Migration applies cleanly to the local stack: `npx supabase migration up`
+- `supadata_budget` cannot hold a second row (attempting an insert fails)
+- `supadata_budget` and `supadata_reservations` are reachable by `service_role` only
+- **Concurrent reserves do not overdraw**: with the budget seeded so only one generation fits, two
+  `reserve_supadata_credits` calls issued from **separate sessions** return one id and one refusal —
+  never two ids. This is the property the whole phase exists for; assert it directly in SQL, with the
+  second session's call issued while the first transaction is still open.
+- An unsettled reservation older than the stale window is swept, and its credit returns to the pool
+- A settled reservation with `actual_credits = null` still counts at its reserved **maximum**, not zero
+- A settled reservation with a real `actual_credits` counts at that figure
+- `save_supadata_budget` deletes reservations created before the new `read_at`, and keeps later ones
+- Exactly one caller gets `should_refresh = true` when two sessions read a stale row concurrently
+- The **reconciliation query** — the `case`-per-outcome form in Critical Implementation Details, which
+  Phase 5 uses against the live ledger and which is *not* an RPC — returns 1 for an `unavailable` row
+  with a null header and 0 for an `error` row with a null header. Write it here against hand-inserted
+  rows and record it in the migration's comments: it is cheap to pin now, while the reasoning is fresh,
+  and expensive to debug during a live credit pass.
+
+#### Manual Verification:
+
+- No TypeScript changes in this phase, so `npm run lint` and `npm run build` are expected to be
+  **unchanged from Phase 2** — run them to confirm the migration did not break generated types, not as
+  evidence the phase works. The SQL assertions above are the real coverage.
+- The reserve → settle → refresh cycle leaves `supadata_reservations` empty, walked by hand once so the
+  lifecycle is understood before it is wired to anything.
+
+**Implementation Note**: Pause here for manual confirmation before starting Phase 4. Nothing is deployed
+and nothing calls these RPCs yet.
+
+---
+
+## Phase 4: Wiring the breaker
+
+### Overview
+
+Put the Phase 3 mechanism behind the two paid calls, and give a refusal a message a user can act on.
+Minimal form (D5): the breaker gates **spend, not the request** — a cache hit costs 0 and is never
+blocked.
+
+### Changes Required:
+
+#### 1. Budget service
 
 **File**: `src/lib/services/supadata-budget.ts` (new)
 
@@ -527,7 +585,7 @@ caller reads the stored row and waits for nothing.
 
 **Unverified**: whether `/v1/me` shares the transcript endpoints' rate bucket at all. The vendor docs in
 `context/changes/persist-video-metadata/docs/supadata-account-limits.md` do not say, so this assumes it
-does — the conservative reading. If Phase 4 shows `/v1/me` is exempt, the wait can be deleted; it is
+does — the conservative reading. If Phase 5 shows `/v1/me` is exempt, the wait can be deleted; it is
 deliberately one constant in one place so that deletion is trivial.
 
 `settleBudget(admin, reservationId, actualCredits)` — records what the call actually billed. It must be
@@ -582,7 +640,7 @@ the warn level would surface the near-miss while hiding the actual outage.
 tracked outside this roadmap. Until then the warn threshold is decorative and budget exhaustion
 surfaces via the stop threshold — users seeing an error, the worst channel and the one C exists to avoid.
 
-#### 3. Endpoint wiring — two check points
+#### 2. Endpoint wiring — two check points
 
 **File**: `src/pages/api/summaries/generate.ts`
 
@@ -613,7 +671,7 @@ paid for, so refusing to protect a decorative thumbnail would be strictly worse.
 nulls exactly as a metadata failure already does, and record `metadata_via = 'skipped_budget'` so the
 degraded row explains itself.
 
-#### 4. The client's 503 handling
+#### 3. The client's 503 handling
 
 **File**: `src/components/summaries/GenerateSummaryForm.tsx`
 
@@ -637,18 +695,12 @@ to survive.
 
 #### Automated Verification:
 
-- Migration applies cleanly: `npx supabase migration up`
-- `supadata_budget` cannot hold a second row (attempting an insert fails)
-- The reconciliation total returns 1 for an `unavailable` row with a null header, and 0 for an `error`
-  row with a null header — the per-outcome branch, verified directly rather than assumed
-- **Concurrent reserves do not overdraw**: with the budget seeded so only one generation fits, two
-  `reserve_supadata_credits` calls issued from separate sessions return one id and one refusal — never
-  two ids. This is the finding the reservation exists to close; assert it directly in SQL.
-- An unsettled reservation older than `RESERVATION_STALE_SECONDS` is swept, and the credit returns to
-  the pool
-- A settled reservation with `actual_credits = null` still counts at its reserved maximum
 - Type checking and lint pass: `npm run lint`
 - Build succeeds: `npm run build`
+- `RESERVATION_STALE_SECONDS` is passed to the RPC rather than duplicated in SQL — the sweep window is
+  one number in one place: `grep -n "stale" src/lib/services/supadata-budget.ts supabase/migrations/20260731130000_supadata_budget.sql`
+- Both call sites settle in a `finally`, not on the happy path only:
+  `grep -n "settleBudget" src/pages/api/summaries/generate.ts` shows each inside a `finally` block
 
 #### Manual Verification:
 
@@ -662,8 +714,8 @@ to survive.
 - Under the same override with a warm transcript and cold metadata: the summary is produced,
   `metadata_via = 'skipped_budget'`, and no `metadata` ledger row is written.
 - A completed generation leaves **no unsettled reservation** behind, and a generation forced to throw
-  mid-fetch leaves none either — the `finally` obligation, checked rather than assumed.
-- A `/v1/me` refresh clears reservations created before the new `read_at` (no double-counting).
+  mid-fetch leaves none either — the `finally` obligation, checked rather than assumed. Phase 3 proved
+  the sweep works; this proves the sweep is a backstop rather than the primary mechanism.
 - With the stored reading deleted and an invalid API key, generation **proceeds** and the unreadable
   state is reported (fail-open, visibly).
 - A `/v1/me` that hangs past the timeout, and one that returns a malformed body, both fail open and
@@ -673,15 +725,15 @@ to survive.
 - A generation that triggers the refresh still succeeds: the paid call that follows `/v1/me` does not
   come back `limit-exceeded`.
 
-**Implementation Note**: Pause here for manual confirmation. The overrides must be reverted before Phase 4.
+**Implementation Note**: Pause here for manual confirmation. The overrides must be reverted before Phase 5.
 
 ---
 
-## Phase 4: Deploy and live verification
+## Phase 5: Deploy and live verification
 
 ### Overview
 
-One deploy covering all three phases, then a ~4-credit live pass against the real vendor.
+One deploy covering all four phases, then a ~4-credit live pass against the real vendor.
 
 ### Changes Required:
 
@@ -715,7 +767,7 @@ A step that comes in one credit *over* its expectation is not a discrepancy if t
 happens, since nothing else in this slice can tell us how often the retry actually fires.
 
 The document must state what was **not** verified live and why: the stop threshold cannot be reached
-without spending ~95 credits, so Phase 3 verified it by overriding the constant; and D1 means the Whisper
+without spending ~95 credits, so Phase 4 verified it by overriding the constant; and D1 means the Whisper
 job path is now unreachable by construction and will never be verified at all.
 
 ### Success Criteria:
@@ -742,17 +794,20 @@ This repo has no automated test suite (README, "Project status"), so verificatio
 automated/manual split above: `npm run lint` + `npm run build` + direct SQL assertions as the automated
 tier, and structured manual passes as the real coverage.
 
-**SQL assertions worth writing directly** (Phases 2 and 3, cheap and repeatable):
+**SQL assertions worth writing directly** (Phases 2 and 3, cheap and repeatable — Phase 3 is *entirely*
+this tier, which is why it is its own phase):
 
 - One `persist_summary` overload, not two, after the swap.
 - `metadata_cache`, `supadata_budget` and `supadata_reservations` reachable by `service_role` only.
 - The reconciliation total's per-outcome branch, against hand-inserted `unavailable`/`error` rows with
   null headers. This is the one piece of logic where a plausible-looking simplification under-counts.
-- **The concurrent-reserve assertion** (two sessions, one seat). Everything else in Phase 3 can be
+- **The concurrent-reserve assertion** (two sessions, one seat). Everything else in this slice can be
   checked by reading the code; this one cannot, and it is the property the reservation table exists for.
+  It is the whole reason Phase 3 is a phase.
 
 **Manual scenarios by phase**: caption-less 422 copy and the 2 h window (P1); cache hit / miss and the
-D12 `videos` write (P2); the three breaker cases and fail-open (P3); the four-step credit pass (P4).
+D12 `videos` write (P2); the reserve/settle/refresh lifecycle in SQL (P3); the three breaker cases and
+fail-open (P4); the four-step credit pass (P5).
 
 ## Performance Considerations
 
@@ -770,14 +825,16 @@ needed a `too_long` outcome to bound its rows. No pruning is needed at MVP scale
 ## Migration Notes
 
 Two migrations. `20260731120000_metadata_cache.sql` is the risky one — it drops and recreates
-`persist_summary`, so it must be pushed and deployed back to back (Phase 4). `20260731130000_supadata_budget.sql`
-is purely additive.
+`persist_summary`, so it must be pushed and deployed back to back (Phase 5). `20260731130000_supadata_budget.sql`
+is purely additive — which is what lets Phase 3 land it locally and prove it in SQL without any deploy
+coordination at all.
 
 **Rollback**: reverting Phase 1 is a one-word change back to `auto` plus the copy. Reverting Phase 2
 requires restoring the 23-argument `persist_summary` and dropping `metadata_via`; existing rows carrying
 a non-null `metadata_via` are harmless to the old function, which simply never writes it. Reverting Phase
 3 is code-only — the three tables can be left in place, unread. A stranded `supadata_reservations` row
-after a Phase 3 revert affects nothing, because nothing reads it once the service is gone.
+after a Phase 4 revert affects nothing, because nothing reads it once the service is gone. Reverting
+Phase 4 alone leaves Phase 3's tables in place and unread — the split is a clean revert boundary too.
 
 ## References
 
@@ -826,45 +883,60 @@ after a Phase 3 revert affects nothing, because nothing reads it once the servic
 - [ ] 2.8 D12 — a cache hit still populates the per-user `videos` row
 - [ ] 2.9 A row aged past 30 days produces a fresh fetch
 
-### Phase 3: The budget breaker
+### Phase 3: The reservation ledger
 
 #### Automated
 
-- [ ] 3.1 Migration applies cleanly
+- [ ] 3.1 Migration applies cleanly to the local stack
 - [ ] 3.2 `supadata_budget` cannot hold a second row
-- [ ] 3.3 Reconciliation total returns 1 for `unavailable`/null-header, 0 for `error`/null-header
+- [ ] 3.3 `supadata_budget` and `supadata_reservations` are reachable by `service_role` only
 - [ ] 3.4 Concurrent reserves do not overdraw — one id, one refusal, never two ids
 - [ ] 3.5 A stale unsettled reservation is swept and its credit returns to the pool
 - [ ] 3.6 A settled reservation with `actual_credits = null` still counts at its reserved maximum
-- [ ] 3.7 Type checking and lint pass
-- [ ] 3.8 Build succeeds
+- [ ] 3.7 A settled reservation with a real `actual_credits` counts at that figure
+- [ ] 3.8 `save_supadata_budget` deletes reservations before the new `read_at`, keeps later ones
+- [ ] 3.9 Exactly one of two concurrent stale readers gets `should_refresh = true`
+- [ ] 3.10 Reconciliation query returns 1 for `unavailable`/null-header, 0 for `error`/null-header
 
 #### Manual
 
-- [ ] 3.9 Cold video refused before any Supadata call under an overridden reserve, with the breaker's
-      own 503 copy visible in the UI — not the "isn't configured" fallback
-- [ ] 3.10 A budget refusal consumes no transcript rate-limit attempt
-- [ ] 3.11 Warm video still generates under the same override
-- [ ] 3.12 Warm transcript + cold metadata: summary produced, `metadata_via = 'skipped_budget'`
-- [ ] 3.13 No unsettled reservation survives a completed generation or a mid-fetch throw
-- [ ] 3.14 A `/v1/me` refresh clears reservations created before the new `read_at`
-- [ ] 3.15 Unreadable budget state: generation proceeds and the state is reported (fail-open)
-- [ ] 3.16 A hung and a malformed `/v1/me` both fail open, report, and strand no reservation
-- [ ] 3.17 Warn fires at most once per TTL, including for two simultaneous stale readers
-- [ ] 3.18 A refresh-triggering generation still succeeds — no `limit-exceeded` on the paid call
-- [ ] 3.19 Overrides reverted
+- [ ] 3.11 `npm run lint` and `npm run build` unchanged from Phase 2 (no TypeScript in this phase)
+- [ ] 3.12 The reserve → settle → refresh cycle leaves `supadata_reservations` empty, walked by hand
 
-### Phase 4: Deploy and live verification
+### Phase 4: Wiring the breaker
 
 #### Automated
 
-- [ ] 4.1 `migration list --linked` shows both migrations applied
-- [ ] 4.2 Deployed Worker version recorded
-- [ ] 4.3 Reconciliation: per-outcome ledger total equals the observed `usedCredits` delta
+- [ ] 4.1 Type checking and lint pass
+- [ ] 4.2 Build succeeds
+- [ ] 4.3 The sweep window is passed to the RPC, not duplicated in SQL
+- [ ] 4.4 Both call sites settle in a `finally`, not on the happy path only
 
 #### Manual
 
-- [ ] 4.4 Total spend within the ~4-credit budget (≤6 if metadata retries fire)
-- [ ] 4.5 Repeat generation moves `usedCredits` by 0
-- [ ] 4.6 Caption-less video shows the new copy live
-- [ ] 4.7 `roadmap.md` §S-09 and the Linear issue reflect completion
+- [ ] 4.5 Cold video refused before any Supadata call under an overridden reserve, with the breaker's
+      own 503 copy visible in the UI — not the "isn't configured" fallback
+- [ ] 4.6 A budget refusal consumes no transcript rate-limit attempt
+- [ ] 4.7 Warm video still generates under the same override
+- [ ] 4.8 Warm transcript + cold metadata: summary produced, `metadata_via = 'skipped_budget'`
+- [ ] 4.9 No unsettled reservation survives a completed generation or a mid-fetch throw
+- [ ] 4.10 Unreadable budget state: generation proceeds and the state is reported (fail-open)
+- [ ] 4.11 A hung and a malformed `/v1/me` both fail open, report, and strand no reservation
+- [ ] 4.12 Warn fires at most once per TTL, including for two simultaneous stale readers
+- [ ] 4.13 A refresh-triggering generation still succeeds — no `limit-exceeded` on the paid call
+- [ ] 4.14 Overrides reverted
+
+### Phase 5: Deploy and live verification
+
+#### Automated
+
+- [ ] 5.1 `migration list --linked` shows both migrations applied
+- [ ] 5.2 Deployed Worker version recorded
+- [ ] 5.3 Reconciliation: per-outcome ledger total equals the observed `usedCredits` delta
+
+#### Manual
+
+- [ ] 5.4 Total spend within the ~4-credit budget (≤6 if metadata retries fire)
+- [ ] 5.5 Repeat generation moves `usedCredits` by 0
+- [ ] 5.6 Caption-less video shows the new copy live
+- [ ] 5.7 `roadmap.md` §S-09 and the Linear issue reflect completion

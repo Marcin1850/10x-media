@@ -12,8 +12,13 @@ archived_at: null
 **Plan review triaged 2026-07-31** — all 7 findings fixed in `plan.md`; verdict RETHINK → SOUND. Two
 were structural: the per-generation ceiling is **3** credits, not 2 (metadata's retry is separately
 billed), and the budget breaker is an **atomic reservation** under the singleton row, not a read
-followed by a spend. Phase 3 grew accordingly — `supadata_reservations`, reserve/settle RPCs, a
-settlement obligation on every paid path, and a client 503 change. Re-estimate Phase 3 before starting.
+followed by a spend. The breaker grew accordingly — `supadata_reservations`, reserve/settle RPCs, a
+settlement obligation on every paid path, and a client 503 change.
+
+**Phase count is now 5.** The breaker was split: Phase 3 is the reservation ledger (migration only,
+proved in SQL, called by nothing), Phase 4 wires it into the endpoint, Phase 5 is the deploy + live
+pass that used to be Phase 4. The split puts the atomicity assertion where it is cheap to prove and
+keeps the phase touching the paid pipeline small enough to review.
 
 S-09 from roadmap
 
