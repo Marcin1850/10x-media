@@ -854,10 +854,10 @@ Phase 4 alone leaves Phase 3's tables in place and unread — the split is a cle
 
 #### Automated
 
-- [x] 1.1 Type checking and lint pass
-- [x] 1.2 Build succeeds
-- [x] 1.3 No `mode=auto` / `mode=generate` literal remains
-- [x] 1.4 All three 422 sites reviewed, only one string changed
+- [x] 1.1 Type checking and lint pass — 1e134df
+- [x] 1.2 Build succeeds — 1e134df
+- [x] 1.3 No `mode=auto` / `mode=generate` literal remains — 1e134df
+- [x] 1.4 All three 422 sites reviewed, only one string changed — 1e134df
 
 #### Manual
 
