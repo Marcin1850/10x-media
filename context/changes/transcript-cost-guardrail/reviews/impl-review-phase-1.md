@@ -6,6 +6,7 @@
 - **Date**: 2026-08-01
 - **Verdict**: APPROVED
 - **Findings**: 0 critical, 1 warning, 2 observations
+- **Triage**: complete 2026-08-01 — all 3 findings FIXED, none skipped. Lint re-run green after the fixes.
 - **Manual verification**: Intentionally deferred at the user's request; Progress rows 1.5–1.8 remain pending.
 
 ## Verdicts
@@ -33,7 +34,7 @@
   - Tradeoff: Requires coordinated edits across the roadmap plus an external tracker update when the connector is available.
   - Confidence: HIGH — the stale values are directly visible in the roadmap and conflict with the reviewed plan.
   - Blind spot: Current Linear issue state and description were not observable in this session.
-- **Decision**: PENDING
+- **Decision**: FIXED (2026-08-01) — roadmap `§S-09` slice-table row, Status paragraph, Backlog Handoff row, the lever-C mechanics note and the cost-envelope bullet all updated to "implementing — Phase 1 of 5 impl-reviewed; manual verification deferred", 5 phases, and the 3-credit ceiling / `BUDGET_STOP_RESERVE = 3` / atomic-reserve breaker. Linear connector *was* available this session, so the blind spot was closed: **MAR-15** moved Todo → **In Progress**, Phase 1 completion/review comment posted, and the issue description's "4-phase plan" + "Roadmap status: planned" lines corrected.
 
 ### F2 — “Permanent/no retry” comments conflict with the two-hour recheck
 
@@ -43,7 +44,7 @@
 - **Location**: `src/lib/services/transcript.ts:82`; `src/pages/api/summaries/generate.ts:32`
 - **Detail**: The comments call a no-caption result permanent and say retrying will never help, while `src/lib/services/transcript-cache.ts:30-53` deliberately expires that result after two hours because YouTube may add captions later. The implementation and user-facing copy are safe, but the internal explanation gives future maintainers contradictory lifecycle semantics.
 - **Fix**: Revise the comments to say the video is unsummarizable while no caption track exists and may become eligible if captions appear later; keep the current behavior and user-facing copy unchanged.
-- **Decision**: PENDING
+- **Decision**: FIXED (2026-08-01) — both comments reworded to "durable, not permanent", each now naming the 2 h `unavailable` window (D4) and why it exists. `transcript.ts` drops "permanently"/"retrying will never help"; `generate.ts` changes "PERMANENT" → "DURABLE" and points at the action that works (pick another video). No behavior change; `TRANSCRIPT_NO_CAPTIONS_ERROR` was already free of any permanence claim and is untouched.
 
 ### F3 — Phase overview understates the file count
 
@@ -53,7 +54,7 @@
 - **Location**: `context/changes/transcript-cost-guardrail/plan.md:133`
 - **Detail**: The implementation overview says Phase 1 touches three files, but the authoritative Changes Required section names four and the implementation correctly changes all four. This did not create scope drift, but it can confuse later git-scope checks.
 - **Fix**: Change “touches three files” to “touches four files.”
-- **Decision**: PENDING
+- **Decision**: FIXED (2026-08-01) — `plan.md:133` now reads “touches four files,” matching Changes Required and the implementation.
 
 ## Verification
 

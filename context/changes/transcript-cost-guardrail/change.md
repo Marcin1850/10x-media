@@ -9,6 +9,13 @@ archived_at: null
 
 ## Notes
 
+**Phase 1 impl-review triaged 2026-08-01** — verdict APPROVED (0 critical, 1 warning, 2 observations);
+all 3 findings fixed, none skipped. F1 synced the stale roadmap surfaces and Linear MAR-15 (Todo → In
+Progress, Phase 1 comment posted, description corrected). F2 reworded the "permanent / retrying will
+never help" comments in `transcript.ts` and `generate.ts` — they contradicted D4's 2 h `unavailable`
+window; no behavior or user-facing copy change. F3 fixed the "three files" → "four files" typo in the
+plan's Implementation Approach. Manual rows 1.5–1.8 remain deliberately pending.
+
 **Plan review triaged 2026-07-31** — all 7 findings fixed in `plan.md`; verdict RETHINK → SOUND. Two
 were structural: the per-generation ceiling is **3** credits, not 2 (metadata's retry is separately
 billed), and the budget breaker is an **atomic reservation** under the singleton row, not a read

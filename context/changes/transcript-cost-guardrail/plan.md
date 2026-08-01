@@ -130,7 +130,7 @@ emits a structured event through one function that a monitoring tool can later r
 Five phases, ordered by dependency and by how much each can be verified on its own.
 
 Phase 1 is the headline bound and needs no migration — it is the cheapest fix for the live exposure and
-touches three files. Phase 2 adds the metadata cache, which is where the repeat-generation saving
+touches four files. Phase 2 adds the metadata cache, which is where the repeat-generation saving
 actually comes from, and carries the one risky migration step (the `persist_summary` swap).
 
 **Phases 3 and 4 are the breaker, split along the line where its verification changes character.** Phase

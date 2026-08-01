@@ -79,10 +79,13 @@ export const TRANSCRIPT_REQUESTED_LANG = "en";
  * transcript that has already been paid for. Under `native` the worst case for one transcript is
  * knowable before the call: 1 credit.
  *
- * WHAT IT COSTS US. A video with no caption track becomes permanently unsummarizable rather than
- * expensively summarizable. That is a deliberate capability loss, and it is why the endpoint gives
- * that case its own 422 copy instead of a generic failure (D3) — the user is told the specific thing
- * that is wrong, since retrying will never help.
+ * WHAT IT COSTS US. A video with no caption track becomes unsummarizable — for as long as it has no
+ * caption track — rather than expensively summarizable. That is a deliberate capability loss, and it
+ * is why the endpoint gives that case its own 422 copy instead of a generic failure (D3): the user is
+ * told the specific thing that is wrong and can act on it by picking another video. The outcome is
+ * durable, not eternal — `TRANSCRIPT_CACHE_UNAVAILABLE_MAX_AGE_SECONDS` expires an `unavailable` row
+ * after 2 h (D4) precisely because captions can appear on a video later, so a resubmit past that
+ * window re-asks the vendor rather than replaying the old answer.
  *
  * WHAT IT CLOSES. `resolved_via = 'job'` can now never appear again: a `202` job acceptance is the
  * Whisper path, and `native` never enters it. S-07's open hand-over question — "is the job path

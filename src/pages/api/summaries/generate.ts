@@ -30,9 +30,12 @@ export const prerender = false;
  * The two strings behind this endpoint's 422 (S-09 D3).
  *
  * Under `TRANSCRIPT_MODE = 'native'` (D1) "this video has no caption track" stops being a rare
- * accident and becomes the predictable, PERMANENT answer for a whole class of videos — so it earns
- * copy that names the cause and tells the user retrying will not help. Everything else answering 422
- * keeps the generic string, because it means something genuinely different:
+ * accident and becomes the predictable, DURABLE answer for a whole class of videos — so it earns copy
+ * that names the cause and points the user at an action that works (pick another video) rather than a
+ * retry that almost certainly will not. Durable is not permanent: `unavailable` is negative-cached for
+ * only 2 h (D4), because captions can be added to a video later, so the same URL can legitimately
+ * succeed on a later submit. Everything else answering 422 keeps the generic string, because it means
+ * something genuinely different:
  *
  *   NO_CAPTIONS — the vendor says this video has no transcript, from a fresh fetch or from an
  *                 `'unavailable'` cache row. Durable, and the user can act on it (pick another video).
