@@ -69,6 +69,32 @@ const JOB_POLL_TIMEOUT_MS = 10_000;
  */
 export const TRANSCRIPT_REQUESTED_LANG = "en";
 
+/**
+ * The `mode` this module asks for — `native` ONLY, never `auto` or `generate` (S-09 lever A, D1).
+ *
+ * PRICE. `native` serves an existing caption track and bills a flat 1 credit. `auto` — what this
+ * module used to send — is documented as "try native, fall back to generate", and that fallback is
+ * silent: a Whisper-generated transcript bills 2 credits PER MINUTE, so one ~50-minute video drains a
+ * whole 100-credit month. `HARD_MAX_TRANSCRIPT_CHARS` cannot help, because it is evaluated on a
+ * transcript that has already been paid for. Under `native` the worst case for one transcript is
+ * knowable before the call: 1 credit.
+ *
+ * WHAT IT COSTS US. A video with no caption track becomes permanently unsummarizable rather than
+ * expensively summarizable. That is a deliberate capability loss, and it is why the endpoint gives
+ * that case its own 422 copy instead of a generic failure (D3) — the user is told the specific thing
+ * that is wrong, since retrying will never help.
+ *
+ * WHAT IT CLOSES. `resolved_via = 'job'` can now never appear again: a `202` job acceptance is the
+ * Whisper path, and `native` never enters it. S-07's open hand-over question — "is the job path
+ * reachable at all?" — is therefore unanswerable from here on. Accepted knowingly (D1).
+ *
+ * Hard-coded on purpose (D2). An env var would let the expensive path be re-enabled from a secret
+ * store with no trace in the code and no review. `pollTranscriptJob` below stays in place for the
+ * same reason inverted — it is the vendor's documented `202` behaviour, and keeping it means
+ * re-enabling `auto` is a one-word change rather than a rewrite.
+ */
+const TRANSCRIPT_MODE = "native";
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -252,7 +278,7 @@ export async function fetchTranscript(
   apiKey: string,
   meter?: SupadataMeter,
 ): Promise<TranscriptResult> {
-  const query = `?url=${encodeURIComponent(url)}&text=true&mode=auto&lang=${TRANSCRIPT_REQUESTED_LANG}`;
+  const query = `?url=${encodeURIComponent(url)}&text=true&mode=${TRANSCRIPT_MODE}&lang=${TRANSCRIPT_REQUESTED_LANG}`;
 
   // The try covers ONLY the initial `/transcript` request. Polling is deliberately outside it: a poll
   // failure is recorded by `pollTranscriptJob` as `transcript_poll/error` and rethrown, and if that

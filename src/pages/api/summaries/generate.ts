@@ -26,6 +26,28 @@ import type { TranscriptResolvedVia } from "@/types";
 
 export const prerender = false;
 
+/**
+ * The two strings behind this endpoint's 422 (S-09 D3).
+ *
+ * Under `TRANSCRIPT_MODE = 'native'` (D1) "this video has no caption track" stops being a rare
+ * accident and becomes the predictable, PERMANENT answer for a whole class of videos — so it earns
+ * copy that names the cause and tells the user retrying will not help. Everything else answering 422
+ * keeps the generic string, because it means something genuinely different:
+ *
+ *   NO_CAPTIONS — the vendor says this video has no transcript, from a fresh fetch or from an
+ *                 `'unavailable'` cache row. Durable, and the user can act on it (pick another video).
+ *   GENERIC     — an `'empty'` cache row (a vendor SUCCESS on a wordless video), a whitespace-only
+ *                 transcript, and the transient `failed`/`timeout` fetch outcomes. Different causes,
+ *                 none of them "there are no captions", and some of which DO succeed on a retry.
+ *
+ * The status is 422 in every case; only the body differs. `GenerateSummaryForm`'s `messageForStatus`
+ * prefers the server's string for 422 precisely so this distinction survives the trip to the user —
+ * it used to hardcode one message and drop both of these.
+ */
+const TRANSCRIPT_NO_CAPTIONS_ERROR =
+  "This video has no captions, so there is nothing to summarize. We can only summarize videos that have a caption track — try another video.";
+const TRANSCRIPT_UNAVAILABLE_ERROR = "Transcript unavailable for this video";
+
 const generateSchema = z.object({
   url: z.string().refine((url) => extractYoutubeId(url) !== null, {
     message: "url must be a valid YouTube video URL",
@@ -333,16 +355,24 @@ async function runGeneration({
     transcriptMs = Date.now() - transcriptStartedAt;
   } else if (cachedTranscript) {
     // A negative hit answers for free what the fetch would have charged for. `'empty'` and
-    // `'unavailable'` both mean the same thing to the user — the same 422 the fetch path returns —
-    // but they are cached on different windows, which the RPC has already applied by the time a row
-    // comes back at all.
+    // `'unavailable'` both answer 422, and they are cached on different windows, which the RPC has
+    // already applied by the time a row comes back at all.
+    //
+    // They no longer share COPY, though (D3). `'unavailable'` is the vendor saying this video has no
+    // caption track — permanent under `native`, and worth telling the user in those words. `'empty'`
+    // is a vendor SUCCESS on a video that has captions containing no words (an instrumental piece),
+    // which is a different fact and must not be reported as a missing caption track.
+    //
     // A `'too_long'` row is the 413 answer itself, cached. It holds no body by design (F6), so it is
     // answered here rather than falling through to the hard-cap gate below, which reads `content`.
     if (cachedTranscript.outcome === "too_long") {
       return Response.json({ error: "This video's transcript is too long to summarize." }, { status: 413 });
     }
+    if (cachedTranscript.outcome === "unavailable") {
+      return Response.json({ error: TRANSCRIPT_NO_CAPTIONS_ERROR }, { status: 422 });
+    }
     if (cachedTranscript.outcome !== "ok") {
-      return Response.json({ error: "Transcript unavailable for this video" }, { status: 422 });
+      return Response.json({ error: TRANSCRIPT_UNAVAILABLE_ERROR }, { status: 422 });
     }
     content = cachedTranscript.content;
     // NOT the original fetch's mechanism: this request made no Supadata call, and recording `'inline'`
@@ -397,8 +427,13 @@ async function runGeneration({
           availableLangs: null,
           resolvedVia: null,
         });
+        // The one durable reason, and the only one that earns the specific copy (D3): the vendor says
+        // this video has no caption track, and under `native` nothing will ever produce one.
+        // `failed`/`timeout` fall through to the generic string below — they are transient by
+        // construction, say nothing about the video, and a retry genuinely may work.
+        return Response.json({ error: TRANSCRIPT_NO_CAPTIONS_ERROR }, { status: 422 });
       }
-      return Response.json({ error: "Transcript unavailable for this video" }, { status: 422 });
+      return Response.json({ error: TRANSCRIPT_UNAVAILABLE_ERROR }, { status: 422 });
     }
 
     // Past the hard cap the BODY is not cached — only the verdict (F6). Storing it would put rows in
@@ -446,8 +481,11 @@ async function runGeneration({
   // `saveTranscriptQuote` runs downstream of this guard, so it can never hold an empty — while the
   // shared cache is written straight after the fetch and therefore can. Covering all three sources
   // here is also what makes the `'empty'` cache hit above safe to write as a plain early 422.
+  //
+  // Keeps the GENERIC copy (D3): a transcript arrived and it happens to hold no words, which is not
+  // the same claim as "this video has no caption track" and must not be reported as one.
   if (content.trim().length === 0) {
-    return Response.json({ error: "Transcript unavailable for this video" }, { status: 422 });
+    return Response.json({ error: TRANSCRIPT_UNAVAILABLE_ERROR }, { status: 422 });
   }
 
   const transcriptLength = content.length;

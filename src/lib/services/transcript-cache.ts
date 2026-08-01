@@ -25,16 +25,32 @@ import type { FetchedResolvedVia } from "@/types";
 export const TRANSCRIPT_CACHE_MAX_AGE_SECONDS = 2_592_000;
 
 /**
- * Reuse window for `'unavailable'` ALONE — 24 hours.
+ * Reuse window for `'unavailable'` ALONE — 2 hours (S-09 D4; was 24 h).
  *
  * This is a RISK BOUND, not a performance tuning knob: it caps how long a wrong claim can be served.
  * `transcript-unavailable` is the only outcome that can stop being true — YouTube publishes
  * auto-captions with a lag after upload, so a fresh video can legitimately answer "no transcript" now
- * and succeed hours later, and recent videos are a core use case for this app. Widening this trades
- * user-visible correctness for credits. The two constants are separate so that trade can never be
- * made by accident.
+ * and succeed hours later, and recent videos are a core use case for this app. A day is simply too
+ * long to lock a user out of a video that gained captions an hour after publication.
+ *
+ * The 24 h figure also rested on a reading that no longer exists. It was justified partly by
+ * `unavailable` possibly meaning "the Whisper job failed" — a transient condition worth re-checking
+ * slowly. Under `TRANSCRIPT_MODE = 'native'` (D1) there is no Whisper path, so the outcome can only
+ * mean one thing: this video has no caption track. That is a fact about YouTube's captions, and it
+ * changes on the timescale caption generation runs on, not on a daily one.
+ *
+ * WHAT IT COSTS, stated plainly because it runs OPPOSITE to the rest of S-09: shortening this window
+ * spends operator credits to buy user-visible correctness. A caption-less video resubmitted five
+ * times in one day now costs 5 credits instead of 1. That is the trade, made knowingly.
+ *
+ * D4 AND THE BUDGET BREAKER (lever C) ARE LOAD-BEARING FOR EACH OTHER. C is what bounds the overrun
+ * this window opens. If C is ever removed, revisit this constant in the same breath — do not leave a
+ * 2 h negative window standing with nothing capping the fleet's spend.
+ *
+ * `TRANSCRIPT_CACHE_MAX_AGE_SECONDS` (30 days) is untouched: the two constants are separate so this
+ * trade can never be made by accident.
  */
-export const TRANSCRIPT_CACHE_UNAVAILABLE_MAX_AGE_SECONDS = 86_400;
+export const TRANSCRIPT_CACHE_UNAVAILABLE_MAX_AGE_SECONDS = 7_200;
 
 /**
  * What the vendor did, and what this app can do with it. Code branches on this, never on whether

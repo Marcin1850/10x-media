@@ -73,7 +73,11 @@ function messageForStatus(status: number, serverError?: string): string {
     case 413:
       return "This video is too long to summarize.";
     case 422:
-      return "No transcript is available for this video.";
+      // Three distinct causes answer 422 (no caption track, a vendor success carrying no words, and
+      // a transient fetch failure), each with its own server message. Prefer the server's so a video
+      // that will NEVER be summarizable doesn't misreport as a retryable hiccup; the fallback covers
+      // a non-JSON 422.
+      return serverError ?? "No transcript is available for this video.";
     case 502:
       return "The transcript or summarization service failed. Please try again.";
     case 503:
