@@ -7,6 +7,26 @@
 - **Verdict**: RETHINK → **SOUND after triage** (all 7 findings fixed in the plan, 2026-07-31)
 - **Findings**: 2 critical, 5 warnings, 0 observations — 7 fixed, 0 skipped, 0 accepted, 0 dismissed
 - **Excluded by user**: deployment-window concerns; historical-data measurement
+- **Scope reviewed**: the plan **as it stood on 2026-07-31** — four phases at review time, five after
+  triage. **The verdict does not cover the plan as it stands today.** On 2026-08-01 the scope was
+  extended to seven phases with two entirely new ones (see below); neither has been reviewed.
+
+> ## ⚠️ This review predates the 2026-08-01 scope extension
+>
+> **`SOUND after triage` applies to five phases, not seven.** Two phases added on 2026-08-01 were never
+> seen by this review:
+>
+> - **Phase 2 — `supadata_calls.http_status`** (D13). Low risk: one nullable column, no backfill, an
+>   optional meter field that leaves every existing call site unchanged.
+> - **Phase 3 — a 1-credit charge for a refusal in the billable class** (D14). **This is the one worth a
+>   fresh review.** It is the only change in the slice that takes something from a user; it adds a second
+>   debit path to the paid endpoint; it depends on `requestId` idempotency to avoid billing once per
+>   retry; and it deliberately **removes** a boundary the original plan listed under "What We're NOT
+>   Doing" — so this review's Lean Execution and End-State Alignment passes were granted against a scope
+>   that explicitly excluded it.
+>
+> Run `/10x-plan-review` again before implementing Phase 3 if you want coverage there. The findings below
+> remain valid for the phases they name.
 
 ## Verdicts
 
@@ -29,10 +49,20 @@ two more RPCs, a settlement obligation on every paid path, and a fourth file. Re
 
 ## Findings
 
-> **Phase numbering**: the `Location` fields below refer to the plan **as reviewed** (four phases). After
-> triage the breaker was split in two, so the plan now has five: what these findings call "Phase 3" is
-> now Phase 3 (the reservation ledger) plus Phase 4 (wiring the breaker), and the old Phase 4 (deploy +
-> live verification) is Phase 5. Locations are left unrewritten so the record matches what was reviewed.
+> **Phase numbering**: the `Location` fields below refer to the plan **as reviewed** (four phases). They
+> have shifted twice since, and are left unrewritten so the record keeps matching what was actually
+> reviewed. Use this table to translate:
+>
+> | `Location` says | At review (4 phases) | After triage (5) | **Today (7)** |
+> |---|---|---|---|
+> | "Phase 2" | `metadata_cache` + marker | Phase 2 | **Phase 4** |
+> | "Phase 3" | the breaker, undivided | Phase 3 (reservation ledger) + Phase 4 (wiring) | **Phase 5 + Phase 6** |
+> | "Phase 4" | deploy + live verification | Phase 5 | **Phase 7** |
+> | "Phases 2–3" | both of the above | 2 + 3/4 | **4 + 5/6** |
+>
+> The first shift (2026-07-31 triage) split the breaker along its verification boundary. The second
+> (2026-08-01) inserted two new phases ahead of everything except Phase 1 — see the scope warning above.
+> **No finding below refers to today's Phase 2 or Phase 3**; those did not exist when this ran.
 
 ### F1 — Metadata retry breaks the 2-credit ceiling
 

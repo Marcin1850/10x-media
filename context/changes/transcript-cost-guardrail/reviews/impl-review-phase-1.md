@@ -2,12 +2,15 @@
 # Implementation Review: Transcript Cost Guardrail Implementation Plan
 
 - **Plan**: `context/changes/transcript-cost-guardrail/plan.md`
-- **Scope**: Phase 1 of 5
+- **Scope**: Phase 1 (of 5 at the time; the plan became 7 phases on 2026-08-01, *after* this review —
+  Phase 1 itself is unaffected, and no phase renumbering touches it)
 - **Date**: 2026-08-01
 - **Verdict**: APPROVED
 - **Findings**: 0 critical, 1 warning, 2 observations
 - **Triage**: complete 2026-08-01 — all 3 findings FIXED, none skipped. Lint re-run green after the fixes.
-- **Manual verification**: Intentionally deferred at the user's request; Progress rows 1.5–1.8 remain pending.
+- **Manual verification**: Intentionally deferred at the user's request when this review ran. **Completed
+  later the same day — rows 1.5–1.8 all pass**, record at `manual-verification-phase-1.md`. That pass is
+  what produced the D13/D14 scope extension.
 
 ## Verdicts
 
@@ -64,11 +67,11 @@
 | Build | PASS | `npm.cmd run build` exited 0 outside the sandbox, where Astro/Miniflare could access its normal runtime directories. |
 | No `mode=auto` / `mode=generate` literal | PASS | No forbidden match; the only query occurrence is `mode=${TRANSCRIPT_MODE}`, with `TRANSCRIPT_MODE = "native"`. |
 | 422 split | PASS | Five return statements represent the intentionally split branches: cached unavailable/specific, cached empty/generic, fresh unavailable/specific, fresh transient/generic, and whitespace/generic. |
-| Manual rows 1.5–1.8 | PENDING | Skipped intentionally for now; none is marked complete or treated as verified. |
+| Manual rows 1.5–1.8 | PENDING at review → **PASS 2026-08-01** | Skipped intentionally at review time; none was marked complete or treated as verified then. All four executed later the same day, Supadata delta 3 reconciled exactly. See `manual-verification-phase-1.md`. |
 
 ## Scope Notes
 
 - Implementation commit: `1e134df` (`e83eced..1e134df`).
 - `f05930d` only writes the implementation SHA into Progress.
 - The two non-code files in the implementation commit are expected lifecycle bookkeeping (`change.md` and `plan.md`), not scope creep.
-- Phase 1 should remain undeployed in isolation: the planned Phase 5 single deployment ensures the shorter negative-cache window does not ship before the Phase 4 fleet breaker.
+- Phase 1 should remain undeployed in isolation: the plan's single deployment gate ensures the shorter negative-cache window does not ship before the fleet breaker. **Those were Phases 5 and 4 when this was written; after the 2026-08-01 extension they are Phases 7 and 6.** The constraint itself is unchanged.

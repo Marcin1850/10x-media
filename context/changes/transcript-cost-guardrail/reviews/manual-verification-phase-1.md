@@ -1,7 +1,9 @@
 # Phase 1 — Manual verification record
 
 - **Change**: `transcript-cost-guardrail` (S-09)
-- **Phase**: 1 of 5 — lever A (`mode: "native"`) and the `unavailable` 422 split
+- **Phase**: 1 — lever A (`mode: "native"`) and the `unavailable` 422 split. Of 5 phases when this ran;
+  the plan became 7 later the same day, and this pass is what prompted the extension (D13/D14). Phase 1's
+  own number and content are unchanged by it.
 - **Date**: 2026-08-01
 - **Environment**: **local only** — dev server on `localhost:4321`, local Supabase stack
   (`127.0.0.1:54321`). Nothing was deployed; Phase 5 remains the single deploy gate.
