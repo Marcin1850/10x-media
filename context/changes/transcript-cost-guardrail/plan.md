@@ -13,6 +13,18 @@ D rejected) and twelve numbered decisions D1–D12. This plan implements them; i
 Four things D1–D12 left genuinely open were decided during planning (2026-07-31) and are recorded in
 `plan-brief.md`'s Key Decisions table.
 
+**Scope extended 2026-08-01 (user), after Phase 1's manual verification.** That pass made two gaps
+concrete enough to act on, and both are now phases of their own:
+
+- **The 206 leaves no hard trace.** The ledger records `outcome`, never the HTTP status, so "this call
+  cost a credit despite reporting no header" is a *derived* claim rather than an observed one. Phase 2
+  records the status for transcript calls (D13).
+- **A caption-less submit costs the operator 1 credit and the user 0.** The refusal exits ~200 lines
+  before the debit, so nothing in the app makes the user feel a call we paid for. D4's 2 h window
+  multiplies exactly this traffic. Phase 3 charges 1 app credit for a refusal in the billable class
+  (D14). **This deliberately reopens what the original scope fenced off** — the "not changing what a
+  summary costs the user" boundary below is gone, replaced by a narrower one.
+
 ## Current State Analysis
 
 Every fact below was verified against the working tree, not carried over from the roadmap.
@@ -49,6 +61,25 @@ transcript-unavailable` is billed **1** credit and sends no `x-billable-requests
 in both cases (`supadata-ledger.ts:133` stores the header verbatim and never guesses). Any credit total
 derived from this table must branch on `outcome`.
 
+**The refusal exits long before the debit.** Verified against the working tree 2026-08-01. The order is:
+402 balance gate (`:298-316`) → transcript acquisition with its 422 exits (`:345`, `:401`, `:450`) →
+pricing (`:495`) → **`beginGeneration`** (`:551`, the actual debit) → LLM → `persist_summary` + settle.
+Every 422 is roughly 200 lines upstream of the only place a credit is currently taken, which is why a
+caption-less submit is free to the user. Charging on that path is therefore a **new** operation, not a
+flag on an existing one.
+
+**The credit ledger already supports a charge with no summary.** `credit_reservations` carries
+`request_id` with a unique index on `(user_id, request_id) where request_id is not null and status <>
+'refunded'` — idempotency for a retried request is already solved. `summaries.reservation_id` is the FK
+and it points *from* summaries, so a settled reservation with no summary is a legal row, not an orphan.
+The hourly reconciliation sweep refunds rows left in `'reserved'`, so a charge that reserves and settles
+in one statement is never exposed to it.
+
+**`supadata_calls` has no HTTP status column.** Confirmed against the live schema: `operation`,
+`outcome`, `resolved_via`, `billable_credits` and the FKs — nothing records what the vendor actually
+answered. So the 206 that costs a credit is identified today only by `outcome = 'unavailable'`, which is
+our own classification applied at the call site.
+
 **Patterns this plan follows rather than invents:**
 
 - Shared user-agnostic cache keyed by `youtube_id`, definer-only, read/written through service-role
@@ -81,6 +112,14 @@ derived from this table must branch on `outcome`.
   are CHECKed. Relevant to what a migration is and is not needed for.
 - `save_transcript_cache` serializes its duplicate-fetch signal with `pg_advisory_xact_lock(hashtext(...))`
   because a cold row cannot be `for update`-locked. `save_metadata_cache` needs no such signal.
+- `generate.ts:551` — `beginGeneration`, the single existing debit. Phase 3 adds a second, earlier one
+  on the refusal path; both must respect the same `requestId` idempotency key.
+- `credits.ts:102-173` — `beginGeneration`'s discriminated outcome union (`reserved` / `replay` /
+  `inProgress` / `insufficient` / …). Phase 3's RPC wrapper mirrors this shape rather than inventing
+  a second error vocabulary for the same ledger.
+- Phase 1's split left **five** 422 return statements, not three: cached `unavailable`, cached `empty`,
+  fresh `unavailable`, fresh transient (`failed`/`timeout`), and whitespace. Phase 3's charge applies to
+  four of them — the transient one is deliberately exempt (D14).
 
 ## Desired End State
 
@@ -108,11 +147,43 @@ A user submitting a caption-less video is told *that specific thing* rather than
 operator's remaining budget is checked before every paid call, and a near-exhausted or exhausted plan
 emits a structured event through one function that a monitoring tool can later receive.
 
+**Every transcript call carries its HTTP status** (D13), so the reconciliation formula's
+`unavailable → 1` branch rests on an observation rather than on our own outcome label — and the two can
+be checked against each other.
+
+**An unusable submission costs the user 1 credit** (D14). Four of the five 422 exits charge; the
+transient one does not. The rule the app now enforces:
+
+| Outcome for the user | User pays | Operator pays |
+| --- | --- | --- |
+| Summary delivered | `summaryCost` (1, or 2 long) | 0–3 |
+| Video has no usable transcript, cold | **1** | 1 |
+| Video has no usable transcript, cached | **1** | **0** |
+| Transcript fetch failed transiently | 0 | unknown |
+| Blocked at the 402 gate | 0 | 0 |
+
+The third row is the deliberate asymmetry — a charge with no matching operator cost — accepted so that
+the same action does not cost differently depending on cache state the user cannot see. The fourth is
+the deliberate exemption: we do not resolve our own ambiguity against the user.
+
 ## What We're NOT Doing
 
-- **Not changing what a summary costs the user in app credits.** That is S-05's model. This slice
-  changes only what the *operator* pays Supadata.
+- ~~**Not changing what a summary costs the user in app credits.**~~ **Removed 2026-08-01 (user).** This
+  boundary is what left a caption-less submit free to the user and billable to the operator, and Phase 1's
+  verification made the asymmetry concrete. Phase 3 now charges 1 credit for a refusal in the billable
+  class. The replacement, narrower boundary: **not changing what a *successful* summary costs.**
+  `summaryCost` (1 credit, or 2 for a long video) is untouched — S-05 still owns pricing for delivered
+  work; this slice only prices the refusal.
 - **Not upgrading the Supadata plan.** Informed by this slice, decided elsewhere.
+- **Not charging for a transient transcript failure** (D14). `failed`/`timeout` stays free: the user did
+  nothing wrong, and `error` with a null header means the cost is *unknown*, so charging would resolve
+  our own ambiguity against them.
+- **Not surfacing the charge in the UI** (D14, user's explicit call). The 422 copy is unchanged and the
+  response body carries no balance. Consequence, recorded rather than discovered later: a user can lose
+  several credits to repeated caption-less submits with no on-screen acknowledgement, including on cache
+  hits where the operator paid nothing. Revisit here first if support questions appear.
+- **Not backfilling `http_status`** (D13). Nullable, null for every pre-migration row — the same
+  reasoning as D11: an unobserved value is not reconstructed from an inference.
 - **Not delivering the budget notification anywhere.** D5b: the seam is built, the receiver (Sentry or
   equivalent) lands later. **The warn threshold is decorative on delivery** — this is known and accepted.
 - **Not backfilling `metadata_cache` from existing `videos` rows** (D11). Mixed provenance, unknown age.
@@ -127,20 +198,37 @@ emits a structured event through one function that a monitoring tool can later r
 
 ## Implementation Approach
 
-Five phases, ordered by dependency and by how much each can be verified on its own.
+Seven phases, ordered by dependency and by how much each can be verified on its own.
 
-Phase 1 is the headline bound and needs no migration — it is the cheapest fix for the live exposure and
-touches four files. Phase 2 adds the metadata cache, which is where the repeat-generation saving
-actually comes from, and carries the one risky migration step (the `persist_summary` swap).
+Phase 1 (**done**, verified 2026-08-01) is the headline bound and needs no migration — it is the cheapest
+fix for the live exposure and touches four files.
 
-**Phases 3 and 4 are the breaker, split along the line where its verification changes character.** Phase
-3 is the reservation ledger — a migration whose central property (concurrent reserves cannot overdraw) is
-provable in two psql sessions, with nothing calling it yet. Phase 4 wires that mechanism into the
-endpoint, and depends on Phase 2 having hoisted the metadata lookup, since that lookup is what tells the
+**Phases 2 and 3 are the 2026-08-01 scope extension**, and both are deliberately cheap and early. Phase 2
+adds `http_status` to the transcript ledger: one additive column, no deploy window, and it turns the
+"a 206 costs a credit" claim from derived into observed. Phase 3 charges the user 1 credit for a refusal
+in the billable class.
+
+**Phase 3 sits ahead of the breaker on purpose.** Both bound the same overspend, but at different
+granularity and cost: the charge is per-user, bites from the first event, and needs no vendor call;
+the breaker only engages when the plan is nearly exhausted and protects the budget by refusing service
+to everyone at once. The cheaper, more targeted guard should land first. Phase 3 also depends on
+nothing — not `metadata_cache`, not the reservation ledger — so its placement blocks no other work.
+
+Phase 4 adds the metadata cache, which is where the repeat-generation saving actually comes from, and
+carries the one risky migration step (the `persist_summary` swap).
+
+**Phases 5 and 6 are the breaker, split along the line where its verification changes character.** Phase
+5 is the reservation ledger — a migration whose central property (concurrent reserves cannot overdraw) is
+provable in two psql sessions, with nothing calling it yet. Phase 6 wires that mechanism into the
+endpoint, and depends on Phase 4 having hoisted the metadata lookup, since that lookup is what tells the
 second check point whether it is needed at all. Splitting them keeps a database-provable invariant from
 being verified through a UI, and keeps the phase that touches the paid pipeline small enough to review.
 
-Phase 5 is the single deploy + live verification gate.
+Phase 7 is the single deploy + live verification gate.
+
+**Migration order follows phase order**: `…100000_supadata_call_http_status` (P2),
+`…110000_charge_failed_transcript` (P3), `…120000_metadata_cache` (P4), `…130000_supadata_budget` (P5).
+Only P4's opens a deploy window; the other three are purely additive.
 
 **Two honest caveats, carried from the roadmap rather than quietly dropped:**
 
@@ -155,7 +243,7 @@ Phase 5 is the single deploy + live verification gate.
 ## Critical Implementation Details
 
 **The breaker does not do live arithmetic over `supadata_calls`.** This is the single most important
-structural decision in Phase 3 and the natural design is the wrong one. `supadata_calls` rows are held
+structural decision in Phase 5 and the natural design is the wrong one. `supadata_calls` rows are held
 in an in-memory meter and flushed once in `POST.finally` (`generate.ts:100-125`), so during the entire
 paid window of a request its own spend is invisible to every other request. A breaker that reads the
 ledger is reading a figure that is stale by exactly the duration of the work it is trying to bound.
@@ -166,7 +254,7 @@ header means **unknown**, not zero — a ledger-derived total silently reads a p
 So live accounting moves to **reservations**, written synchronously at call time (below), and the
 ledger keeps its original job: telemetry and after-the-fact reconciliation.
 
-**Where the ledger total *is* still used — Phase 5's reconciliation — it must branch on `outcome`.**
+**Where the ledger total *is* still used — Phase 7's reconciliation — it must branch on `outcome`.**
 It cannot be `sum(billable_credits)`: a `206 transcript-unavailable` is billed 1 credit and reports no
 header, while a failed metadata call is billed 0 and also reports no header — both land as `null`. A
 flat sum under-counts exactly the outcome that costs money. The per-outcome shape is load-bearing and
@@ -180,15 +268,28 @@ sum(case
 end)
 ```
 
-**Ordering inside Phase 2's migration.** The `metadata_cache` table and its RPCs are additive and safe
+**The refusal charge must reuse the request's own `requestId`, not a fresh one.** This is the single
+easiest way to get Phase 3 wrong. The endpoint already dedupes replays through
+`respondToRepeatedRequest`, and `credit_reservations` enforces one row per `(user_id, request_id)`
+unless refunded. A charge that generates its own key would bypass both: a client retrying an ambiguous
+failure — the exact scenario `requestId` exists for — would be charged once per attempt. When
+`requestId` is absent (a pre-F22 client), the charge must be skipped rather than made
+non-idempotent — failing toward not charging is the correct direction for a fee the user cannot see.
+
+**The charge is settled in the same statement that reserves it.** Not two calls. A `'reserved'` row is
+what the hourly reconciliation sweep refunds, so a reserve-then-settle pair would be racing a sweep for
+no benefit — there is no work in between to fail. One RPC that inserts the row already `'settled'` is
+both simpler and immune to it.
+
+**Ordering inside Phase 4's migration.** The `metadata_cache` table and its RPCs are additive and safe
 in any order, but `persist_summary` must be `drop`ped before being recreated, and its grants re-issued
 against the **new** 24-argument signature — the old signature's grants disappear with the dropped
 function. Getting this wrong leaves a stale 23-argument overload callable.
 
-**Phase 2 opens a push/deploy window.** Between `supabase db push --linked` and `wrangler deploy`, the
+**Phase 4 opens a push/deploy window.** Between `supabase db push --linked` and `wrangler deploy`, the
 live Worker calls a `persist_summary` signature that no longer exists, and every generation fails at
 persist — after the LLM has been paid for. S-07 and S-08 both flagged this as their riskiest step and
-both ran the two commands back to back. Phase 5 does the same.
+both ran the two commands back to back. Phase 7 does the same.
 
 **`metadata_ms` semantics change on a hit.** The column currently brackets a real HTTP call including
 its ~1.2 s rate-limit retry sleep. On a cache hit it will bracket a DB read and read near zero — the
@@ -278,11 +379,206 @@ response. No other client change — no new status, no new payload field.
 - An `'empty'` transcript still shows the generic copy (verifiable by writing an `'empty'` cache row directly).
 - `transcript_cache` shows an `unavailable` row expiring in 2 h, not 24 h.
 
-**Implementation Note**: Pause here for manual confirmation before starting Phase 2.
+**Implementation Note**: Pause here for manual confirmation before starting Phase 2. **Done — all four
+manual rows verified locally 2026-08-01**, record at `reviews/manual-verification-phase-1.md`.
 
 ---
 
-## Phase 2: `metadata_cache` and the hit marker
+## Phase 2: `http_status` on the transcript ledger
+
+### Overview
+
+Record what the vendor actually answered, for transcript calls only. Today the fact that a 206 costs a
+credit is a *derived* claim — inferred from `outcome = 'unavailable'`, which is our own label applied at
+the call site — and the reconciliation formula depends on that inference being right. One additive
+column turns it into an observation (D13).
+
+One migration, one service touch, no deploy window, no behaviour change.
+
+### Changes Required:
+
+#### 1. Migration — the column
+
+**File**: `supabase/migrations/20260731100000_supadata_call_http_status.sql`
+
+**Intent**: Give the ledger a place to record the vendor's HTTP status so the billable-206 case is
+observed rather than reconstructed.
+
+**Contract**: `alter table public.supadata_calls add column http_status integer` — nullable, **no CHECK
+constraint** (mirroring `resolved_via`, which is deliberately unconstrained; `operation` and `outcome`
+are CHECKed because code branches on them, and nothing branches on a status code). No backfill and no
+default: every pre-migration row keeps `null`, which reads correctly as "not recorded" (D13). No RPC or
+grant change — `supadata_calls` is written through the existing insert path.
+
+A column comment must state the two things a reader needs: that it is populated for
+`operation = 'transcript'` only, and that `null` therefore means either "pre-migration row" or
+"not a transcript call" — never "the vendor sent no status".
+
+#### 2. Plumb the status through the meter
+
+**Files**: `src/lib/services/supadata-ledger.ts`, `src/lib/services/transcript.ts`
+
+**Intent**: Carry the response status from the one place that has it to the row that records the call.
+
+**Contract**: `SupadataCallRecord` (and the `record(...)` signature at `supadata-ledger.ts:57`) gains an
+optional `httpStatus?: number`, defaulting to `null` exactly as `resolvedVia` and `billableCredits`
+already do — so **no existing call site needs to change**, which is what keeps `metadata` and
+`transcript_poll` out of scope without a special case. `fetchTranscript` passes `response.status` on
+every arm that records a call, including the failure arms: a `206` is the case this phase exists for, but
+a `4xx`/`5xx` recorded alongside `outcome = 'error'` is what will later resolve the *other* ambiguous
+null the plan documents.
+
+**Scope boundary, stated because the temptation is obvious**: `fetchVideoMetadata` is **not** touched
+(user's call). Metadata's null-billable case is a *failed* call billed 0 — knowing its status would be
+informative but is not what this phase is for, and touching `metadata.ts` would pull the retry helper
+into a phase that otherwise has no behaviour risk at all.
+
+### Success Criteria:
+
+#### Automated Verification:
+
+- Migration applies cleanly to the local stack: `npx supabase migration up`
+- `supadata_calls.http_status` exists, is nullable, and carries no CHECK constraint
+- Pre-migration rows still read `null` — the migration backfilled nothing
+- Type checking and lint pass: `npm run lint`
+- Build succeeds: `npm run build`
+
+#### Manual Verification:
+
+- A caption-less video records `http_status = 206` alongside `outcome = 'unavailable'` and a null
+  `billable_credits` — the exact row shape the reconciliation formula's `unavailable → 1` branch assumes,
+  now visible rather than inferred.
+- A captioned video records `http_status = 200` with `billable_credits = 1`.
+- The `metadata` row written by the same generation has `http_status = null` — confirming the scope
+  boundary holds rather than leaking through a shared helper.
+
+**Implementation Note**: Pause here for manual confirmation before starting Phase 3. Nothing is deployed;
+this migration reaches production in Phase 7.
+
+---
+
+## Phase 3: Charging for a refusal in the billable class
+
+### Overview
+
+A submit that costs the operator a Supadata credit now costs the user an app credit. Phase 1's
+verification measured the asymmetry: a caption-less video spends 1 operator credit and 0 user credits,
+and D4's 2 h negative window deliberately multiplies that traffic.
+
+**Four of the five 422 exits charge; the transient one does not** (D14). The rule is drawn around what
+the user submitted, not around what we happened to pay:
+
+| 422 exit | Charges? | Why |
+| --- | --- | --- |
+| Fresh fetch, `unavailable` (`:401`) | **yes** | The 206 we paid for. The canonical case. |
+| Cached `unavailable` (`:345`) | **yes** | Same submission, same answer; see the note below. |
+| Cached `empty` (`:345`) | **yes** | A video with no words is still an unusable submission. |
+| Whitespace-only (`:450`) | **yes** | Same. |
+| Fresh transient, `failed`/`timeout` (`:401`) | **no** | Our outage or the vendor's, and `error` + null header means the cost is *unknown*. |
+
+**The cache-hit charge is the one place in this slice where we take a credit having paid nothing**, and it
+is deliberate. The alternative — free inside the 2 h window, charged outside it — makes the same action
+cost differently depending on invisible state, which reads as a bug and rewards rapid resubmission of
+exactly the videos the window exists to re-check. A flat rule is defensible; a window-dependent one is
+not. Recorded here so a later review sees a decision rather than an oversight.
+
+### Changes Required:
+
+#### 1. Migration — the charge RPC
+
+**File**: `supabase/migrations/20260731110000_charge_failed_transcript.sql`
+
+**Intent**: Debit one credit and record it as already-settled, in a single atomic statement, keyed for
+idempotency by the caller's `request_id`.
+
+**Contract**: One function, no new table — `credit_reservations` is the right home and already has the
+constraints this needs.
+
+*`charge_failed_transcript(p_user_id uuid, p_request_id uuid, p_amount integer)`* — inside one
+transaction: lock the user's `user_credits` row, and if the balance covers `p_amount`, decrement it and
+insert a `credit_reservations` row with `status = 'settled'` and `resolved_at = now()`. Inserted
+**settled, never `'reserved'`** — there is no work between reserve and settle, and a `'reserved'` row is
+what the hourly reconciliation sweep refunds.
+
+Returns a discriminated outcome mirroring `begin_generation`'s vocabulary rather than inventing a second
+one: `'charged'` with the new balance, `'replay'` when `(user_id, request_id)` already carries a
+non-refunded row, `'insufficient'` when the balance will not cover it. `'replay'` must be reachable
+through the **existing** unique index — do not add a second one.
+
+`security definer`, `revoke all … from public, anon, authenticated`, `grant execute … to service_role`
+alone, like every other credit RPC.
+
+**`'insufficient'` is not an error here.** The 402 gate upstream blocks a zero balance before any paid
+call, so reaching this function with too little credit means the balance changed mid-request. The charge
+is simply skipped — the user still gets their 422. Refusing to answer because we could not bill would be
+strictly worse for someone we already declined to serve.
+
+#### 2. Credits service wrapper
+
+**File**: `src/lib/services/credits.ts`
+
+**Intent**: Expose the RPC the way `beginGeneration` is exposed, and keep the charge non-fatal.
+
+**Contract**: `chargeFailedTranscript(admin, { userId, requestId, amount })` returning a discriminated
+union over the three outcomes above, narrowed at the boundary like `beginGeneration`'s row parsing. It
+**never throws**: a Supabase error is logged and reported as "not charged". The direction is deliberate
+and opposite to the debit on the success path — there the throw protects the user from paying for
+nothing; here a failure to charge costs the operator one credit, and answering the user's request
+matters more.
+
+#### 3. Endpoint wiring
+
+**File**: `src/pages/api/summaries/generate.ts`
+
+**Intent**: Charge on the four billable-class exits, and nowhere else.
+
+**Contract**: A single local helper — `refuseAndCharge(...)` or equivalent — invoked at the four exits so
+the charge cannot drift apart from the refusal it accompanies. It awaits the charge, ignores the outcome
+for response purposes, and returns the same 422 body as today.
+
+**The response is unchanged** (D14, user's explicit call): same status, same `error` string, **no
+`creditsRemaining` field**. The client is not touched in this phase at all. The consequence is recorded
+in "What We're NOT Doing" rather than mitigated.
+
+`requestId` is threaded from the already-parsed body. **When it is absent, skip the charge** — see
+Critical Implementation Details: a generated key would make the fee non-idempotent across exactly the
+retries `requestId` exists to absorb, and a caption-less submit is a plausible thing for a client to
+retry.
+
+The transient exit at `:401` must be left alone. It shares a `return` with the `unavailable` case only if
+Phase 1's split left them adjacent; the charge branches on the same `reason` value the copy already
+branches on, so the two decisions stay visibly aligned in one place.
+
+### Success Criteria:
+
+#### Automated Verification:
+
+- Migration applies cleanly to the local stack: `npx supabase migration up`
+- `charge_failed_transcript` is executable by `service_role` only
+- A second call with the same `(user_id, request_id)` returns `'replay'` and does **not** decrement again
+- A call against a zero balance returns `'insufficient'` and writes no row
+- The charge is invoked at exactly four sites, not five:
+  `grep -n "refuseAndCharge\|chargeFailedTranscript" src/pages/api/summaries/generate.ts`
+- Type checking and lint pass: `npm run lint`
+- Build succeeds: `npm run build`
+
+#### Manual Verification:
+
+- Caption-less video, cold: 422 with the Phase 1 copy, balance drops by 1, one `settled` reservation with
+  no `summary_id`.
+- Immediate resubmit of the same video (cache hit, **new** `requestId`): balance drops by 1 again, and no
+  Supadata call is made — the asymmetry this phase accepts, observed deliberately rather than discovered.
+- Resubmit with the **same** `requestId`: balance does **not** move a second time.
+- A seeded `'empty'` cache row charges; a forced transient failure does **not**.
+- A successful generation still costs exactly `summaryCost` — the refusal charge never stacks onto the
+  happy path.
+- Balance 0: the 402 gate still answers first, and no charge row is written.
+
+**Implementation Note**: Pause here for manual confirmation before starting Phase 4.
+
+---
+
+## Phase 4: `metadata_cache` and the hit marker
 
 ### Overview
 
@@ -323,7 +619,7 @@ and is already visible in the ledger. No advisory lock, for the same reason.
 
 *`summaries.metadata_via`* — `text`, nullable, `check (metadata_via is null or metadata_via in
 ('fetched', 'stored', 'skipped_budget'))`. Null on rows predating this migration. `'skipped_budget'` is
-written by Phase 4 and is declared here so the constraint is not altered twice; nothing writes it yet.
+written by Phase 6 and is declared here so the constraint is not altered twice; nothing writes it yet.
 A column comment must state that `metadata_ms` is only comparable across `'fetched'` rows.
 
 *`persist_summary` swap, 23 → 24 arguments* — `drop function` with the **full old signature**, then
@@ -359,11 +655,11 @@ populates the per-user `videos` row.
 **Contract**: Three edits.
 
 The **lookup is hoisted early** (D7) — placed alongside the existing transcript-cache lookup at
-`:317-322`, which means **after** the 402 balance gate (`:290-292`) and **before** the 413/409 exits.
+`:317-322`, which means **after** the 402 balance gate (`:298-316`) and **before** the 413/409 exits.
 Note the correction: the 402 gate is upstream of those lookups, not downstream, so "ahead of all three
 exit gates" is not a placement that exists. After-402 is also the right place on its own merits — a user
 with no credits should not trigger even a free read — and it still lands before the debit, which is all
-Phase 3 needs. It is a free DB read, so none of the three reasons documented at `:552-556` for the
+Phase 6 needs. It is a free DB read, so none of the three reasons documented at `:552-556` for the
 *fetch's* placement apply to it.
 
 **`metadata_ms` is measured where the work happens, not where the variable is declared.** Bracket the
@@ -415,12 +711,12 @@ is what explains a near-zero `metadata_ms`. `summaries.ts` gains the field on `S
   thumbnail, channel, duration and published date — not nulls.
 - A cache row aged past 30 days (by editing `fetched_at` directly) produces a fresh fetch.
 
-**Implementation Note**: Pause here for manual confirmation before starting Phase 3. Nothing is deployed
-yet — the `persist_summary` swap reaches production in Phase 5.
+**Implementation Note**: Pause here for manual confirmation before starting Phase 5. Nothing is deployed
+yet — the `persist_summary` swap reaches production in Phase 7.
 
 ---
 
-## Phase 3: The reservation ledger
+## Phase 5: The reservation ledger
 
 ### Overview
 
@@ -515,7 +811,7 @@ anchor.
 - `save_supadata_budget` deletes reservations created before the new `read_at`, and keeps later ones
 - Exactly one caller gets `should_refresh = true` when two sessions read a stale row concurrently
 - The **reconciliation query** — the `case`-per-outcome form in Critical Implementation Details, which
-  Phase 5 uses against the live ledger and which is *not* an RPC — returns 1 for an `unavailable` row
+  Phase 7 uses against the live ledger and which is *not* an RPC — returns 1 for an `unavailable` row
   with a null header and 0 for an `error` row with a null header. Write it here against hand-inserted
   rows and record it in the migration's comments: it is cheap to pin now, while the reasoning is fresh,
   and expensive to debug during a live credit pass.
@@ -523,21 +819,21 @@ anchor.
 #### Manual Verification:
 
 - No TypeScript changes in this phase, so `npm run lint` and `npm run build` are expected to be
-  **unchanged from Phase 2** — run them to confirm the migration did not break generated types, not as
+  **unchanged from Phase 4** — run them to confirm the migration did not break generated types, not as
   evidence the phase works. The SQL assertions above are the real coverage.
 - The reserve → settle → refresh cycle leaves `supadata_reservations` empty, walked by hand once so the
   lifecycle is understood before it is wired to anything.
 
-**Implementation Note**: Pause here for manual confirmation before starting Phase 4. Nothing is deployed
+**Implementation Note**: Pause here for manual confirmation before starting Phase 6. Nothing is deployed
 and nothing calls these RPCs yet.
 
 ---
 
-## Phase 4: Wiring the breaker
+## Phase 6: Wiring the breaker
 
 ### Overview
 
-Put the Phase 3 mechanism behind the two paid calls, and give a refusal a message a user can act on.
+Put the Phase 5 mechanism behind the two paid calls, and give a refusal a message a user can act on.
 Minimal form (D5): the breaker gates **spend, not the request** — a cache hit costs 0 and is never
 blocked.
 
@@ -585,7 +881,7 @@ caller reads the stored row and waits for nothing.
 
 **Unverified**: whether `/v1/me` shares the transcript endpoints' rate bucket at all. The vendor docs in
 `context/changes/persist-video-metadata/docs/supadata-account-limits.md` do not say, so this assumes it
-does — the conservative reading. If Phase 5 shows `/v1/me` is exempt, the wait can be deleted; it is
+does — the conservative reading. If Phase 7 shows `/v1/me` is exempt, the wait can be deleted; it is
 deliberately one constant in one place so that deletion is trivial.
 
 `settleBudget(admin, reservationId, actualCredits)` — records what the call actually billed. It must be
@@ -662,9 +958,9 @@ new videos, not see a generic failure. 503 is the right code (the service genuin
 right now) and it is already the endpoint's "generation is unavailable" status, so no new branch is
 needed on the client — but see the file below, because today it discards the server's string.
 
-*Before `fetchVideoMetadata`* — only reached when Phase 2's lookup missed. This point exists because on
+*Before `fetchVideoMetadata`* — only reached when Phase 4's lookup missed. This point exists because on
 a warm transcript with cold metadata, the metadata call **is** the first paid call: a breaker sitting only
-in front of the transcript fetch is bypassed on exactly the traffic Phase 2's cache is designed to create.
+in front of the transcript fetch is bypassed on exactly the traffic Phase 4's cache is designed to create.
 Reserve **2** here (the retry), settle with the real total once the helper returns or throws. On a trip
 here the generation is **not** refused — the user has already been debited and the LLM already
 paid for, so refusing to protect a decorative thumbnail would be strictly worse. Skip the call, persist
@@ -714,7 +1010,7 @@ to survive.
 - Under the same override with a warm transcript and cold metadata: the summary is produced,
   `metadata_via = 'skipped_budget'`, and no `metadata` ledger row is written.
 - A completed generation leaves **no unsettled reservation** behind, and a generation forced to throw
-  mid-fetch leaves none either — the `finally` obligation, checked rather than assumed. Phase 3 proved
+  mid-fetch leaves none either — the `finally` obligation, checked rather than assumed. Phase 5 proved
   the sweep works; this proves the sweep is a backstop rather than the primary mechanism.
 - With the stored reading deleted and an invalid API key, generation **proceeds** and the unreadable
   state is reported (fail-open, visibly).
@@ -725,15 +1021,15 @@ to survive.
 - A generation that triggers the refresh still succeeds: the paid call that follows `/v1/me` does not
   come back `limit-exceeded`.
 
-**Implementation Note**: Pause here for manual confirmation. The overrides must be reverted before Phase 5.
+**Implementation Note**: Pause here for manual confirmation. The overrides must be reverted before Phase 7.
 
 ---
 
-## Phase 5: Deploy and live verification
+## Phase 7: Deploy and live verification
 
 ### Overview
 
-One deploy covering all four phases, then a ~4-credit live pass against the real vendor.
+One deploy covering all six preceding phases, then a ~4-credit live pass against the real vendor.
 
 ### Changes Required:
 
@@ -743,9 +1039,16 @@ One deploy covering all four phases, then a ~4-credit live pass against the real
 
 **Contract**: `npx supabase db push --linked` immediately followed by `npx wrangler deploy` — back to
 back, as S-07 and S-08 both did. Between the two commands the live Worker calls a signature that no
-longer exists and **every generation fails at persist, after the LLM has been paid for**. Confirm with
-`npx supabase migration list --linked` that both migrations are in sync. No new Worker secrets: the
-breaker uses the existing `SUPADATA_API_KEY`.
+longer exists and **every generation fails at persist, after the LLM has been paid for**. Only Phase 4's
+migration opens that window; the other three are additive and carry no ordering risk of their own.
+Confirm with `npx supabase migration list --linked` that **all four** migrations are in sync. No new
+Worker secrets: the breaker uses the existing `SUPADATA_API_KEY`.
+
+**This deploy is also when the refusal charge goes live for real users.** It is the only change in the
+slice that takes something from a user rather than saving the operator money, and it ships silently by
+design (D14). Worth a deliberate look at `credit_reservations` in the first day for settled rows with no
+`summary_id` — that is the charge, and its rate is the first evidence of whether the friction is
+proportionate.
 
 #### 2. Live verification pass
 
@@ -762,6 +1065,14 @@ hit, `resolved_via = 'stored'` and `metadata_via = 'stored'`); a caption-less vi
 and the **new** D3 copy visible in the UI); one metadata-only case where the transcript is warm but
 metadata is cold (expect +1, or +2 on a retry).
 
+Two additions from the 2026-08-01 scope extension, both free of extra Supadata spend:
+
+- The caption-less step now also asserts `http_status = 206` on its ledger row (P2) and a **1-credit drop
+  in the submitting user's balance** with a matching settled, summary-less `credit_reservations` row (P3).
+- Reconciliation gains a cross-check it could not make before: the `unavailable → 1` branch of the
+  per-outcome formula can be validated against the recorded status rather than against our own `outcome`
+  label. If those two ever disagree, the formula is wrong and the delta will say so.
+
 A step that comes in one credit *over* its expectation is not a discrepancy if the ledger shows two
 `metadata` rows — that is the 3-credit ceiling being exercised, and it is worth recording when it
 happens, since nothing else in this slice can tell us how often the retry actually fires.
@@ -774,7 +1085,7 @@ job path is now unreachable by construction and will never be verified at all.
 
 #### Automated Verification:
 
-- `npx supabase migration list --linked` shows both migrations applied
+- `npx supabase migration list --linked` shows all four migrations applied
 - The deployed Worker version is recorded
 - Reconciliation query: the per-outcome ledger total for the verification window equals the observed
   `usedCredits` delta
@@ -794,8 +1105,8 @@ This repo has no automated test suite (README, "Project status"), so verificatio
 automated/manual split above: `npm run lint` + `npm run build` + direct SQL assertions as the automated
 tier, and structured manual passes as the real coverage.
 
-**SQL assertions worth writing directly** (Phases 2 and 3, cheap and repeatable — Phase 3 is *entirely*
-this tier, which is why it is its own phase):
+**SQL assertions worth writing directly** (Phases 3, 4 and 5 — Phase 5 is *entirely* this tier, which is
+why it is its own phase):
 
 - One `persist_summary` overload, not two, after the swap.
 - `metadata_cache`, `supadata_budget` and `supadata_reservations` reachable by `service_role` only.
@@ -803,11 +1114,16 @@ this tier, which is why it is its own phase):
   null headers. This is the one piece of logic where a plausible-looking simplification under-counts.
 - **The concurrent-reserve assertion** (two sessions, one seat). Everything else in this slice can be
   checked by reading the code; this one cannot, and it is the property the reservation table exists for.
-  It is the whole reason Phase 3 is a phase.
+  It is the whole reason Phase 5 is a phase.
+- **The charge's replay assertion** (P3): the same `(user_id, request_id)` twice decrements once. Like
+  the concurrent-reserve case, this cannot be established by reading the code — it depends on an index
+  predicate (`status <> 'refunded'`) interacting with the insert, and getting it wrong bills a user
+  repeatedly for one action.
 
-**Manual scenarios by phase**: caption-less 422 copy and the 2 h window (P1); cache hit / miss and the
-D12 `videos` write (P2); the reserve/settle/refresh lifecycle in SQL (P3); the three breaker cases and
-fail-open (P4); the four-step credit pass (P5).
+**Manual scenarios by phase**: caption-less 422 copy and the 2 h window (P1, done); the 206/200 status
+rows and the metadata scope boundary (P2); the four charging exits, the exempt transient one and the
+replay case (P3); cache hit / miss and the D12 `videos` write (P4); the reserve/settle/refresh lifecycle
+in SQL (P5); the three breaker cases and fail-open (P6); the four-step credit pass (P7).
 
 ## Performance Considerations
 
@@ -824,17 +1140,24 @@ needed a `too_long` outcome to bound its rows. No pruning is needed at MVP scale
 
 ## Migration Notes
 
-Two migrations. `20260731120000_metadata_cache.sql` is the risky one — it drops and recreates
-`persist_summary`, so it must be pushed and deployed back to back (Phase 5). `20260731130000_supadata_budget.sql`
-is purely additive — which is what lets Phase 3 land it locally and prove it in SQL without any deploy
-coordination at all.
+Four migrations, applied in phase order. `20260731120000_metadata_cache.sql` (P4) is the only risky one
+— it drops and recreates `persist_summary`, so it must be pushed and deployed back to back (Phase 7).
+The other three are purely additive: `…100000_supadata_call_http_status` (P2) adds one nullable column,
+`…110000_charge_failed_transcript` (P3) adds one function and no table, and
+`…130000_supadata_budget` (P5) adds tables and functions but drops nothing — which is what lets each of
+those phases land locally and be proved in SQL without any deploy coordination at all.
 
-**Rollback**: reverting Phase 1 is a one-word change back to `auto` plus the copy. Reverting Phase 2
-requires restoring the 23-argument `persist_summary` and dropping `metadata_via`; existing rows carrying
-a non-null `metadata_via` are harmless to the old function, which simply never writes it. Reverting Phase
-3 is code-only — the three tables can be left in place, unread. A stranded `supadata_reservations` row
-after a Phase 4 revert affects nothing, because nothing reads it once the service is gone. Reverting
-Phase 4 alone leaves Phase 3's tables in place and unread — the split is a clean revert boundary too.
+**Rollback**: reverting Phase 1 is a one-word change back to `auto` plus the copy. Phase 2 is reverted by
+dropping the column, and leaving it in place costs nothing — nothing reads it. **Phase 3 is the one
+revert with a user-visible consequence**: dropping the call site stops future charges, but credits already
+taken are not returned by the revert. If it has been live, decide explicitly whether to refund the
+settled, summary-less rows — they are trivially identifiable, which is a reason to keep them queryable
+rather than to delete them. Reverting Phase 4 requires restoring the 23-argument `persist_summary` and
+dropping `metadata_via`; existing rows carrying a non-null `metadata_via` are harmless to the old
+function, which simply never writes it. Reverting Phase 5 is code-only — the three tables can be left in
+place, unread. A stranded `supadata_reservations` row after a Phase 6 revert affects nothing, because
+nothing reads it once the service is gone. Reverting Phase 6 alone leaves Phase 5's tables in place and
+unread — the split is a clean revert boundary too.
 
 ## References
 
@@ -843,6 +1166,10 @@ Phase 4 alone leaves Phase 3's tables in place and unread — the split is a cle
   `supadata-account-limits.md`, `supadata-metadata.md`
 - The pattern this plan mirrors throughout: `context/changes/persist-time-and-cost/plan.md` (S-07)
 - S-07's live findings, including the four hand-over items: `context/changes/persist-time-and-cost/reviews/manual-verification.md`
+- Phase 1's verification record, which motivated the D13/D14 scope extension:
+  `context/changes/transcript-cost-guardrail/reviews/manual-verification-phase-1.md`
+- The credit ledger this slice's charge reuses: `supabase/migrations/20260720170000_generation_lock_lease.sql`
+  and `src/lib/services/credits.ts` (`beginGeneration`'s outcome union, the shape D14's RPC mirrors)
 - Cache + ledger precedent: `supabase/migrations/20260728120000_generation_telemetry.sql`,
   `src/lib/services/transcript-cache.ts`
 
@@ -869,77 +1196,115 @@ Phase 4 alone leaves Phase 3's tables in place and unread — the split is a cle
 Record: `reviews/manual-verification-phase-1.md`. All four passed; Supadata delta 3 reconciled exactly
 against the per-outcome ledger total.
 
-### Phase 2: `metadata_cache` and the hit marker
+### Phase 2: `http_status` on the transcript ledger
 
 #### Automated
 
 - [ ] 2.1 Migration applies cleanly to the local stack
-- [ ] 2.2 Exactly one `persist_summary` overload exists afterwards
-- [ ] 2.3 `metadata_cache` and `summaries.metadata_via` have the intended constraints and grants
+- [ ] 2.2 `supadata_calls.http_status` exists, nullable, with no CHECK constraint
+- [ ] 2.3 Pre-migration rows still read `null` — nothing was backfilled
 - [ ] 2.4 Type checking and lint pass
 - [ ] 2.5 Build succeeds
 
 #### Manual
 
-- [ ] 2.6 First generation: `metadata_via = 'fetched'`, ledger row written, cache row written
-- [ ] 2.7 Second generation: `metadata_via = 'stored'`, no new ledger row, `metadata_ms` near zero
-- [ ] 2.8 D12 — a cache hit still populates the per-user `videos` row
-- [ ] 2.9 A row aged past 30 days produces a fresh fetch
+- [ ] 2.6 Caption-less video records `http_status = 206` with `outcome = 'unavailable'` and null billable
+- [ ] 2.7 Captioned video records `http_status = 200` with `billable_credits = 1`
+- [ ] 2.8 The same generation's `metadata` row has `http_status = null` — scope boundary holds
 
-### Phase 3: The reservation ledger
+### Phase 3: Charging for a refusal in the billable class
 
 #### Automated
 
 - [ ] 3.1 Migration applies cleanly to the local stack
-- [ ] 3.2 `supadata_budget` cannot hold a second row
-- [ ] 3.3 `supadata_budget` and `supadata_reservations` are reachable by `service_role` only
-- [ ] 3.4 Concurrent reserves do not overdraw — one id, one refusal, never two ids
-- [ ] 3.5 A stale unsettled reservation is swept and its credit returns to the pool
-- [ ] 3.6 A settled reservation with `actual_credits = null` still counts at its reserved maximum
-- [ ] 3.7 A settled reservation with a real `actual_credits` counts at that figure
-- [ ] 3.8 `save_supadata_budget` deletes reservations before the new `read_at`, keeps later ones
-- [ ] 3.9 Exactly one of two concurrent stale readers gets `should_refresh = true`
-- [ ] 3.10 Reconciliation query returns 1 for `unavailable`/null-header, 0 for `error`/null-header
+- [ ] 3.2 `charge_failed_transcript` is executable by `service_role` only
+- [ ] 3.3 The same `(user_id, request_id)` twice returns `'replay'` and decrements once
+- [ ] 3.4 A zero balance returns `'insufficient'` and writes no row
+- [ ] 3.5 The charge is invoked at exactly four 422 sites, not five
+- [ ] 3.6 Type checking and lint pass
+- [ ] 3.7 Build succeeds
 
 #### Manual
 
-- [ ] 3.11 `npm run lint` and `npm run build` unchanged from Phase 2 (no TypeScript in this phase)
-- [ ] 3.12 The reserve → settle → refresh cycle leaves `supadata_reservations` empty, walked by hand
+- [ ] 3.8 Cold caption-less video: 422, balance −1, one settled reservation with no `summary_id`
+- [ ] 3.9 Cache-hit resubmit with a new `requestId`: balance −1 again, no Supadata call made
+- [ ] 3.10 Resubmit with the same `requestId`: balance does not move a second time
+- [ ] 3.11 A seeded `'empty'` cache row charges; a forced transient failure does not
+- [ ] 3.12 A successful generation still costs exactly `summaryCost` — no stacking
+- [ ] 3.13 Balance 0: the 402 gate answers first and no charge row is written
 
-### Phase 4: Wiring the breaker
+### Phase 4: `metadata_cache` and the hit marker
 
 #### Automated
 
-- [ ] 4.1 Type checking and lint pass
-- [ ] 4.2 Build succeeds
-- [ ] 4.3 The sweep window is passed to the RPC, not duplicated in SQL
-- [ ] 4.4 Both call sites settle in a `finally`, not on the happy path only
+- [ ] 4.1 Migration applies cleanly to the local stack
+- [ ] 4.2 Exactly one `persist_summary` overload exists afterwards
+- [ ] 4.3 `metadata_cache` and `summaries.metadata_via` have the intended constraints and grants
+- [ ] 4.4 Type checking and lint pass
+- [ ] 4.5 Build succeeds
 
 #### Manual
 
-- [ ] 4.5 Cold video refused before any Supadata call under an overridden reserve, with the breaker's
+- [ ] 4.6 First generation: `metadata_via = 'fetched'`, ledger row written, cache row written
+- [ ] 4.7 Second generation: `metadata_via = 'stored'`, no new ledger row, `metadata_ms` near zero
+- [ ] 4.8 D12 — a cache hit still populates the per-user `videos` row
+- [ ] 4.9 A row aged past 30 days produces a fresh fetch
+
+### Phase 5: The reservation ledger
+
+#### Automated
+
+- [ ] 5.1 Migration applies cleanly to the local stack
+- [ ] 5.2 `supadata_budget` cannot hold a second row
+- [ ] 5.3 `supadata_budget` and `supadata_reservations` are reachable by `service_role` only
+- [ ] 5.4 Concurrent reserves do not overdraw — one id, one refusal, never two ids
+- [ ] 5.5 A stale unsettled reservation is swept and its credit returns to the pool
+- [ ] 5.6 A settled reservation with `actual_credits = null` still counts at its reserved maximum
+- [ ] 5.7 A settled reservation with a real `actual_credits` counts at that figure
+- [ ] 5.8 `save_supadata_budget` deletes reservations before the new `read_at`, keeps later ones
+- [ ] 5.9 Exactly one of two concurrent stale readers gets `should_refresh = true`
+- [ ] 5.10 Reconciliation query returns 1 for `unavailable`/null-header, 0 for `error`/null-header
+
+#### Manual
+
+- [ ] 5.11 `npm run lint` and `npm run build` unchanged from Phase 4 (no TypeScript in this phase)
+- [ ] 5.12 The reserve → settle → refresh cycle leaves `supadata_reservations` empty, walked by hand
+
+### Phase 6: Wiring the breaker
+
+#### Automated
+
+- [ ] 6.1 Type checking and lint pass
+- [ ] 6.2 Build succeeds
+- [ ] 6.3 The sweep window is passed to the RPC, not duplicated in SQL
+- [ ] 6.4 Both call sites settle in a `finally`, not on the happy path only
+
+#### Manual
+
+- [ ] 6.5 Cold video refused before any Supadata call under an overridden reserve, with the breaker's
       own 503 copy visible in the UI — not the "isn't configured" fallback
-- [ ] 4.6 A budget refusal consumes no transcript rate-limit attempt
-- [ ] 4.7 Warm video still generates under the same override
-- [ ] 4.8 Warm transcript + cold metadata: summary produced, `metadata_via = 'skipped_budget'`
-- [ ] 4.9 No unsettled reservation survives a completed generation or a mid-fetch throw
-- [ ] 4.10 Unreadable budget state: generation proceeds and the state is reported (fail-open)
-- [ ] 4.11 A hung and a malformed `/v1/me` both fail open, report, and strand no reservation
-- [ ] 4.12 Warn fires at most once per TTL, including for two simultaneous stale readers
-- [ ] 4.13 A refresh-triggering generation still succeeds — no `limit-exceeded` on the paid call
-- [ ] 4.14 Overrides reverted
+- [ ] 6.6 A budget refusal consumes no transcript rate-limit attempt
+- [ ] 6.7 Warm video still generates under the same override
+- [ ] 6.8 Warm transcript + cold metadata: summary produced, `metadata_via = 'skipped_budget'`
+- [ ] 6.9 No unsettled reservation survives a completed generation or a mid-fetch throw
+- [ ] 6.10 Unreadable budget state: generation proceeds and the state is reported (fail-open)
+- [ ] 6.11 A hung and a malformed `/v1/me` both fail open, report, and strand no reservation
+- [ ] 6.12 Warn fires at most once per TTL, including for two simultaneous stale readers
+- [ ] 6.13 A refresh-triggering generation still succeeds — no `limit-exceeded` on the paid call
+- [ ] 6.14 Overrides reverted
 
-### Phase 5: Deploy and live verification
+### Phase 7: Deploy and live verification
 
 #### Automated
 
-- [ ] 5.1 `migration list --linked` shows both migrations applied
-- [ ] 5.2 Deployed Worker version recorded
-- [ ] 5.3 Reconciliation: per-outcome ledger total equals the observed `usedCredits` delta
+- [ ] 7.1 `migration list --linked` shows all four migrations applied
+- [ ] 7.2 Deployed Worker version recorded
+- [ ] 7.3 Reconciliation: per-outcome ledger total equals the observed `usedCredits` delta
 
 #### Manual
 
-- [ ] 5.4 Total spend within the ~4-credit budget (≤6 if metadata retries fire)
-- [ ] 5.5 Repeat generation moves `usedCredits` by 0
-- [ ] 5.6 Caption-less video shows the new copy live
-- [ ] 5.7 `roadmap.md` §S-09 and the Linear issue reflect completion
+- [ ] 7.4 Total spend within the ~4-credit budget (≤6 if metadata retries fire)
+- [ ] 7.5 Repeat generation moves `usedCredits` by 0
+- [ ] 7.6 Caption-less video shows the new copy live, records `http_status = 206`, and costs the
+      submitting user 1 credit
+- [ ] 7.7 `roadmap.md` §S-09 and the Linear issue reflect completion

@@ -1,13 +1,30 @@
 ---
 change_id: transcript-cost-guardrail
 title: Transcript cost guardrail
-status: impl_reviewed
+status: implementing
 created: 2026-07-31
 updated: 2026-08-01
 archived_at: null
 ---
 
 ## Notes
+
+**Scope extended 2026-08-01 (user) — plan is now 7 phases, not 5.** Phase 1's verification surfaced two
+gaps, both now phases of their own, inserted as 2 and 3 with everything downstream shifted by two:
+
+- **D13 — `supadata_calls.http_status`**, transcript calls only, nullable, no backfill. Makes the
+  billable 206 an observation instead of an inference from our own `outcome` label — which the
+  reconciliation formula depends on being right.
+- **D14 — 1 app credit for a refusal in the billable class.** Four of the five 422 exits charge; the
+  transient `failed`/`timeout` one is exempt, because `error` + a null header means the cost is
+  *unknown* and charging would resolve our ambiguity against the user. The cache-hit case charges even
+  though the operator paid nothing — a flat rule beats one that costs differently depending on cache
+  state the user cannot see. **Ships silently by the user's explicit call**: copy and 422 body unchanged.
+
+D14 **removes** the original "not changing what a summary costs the user in app credits" boundary. The
+replacement is narrower: `summaryCost` for a *delivered* summary is still S-05's, untouched; this slice
+prices only the refusal. Phase 3 is placed before the breaker because the charge is per-user and bites
+from the first event, while the breaker only engages at plan exhaustion and refuses everyone at once.
 
 **Phase 1 manually verified 2026-08-01 (local)** — rows 1.5–1.8 all pass; record at
 `reviews/manual-verification-phase-1.md`. Supadata delta 3 reconciled exactly against the per-outcome
