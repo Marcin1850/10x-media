@@ -861,10 +861,13 @@ Phase 4 alone leaves Phase 3's tables in place and unread — the split is a cle
 
 #### Manual
 
-- [ ] 1.5 Captioned video still summarizes end to end
-- [ ] 1.6 Caption-less video shows the new 422 copy, not the client fallback
-- [ ] 1.7 `'empty'` transcript still shows the generic copy
-- [ ] 1.8 `unavailable` cache row expires in 2 h, not 24 h
+- [x] 1.5 Captioned video still summarizes end to end — 2026-08-01, local
+- [x] 1.6 Caption-less video shows the new 422 copy, not the client fallback — 2026-08-01, local
+- [x] 1.7 `'empty'` transcript still shows the generic copy — 2026-08-01, local
+- [x] 1.8 `unavailable` cache row expires in 2 h, not 24 h — 2026-08-01, local
+
+Record: `reviews/manual-verification-phase-1.md`. All four passed; Supadata delta 3 reconciled exactly
+against the per-outcome ledger total.
 
 ### Phase 2: `metadata_cache` and the hit marker
 

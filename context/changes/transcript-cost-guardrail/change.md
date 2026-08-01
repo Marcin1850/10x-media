@@ -9,6 +9,13 @@ archived_at: null
 
 ## Notes
 
+**Phase 1 manually verified 2026-08-01 (local)** — rows 1.5–1.8 all pass; record at
+`reviews/manual-verification-phase-1.md`. Supadata delta 3 reconciled exactly against the per-outcome
+ledger total, independently re-confirming that a `null` `billable_credits` on a 206 means 1 credit.
+Phase 1 is complete and stays **undeployed** — Phase 5 is the single deploy gate. Caught during
+pre-flight: a dev server from 2026-07-29 was still holding port 4321 and serving pre-Phase-1 code;
+killed before testing. Worth re-checking on every future manual pass.
+
 **Phase 1 impl-review triaged 2026-08-01** — verdict APPROVED (0 critical, 1 warning, 2 observations);
 all 3 findings fixed, none skipped. F1 synced the stale roadmap surfaces and Linear MAR-15 (Todo → In
 Progress, Phase 1 comment posted, description corrected). F2 reworded the "permanent / retrying will
