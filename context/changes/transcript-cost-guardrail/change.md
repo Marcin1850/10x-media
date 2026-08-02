@@ -1,13 +1,23 @@
 ---
 change_id: transcript-cost-guardrail
 title: Transcript cost guardrail
-status: plan_reviewed
+status: implementing
 created: 2026-07-31
 updated: 2026-08-02
 archived_at: null
 ---
 
 ## Notes
+
+**Phase 2 adaptation, approved 2026-08-02 (user).** The plan's Phase 2 contract says "No RPC or grant
+change — `supadata_calls` is written through the existing insert path." That existing path,
+`record_supadata_calls` (`20260728120000_generation_telemetry.sql:305-334`), enumerates its columns
+explicitly, so the new column alone would have stayed permanently null while the service sent the value
+and the RPC silently dropped it — a failure with no error anywhere, and one that would have sunk manual
+rows 2.6–2.9. Fixed with a `create or replace` on the **same** `(jsonb)` signature inside the same
+migration: no drop, no signature change, grants preserved, still no deploy window (an older Worker that
+omits the key simply writes null, which is one of the column's three documented meanings). The phase
+keeps its "purely additive" character; only the "no RPC change" sub-clause was wrong.
 
 **Scope extended 2026-08-01 (user) — plan is now 7 phases, not 5.** Phase 1's verification surfaced two
 gaps, both now phases of their own, inserted as 2 and 3 with everything downstream shifted by two:

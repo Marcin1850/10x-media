@@ -148,8 +148,10 @@ function isJobResult(body: unknown): body is JobResult<Transcript> {
  *
  * A blown `timeoutMs` rejects `fetch` itself with a `TimeoutError`, which is deliberately NOT wrapped
  * in a `BilledSupadataError`: no response arrived, so nothing was reported, and `billedFromError`
- * correctly yields `null` rather than inventing a figure. The caller's existing metering records the
- * failed call and the endpoint maps it to the same 502 as any other transport failure.
+ * correctly yields `null` rather than inventing a figure. `httpStatusFromError` yields `null` for the
+ * same reason and it is the honest answer, not a gap — there IS no status when the vendor never
+ * answered. Do not invent one. The caller's existing metering records the failed call and the
+ * endpoint maps it to the same 502 as any other transport failure.
  *
  * `isValid` runs on the parsed 2xx body INSIDE this boundary, so a malformed success leaves as a
  * `BilledSupadataError` still carrying the header, exactly like a malformed failure. A `2xx` is not a
@@ -160,27 +162,32 @@ async function supadataGet<T>(
   apiKey: string,
   timeoutMs: number,
   isValid: (body: unknown) => body is T,
-): Promise<{ body: T; billableCredits: number | null }> {
+): Promise<{ body: T; billableCredits: number | null; httpStatus: number }> {
   const response = await fetch(`${SUPADATA_BASE_URL}${path}`, {
     headers: { "x-api-key": apiKey, "Content-Type": "application/json" },
     signal: AbortSignal.timeout(timeoutMs),
   });
 
   // Read before any throw: an error response is still a billable call, and the row recording it is the
-  // single most valuable thing this ledger captures.
+  // single most valuable thing this ledger captures. `response.status` is read here for the same
+  // reason and travels the same two paths (D13) — returned on success, carried on the error
+  // otherwise. A `206 transcript-unavailable` leaves through the `!response.ok` arm below, so the
+  // success path alone would record nothing for the exact case this column exists for.
   const billableCredits = readBillableCredits(response);
+  const httpStatus = response.status;
   const isJson = response.headers.get("content-type")?.includes("application/json") ?? false;
 
   if (!response.ok) {
     const body = isJson ? ((await response.json().catch(() => null)) as unknown) : null;
-    if (isErrorBody(body)) throw new BilledSupadataError(body, billableCredits);
+    if (isErrorBody(body)) throw new BilledSupadataError(body, billableCredits, httpStatus);
     throw new BilledSupadataError(
       {
         error: "internal-error",
         message: "Unexpected error response format",
-        details: `Supadata responded ${response.status}`,
+        details: `Supadata responded ${httpStatus}`,
       },
       billableCredits,
+      httpStatus,
     );
   }
 
@@ -192,6 +199,7 @@ async function supadataGet<T>(
         details: "Expected JSON response but received different content type",
       },
       billableCredits,
+      httpStatus,
     );
   }
 
@@ -206,6 +214,7 @@ async function supadataGet<T>(
         details: error instanceof Error ? error.message : "Unknown error",
       },
       billableCredits,
+      httpStatus,
     );
   }
 
@@ -214,38 +223,58 @@ async function supadataGet<T>(
       {
         error: "internal-error",
         message: "Unexpected response shape",
-        details: `Supadata returned ${response.status} with a body this endpoint cannot read`,
+        details: `Supadata returned ${httpStatus} with a body this endpoint cannot read`,
       },
       billableCredits,
+      httpStatus,
     );
   }
 
-  return { body, billableCredits };
+  return { body, billableCredits, httpStatus };
 }
 
 /**
- * A `SupadataError` that also carries what the failing response reported billing.
+ * A `SupadataError` that also carries what the failing response reported billing, and the status it
+ * reported it under.
  *
  * It extends `SupadataError` rather than wrapping it precisely so that every existing
  * `instanceof SupadataError` / `error.error === …` check keeps working unchanged — including
- * `metadata.ts`'s `isRetryable`. The extra field is only read by the metering in this module; nothing
- * downstream needs to know it exists.
+ * `metadata.ts`'s `isRetryable`. The extra fields are only read by the metering in this module;
+ * nothing downstream needs to know they exist.
+ *
+ * `httpStatus` is non-optional in the constructor on purpose: every throw site inside `supadataGet`
+ * has a `Response` in hand, so a missing status there could only mean someone forgot. The only
+ * genuine "no status" case is a rejection that never reached this class at all, and
+ * `httpStatusFromError` answers `null` for it.
  */
 class BilledSupadataError extends SupadataError {
   readonly billableCredits: number | null;
+  readonly httpStatus: number | null;
 
   constructor(
     body: { error: SupadataError["error"]; message?: string; details?: string },
     billableCredits: number | null,
+    httpStatus: number | null,
   ) {
     super(body);
     this.billableCredits = billableCredits;
+    this.httpStatus = httpStatus;
   }
 }
 
 /** What a thrown error reported billing, when it happens to know. Never a guess: `null` otherwise. */
 function billedFromError(error: unknown): number | null {
   return error instanceof BilledSupadataError ? error.billableCredits : null;
+}
+
+/**
+ * What status a thrown error carries, when it happens to know (D13). Mirrors `billedFromError`
+ * exactly, including its direction: anything that is not a `BilledSupadataError` never saw a
+ * response — a transport rejection, a DNS failure, an `AbortSignal.timeout` — so `null` here is the
+ * truthful "the vendor never answered", not a status we failed to record.
+ */
+function httpStatusFromError(error: unknown): number | null {
+  return error instanceof BilledSupadataError ? error.httpStatus : null;
 }
 
 /**
@@ -289,30 +318,40 @@ export async function fetchTranscript(
   // never happened — double-counting the same failure's reported credits. One row per real call.
   let result: TranscriptOrJobId;
   let billableCredits: number | null;
+  let httpStatus: number;
   try {
     // Narrowed at the transport boundary rather than cast: a bare cast made `"jobId" in result` a
     // property access on an unvalidated external value, and its throw discarded the header (F4).
     const response = await supadataGet(`/transcript${query}`, apiKey, TRANSCRIPT_TIMEOUT_MS, isTranscriptOrJobId);
     result = response.body;
     billableCredits = response.billableCredits;
+    httpStatus = response.httpStatus;
   } catch (error) {
     if (error instanceof SupadataError && error.error === "transcript-unavailable") {
       // Billable despite producing nothing (see supadata-transcript.md §Pricing). This row, now
       // carrying a MEASURED credit figure rather than an assumed one, is the single most valuable
-      // thing this ledger captures.
+      // thing this ledger captures — and with D13's status, the one row where `outcome` and
+      // `http_status` can be checked against each other: the reconciliation formula prices this case
+      // at 1 credit on the strength of `outcome` alone, and the recorded 206 is what corroborates it.
       meter?.record({
         operation: "transcript",
         outcome: "unavailable",
 
         billableCredits: billedFromError(error),
+        httpStatus: httpStatusFromError(error),
       });
       return { ok: false, reason: "unavailable" };
     }
+    // The failure arm carries the status too. This is the half that is easy to leave unplumbed
+    // because the success path looks complete, and it is what will later resolve the OTHER ambiguous
+    // null in this ledger: a `billable_credits` of null on an `error` row means "unknown", and the
+    // status is the first evidence of which kind of unknown it was.
     meter?.record({
       operation: "transcript",
       outcome: "error",
 
       billableCredits: billedFromError(error),
+      httpStatus: httpStatusFromError(error),
     });
     throw error;
   }
@@ -320,16 +359,16 @@ export async function fetchTranscript(
   if ("jobId" in result) {
     // The `202` is recorded here with whatever it reported; whether the charge lands on it or on the
     // polls is exactly the open question the ledger exists to answer, so nothing is assumed either way.
-    meter?.record({ operation: "transcript", outcome: "ok", resolvedVia: "job", billableCredits });
+    meter?.record({ operation: "transcript", outcome: "ok", resolvedVia: "job", billableCredits, httpStatus });
     return await pollTranscriptJob(result.jobId, apiKey, meter);
   }
 
   if (typeof result.content !== "string") {
-    meter?.record({ operation: "transcript", outcome: "unavailable", billableCredits });
+    meter?.record({ operation: "transcript", outcome: "unavailable", billableCredits, httpStatus });
     return { ok: false, reason: "unavailable" };
   }
 
-  meter?.record({ operation: "transcript", outcome: "ok", resolvedVia: "inline", billableCredits });
+  meter?.record({ operation: "transcript", outcome: "ok", resolvedVia: "inline", billableCredits, httpStatus });
   return {
     ok: true,
     content: result.content,
@@ -343,6 +382,13 @@ export async function fetchTranscript(
  * Polls a Whisper job to completion. Polls are documented FREE, but the header is recorded rather than
  * assumed zero — whether the `202` or the polls carry the charge is precisely what Phase 5 settles.
  * They stay a distinct `operation` either way, so the two are never conflated in the ledger.
+ *
+ * These arms deliberately do NOT record `httpStatus` (D13). The column exists to corroborate the
+ * reconciliation formula's `unavailable → 1 credit` branch, which only ever reads `transcript` rows;
+ * `transcript_poll` is a distinct `operation`, so a null here reads as "out of scope", exactly as the
+ * column comment in `20260731100000_supadata_call_http_status.sql` documents. Under D1's
+ * `mode: "native"` this whole function is unreachable anyway, so plumbing it would add a branch that
+ * can never execute to justify itself.
  */
 async function pollTranscriptJob(jobId: string, apiKey: string, meter?: SupadataMeter): Promise<TranscriptResult> {
   let interval = JOB_POLL_INITIAL_INTERVAL_MS;

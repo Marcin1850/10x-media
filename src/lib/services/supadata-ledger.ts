@@ -13,6 +13,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * nothing (or no response arrived), `0` means it reported free. Keeping those distinct is what makes
  * a reconciliation gap against `GET /v1/me` diagnosable instead of merely visible. Nothing here
  * derives a price from `resolvedVia` — see the plan's "No inferred credit figure, anywhere".
+ *
+ * `httpStatus` (S-09 D13) extends that same principle to the reconciliation formula itself. Its
+ * `unavailable → 1 credit` branch is currently justified by `outcome`, which is OUR label applied at
+ * the call site rather than anything the vendor said; recording the status makes the billable 206 an
+ * observation, and lets the label and the status be checked against each other.
  */
 
 export type SupadataOperation = "transcript" | "transcript_poll" | "metadata";
@@ -26,6 +31,18 @@ export interface SupadataCallRecord {
   resolvedVia?: string | null;
   /** Verbatim `x-billable-requests`. `null` = not reported; `0` = reported free. Never inferred. */
   billableCredits: number | null;
+  /**
+   * The vendor's HTTP status, verbatim (S-09 D13). Populated by `transcript` calls only — the whole
+   * point is to make "a 206 costs a credit" an OBSERVATION rather than an inference from our own
+   * `outcome` label, and the reconciliation formula only branches on transcript rows.
+   *
+   * Optional and defaulting to `null` exactly as `resolvedVia` does, which is what keeps `metadata`
+   * and `transcript_poll` out of scope without a special case: they simply do not pass it. `null`
+   * also covers the honest third case — a request that never produced a response at all, where
+   * there IS no status to record. See the column comment in
+   * `20260731100000_supadata_call_http_status.sql`, which enumerates all three.
+   */
+  httpStatus?: number | null;
 }
 
 interface LedgerRow {
@@ -36,6 +53,7 @@ interface LedgerRow {
   outcome: SupadataCallOutcome;
   resolved_via: string | null;
   billable_credits: number | null;
+  http_status: number | null;
 }
 
 export interface SupadataMeter {
@@ -54,7 +72,7 @@ export function createSupadataMeter(): SupadataMeter {
   const rows: LedgerRow[] = [];
 
   return {
-    record({ operation, outcome, youtubeId = null, resolvedVia = null, billableCredits }) {
+    record({ operation, outcome, youtubeId = null, resolvedVia = null, billableCredits, httpStatus = null }) {
       rows.push({
         user_id: null,
         summary_id: null,
@@ -63,6 +81,7 @@ export function createSupadataMeter(): SupadataMeter {
         outcome,
         resolved_via: resolvedVia,
         billable_credits: billableCredits,
+        http_status: httpStatus,
       });
     },
     attachSummary(summaryId) {
