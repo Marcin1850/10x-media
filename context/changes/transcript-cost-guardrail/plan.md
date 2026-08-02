@@ -1489,11 +1489,11 @@ against the per-outcome ledger total.
 
 #### Automated
 
-- [x] 2.1 Migration applies cleanly to the local stack
-- [x] 2.2 `supadata_calls.http_status` exists, nullable, with no CHECK constraint
-- [x] 2.3 Pre-migration rows still read `null` — nothing was backfilled
-- [x] 2.4 Type checking and lint pass
-- [x] 2.5 Build succeeds
+- [x] 2.1 Migration applies cleanly to the local stack — a5efa28
+- [x] 2.2 `supadata_calls.http_status` exists, nullable, with no CHECK constraint — a5efa28
+- [x] 2.3 Pre-migration rows still read `null` — nothing was backfilled — a5efa28
+- [x] 2.4 Type checking and lint pass — a5efa28
+- [x] 2.5 Build succeeds — a5efa28
 
 #### Manual
 
