@@ -27,11 +27,17 @@ concrete enough to act on, and both are now phases of their own:
 
 ## Current State Analysis
 
-Every fact below was verified against the working tree, not carried over from the roadmap.
+**This section is the pre-Phase-1 baseline, not the current working tree.** Every fact below was verified
+against the tree as it stood on 2026-07-31, before any phase landed — that is what makes it the record of
+*why* each phase exists. Phase 1 has since shipped locally (`TRANSCRIPT_MODE = "native"` at
+`transcript.ts:72-99`, the 2 h negative window, the split 422 copy), so the first paragraph below no
+longer describes the code; it describes what the code was rescued from. **Nothing is deployed** — Phase 7
+is still the first push to production, so the baseline remains exactly true of what live users are
+running today. Later phases were planned against this baseline and are unaffected.
 
-**The exposure is live and unbounded.** `fetchTranscript` builds its query inline at
-`src/lib/services/transcript.ts:255` with `mode=auto`, whose documented behaviour is "try native, fall
-back to generate" — silently. Supadata bills 2 credits/minute for a generated transcript against a
+**The exposure is live and unbounded** (as of the baseline; closed locally by Phase 1).
+`fetchTranscript` built its query inline at `src/lib/services/transcript.ts:255` with `mode=auto`, whose
+documented behaviour is "try native, fall back to generate" — silently. Supadata bills 2 credits/minute for a generated transcript against a
 `Free (100/mo)` plan, so one ~50-minute video drains the month. `HARD_MAX_TRANSCRIPT_CHARS` cannot
 help: it is evaluated at `generate.ts:410` and `:462`, both *after* the fetch that spends the money.
 
@@ -410,9 +416,11 @@ are CHECKed because code branches on them, and nothing branches on a status code
 default: every pre-migration row keeps `null`, which reads correctly as "not recorded" (D13). No RPC or
 grant change — `supadata_calls` is written through the existing insert path.
 
-A column comment must state the two things a reader needs: that it is populated for
-`operation = 'transcript'` only, and that `null` therefore means either "pre-migration row" or
-"not a transcript call" — never "the vendor sent no status".
+A column comment must state what a reader needs to interpret a null, and there are **three** ways to get
+one: a pre-migration row, a call that is not `operation = 'transcript'` (the only operation populated),
+and a transcript call whose request never produced a response at all — a timeout or transport rejection,
+where no status exists to record. What `null` never means is "the vendor answered without a status".
+The third case is the one a reader is most likely to misread as missing data, so name it explicitly.
 
 #### 2. Plumb the status through the meter
 
@@ -423,10 +431,37 @@ A column comment must state the two things a reader needs: that it is populated 
 **Contract**: `SupadataCallRecord` (and the `record(...)` signature at `supadata-ledger.ts:57`) gains an
 optional `httpStatus?: number`, defaulting to `null` exactly as `resolvedVia` and `billableCredits`
 already do — so **no existing call site needs to change**, which is what keeps `metadata` and
-`transcript_poll` out of scope without a special case. `fetchTranscript` passes `response.status` on
-every arm that records a call, including the failure arms: a `206` is the case this phase exists for, but
-a `4xx`/`5xx` recorded alongside `outcome = 'error'` is what will later resolve the *other* ambiguous
-null the plan documents.
+`transcript_poll` out of scope without a special case. `fetchTranscript` records the status on every arm
+that records a call, including the failure arms: a `206` is the case this phase exists for, but a
+`4xx`/`5xx` recorded alongside `outcome = 'error'` is what will later resolve the *other* ambiguous null
+the plan documents.
+
+**`fetchTranscript` cannot reach `response.status` today, and this is the whole work of the phase.** The
+`Response` never leaves `supadataGet`, which returns `{ body, billableCredits }` (`transcript.ts:158-224`)
+and throws `BilledSupadataError` carrying `billableCredits` alone (`:234-244`). So "pass `response.status`"
+is not an instruction that can be followed as written; the status needs the same two-path treatment
+`billableCredits` already has, and the plan specifies both paths rather than leaving the failure arm to
+be discovered mid-implementation:
+
+- **Success path**: `supadataGet` returns `{ body, billableCredits, httpStatus }`, reading
+  `response.status` beside the existing `readBillableCredits(response)` call at `:171` — the one place
+  that already exists for "read it before anything can throw".
+- **Failure path**: `BilledSupadataError` takes and retains `httpStatus: number | null`, and a
+  `httpStatusFromError(error)` helper mirrors `billedFromError` (`:246-249`) exactly, returning `null`
+  for anything that is not a `BilledSupadataError`. The four in-helper throw sites (`:176`, `:188`,
+  `:202`, `:213`) pass `response.status`; the transport-rejection case — no response at all — keeps
+  `null`, which reads correctly as "the vendor never answered" rather than as a status we failed to
+  record.
+
+Both `fetchTranscript`'s recording arms and `pollTranscriptJob`'s then read the status the same way they
+already read the billed figure. `httpStatus` stays optional on the record, so the poll arms may pass it
+without widening this phase's scope — but the migration's column comment stays true either way, since
+`transcript_poll` is a distinct `operation`.
+
+**Do not invent a status for the `Response`-less rejection.** A timeout or a DNS failure produced no
+response, so there is no status to record and `null` is the honest answer — the same kind of null as an
+unreported `x-billable-requests` header. This is a **third** meaning for `null` and the column comment
+must say so; see the migration above.
 
 **Scope boundary, stated because the temptation is obvious**: `fetchVideoMetadata` is **not** touched
 (user's call). Metadata's null-billable case is a *failed* call billed 0 — knowing its status would be
@@ -451,6 +486,9 @@ into a phase that otherwise has no behaviour risk at all.
 - A captioned video records `http_status = 200` with `billable_credits = 1`.
 - The `metadata` row written by the same generation has `http_status = null` — confirming the scope
   boundary holds rather than leaking through a shared helper.
+- A forced vendor error (a bad key, or a stubbed non-2xx) records that status alongside
+  `outcome = 'error'` — the failure arm carries the status too, which is the half that needs
+  `httpStatusFromError` and is easy to leave unplumbed because the success path looks complete.
 
 **Implementation Note**: Pause here for manual confirmation before starting Phase 3. Nothing is deployed;
 this migration reaches production in Phase 7.
@@ -491,14 +529,19 @@ not. Recorded here so a later review sees a decision rather than an oversight.
 **Intent**: Debit one credit and record it as already-settled, in a single atomic statement, keyed for
 idempotency by the caller's `request_id`.
 
-**Contract**: One function, no new table — `credit_reservations` is the right home and already has the
-constraints this needs.
+**Contract**: One new column and two functions, no new table — `credit_reservations` is the right home
+and already has the constraints this needs.
 
-*`charge_failed_transcript(p_user_id uuid, p_request_id uuid, p_amount integer)`* — inside one
-transaction: lock the user's `user_credits` row, and if the balance covers `p_amount`, decrement it and
-insert a `credit_reservations` row with `status = 'settled'` and `resolved_at = now()`. Inserted
-**settled, never `'reserved'`** — there is no work between reserve and settle, and a `'reserved'` row is
-what the hourly reconciliation sweep refunds.
+*`credit_reservations.refusal_reason`* — `text`, nullable, `check (refusal_reason is null or
+refusal_reason in ('unavailable', 'empty', 'whitespace'))`. Null on every existing row and on every
+row a normal generation writes; non-null **only** on a row written by the charge below. This column is
+what makes the charge replayable — see the retry contract below, which is the reason it exists.
+
+*`charge_failed_transcript(p_user_id uuid, p_request_id uuid, p_amount integer, p_refusal_reason text)`*
+— inside one transaction: lock the user's `user_credits` row, and if the balance covers `p_amount`,
+decrement it and insert a `credit_reservations` row with `status = 'settled'`, `resolved_at = now()`
+and the classification. Inserted **settled, never `'reserved'`** — there is no work between reserve and
+settle, and a `'reserved'` row is what the hourly reconciliation sweep refunds.
 
 Returns a discriminated outcome mirroring `begin_generation`'s vocabulary rather than inventing a second
 one: `'charged'` with the new balance, `'replay'` when `(user_id, request_id)` already carries a
@@ -513,18 +556,56 @@ call, so reaching this function with too little credit means the balance changed
 is simply skipped — the user still gets their 422. Refusing to answer because we could not bill would be
 strictly worse for someone we already declined to serve.
 
+*`get_refusal_replay(p_user_id uuid, p_request_id uuid)`* — returns the `refusal_reason` of the
+non-refunded `credit_reservations` row for that key, or null when there is none. Read-only, definer,
+`service_role` only. Trivial, and it exists for the reason below.
+
+**The retry contract: a repeated `requestId` must replay the 422, not turn into a 409.** This is the
+non-obvious half of Phase 3 and the plan previously stopped one step short of it. Idempotency here is
+*not* satisfied by "the balance does not move a second time" — the reply must also be the same reply.
+
+The order that makes this necessary is already in the code. `runGeneration` probes
+`beginGeneration(… amount: null)` at `generate.ts:282-296`, **before** any transcript work and therefore
+before every 422 exit this phase charges at. Our charge writes a settled reservation with no summary, and
+`begin_generation` classifies exactly that as `'unavailable'`
+(`20260723130000_idempotent_generation.sql:139-152`), which `respondToRepeatedRequest` answers with a
+**409 "This request was already processed. Start a new generation."** (`generate.ts:199-202`). So without
+this rule, the second attempt of a caption-less submit silently loses the caption-specific copy Phase 1
+exists to deliver — and the balance-only success criterion would pass while it happened.
+
+**Contract**: in the `'unavailable'` branch only, the endpoint calls `get_refusal_replay`. A non-null
+reason replays the **original 422** with the same body that reason produced the first time; a null reason
+keeps today's 409 verbatim.
+
+**The null case is load-bearing, not a fallback.** 409's comment states its cause precisely — "only an
+operator-side settle produces this". Those rows carry no `refusal_reason`, so they keep the 409 they
+were written for. The new column is what distinguishes "we refused this video and charged for it" from
+"an operator closed this key", and collapsing the two would either hide an operator action behind a
+transcript message or start telling users to start over after a refusal that will refuse identically.
+
+**No deploy window.** `begin_generation` is deliberately **not** touched: adding an outcome would change
+its return type, which `create or replace` cannot do, forcing a drop/recreate and giving Phase 3 exactly
+the deploy-ordering risk that currently belongs to Phase 4 alone. One extra read on a rare path is the
+right trade for keeping this migration purely additive.
+
 #### 2. Credits service wrapper
 
 **File**: `src/lib/services/credits.ts`
 
 **Intent**: Expose the RPC the way `beginGeneration` is exposed, and keep the charge non-fatal.
 
-**Contract**: `chargeFailedTranscript(admin, { userId, requestId, amount })` returning a discriminated
-union over the three outcomes above, narrowed at the boundary like `beginGeneration`'s row parsing. It
-**never throws**: a Supabase error is logged and reported as "not charged". The direction is deliberate
-and opposite to the debit on the success path — there the throw protects the user from paying for
-nothing; here a failure to charge costs the operator one credit, and answering the user's request
+**Contract**: `chargeFailedTranscript(admin, { userId, requestId, amount, refusalReason })` returning a
+discriminated union over the three outcomes above, narrowed at the boundary like `beginGeneration`'s row
+parsing. It **never throws**: a Supabase error is logged and reported as "not charged". The direction is
+deliberate and opposite to the debit on the success path — there the throw protects the user from paying
+for nothing; here a failure to charge costs the operator one credit, and answering the user's request
 matters more.
+
+`lookupRefusalReplay(admin, { userId, requestId })` wraps `get_refusal_replay`, returning the
+classification or `null`. It **also never throws** — but note the direction is the opposite one, and
+deliberately so: on a Supabase error it returns `null`, which yields today's 409 rather than a replayed
+422. Failing toward the existing behaviour is right for a lookup whose only job is to *improve* a reply
+that already exists.
 
 #### 3. Endpoint wiring
 
@@ -534,7 +615,16 @@ matters more.
 
 **Contract**: A single local helper — `refuseAndCharge(...)` or equivalent — invoked at the four exits so
 the charge cannot drift apart from the refusal it accompanies. It awaits the charge, ignores the outcome
-for response purposes, and returns the same 422 body as today.
+for response purposes, and returns the same 422 body as today. It takes the classification
+(`'unavailable'` / `'empty'` / `'whitespace'`) alongside the copy, so the stored reason and the message
+are chosen in one place and cannot diverge — the replay below reconstructs the message *from* the reason,
+so a mismatch here would surface as a retry answering with different copy than the original.
+
+**The `'unavailable'` probe branch gains the replay.** `respondToRepeatedRequest` (`generate.ts:181-206`)
+currently maps that outcome straight to 409. It becomes async, or the branch moves to its caller at
+`:294-295`: on `'unavailable'`, call `lookupRefusalReplay`; a non-null reason returns the 422 that reason
+produced originally, a null one returns the existing 409 unchanged. The `'replay'` and `'inProgress'`
+branches are untouched.
 
 **The response is unchanged** (D14, user's explicit call): same status, same `error` string, **no
 `creditsRemaining` field**. The client is not touched in this phase at all. The consequence is recorded
@@ -557,6 +647,8 @@ branches on, so the two decisions stay visibly aligned in one place.
 - `charge_failed_transcript` is executable by `service_role` only
 - A second call with the same `(user_id, request_id)` returns `'replay'` and does **not** decrement again
 - A call against a zero balance returns `'insufficient'` and writes no row
+- `get_refusal_replay` returns the stored reason for a charged key, and `null` for a settled,
+  summary-less row written **without** one (the operator-settle case, which must keep its 409)
 - The charge is invoked at exactly four sites, not five:
   `grep -n "refuseAndCharge\|chargeFailedTranscript" src/pages/api/summaries/generate.ts`
 - Type checking and lint pass: `npm run lint`
@@ -564,11 +656,18 @@ branches on, so the two decisions stay visibly aligned in one place.
 
 #### Manual Verification:
 
-- Caption-less video, cold: 422 with the Phase 1 copy, balance drops by 1, one `settled` reservation with
-  no `summary_id`.
+- Caption-less video, cold: 422 with the Phase 1 copy, balance drops by 1, and one `settled`
+  `credit_reservations` row for that `request_id` with **no matching `summaries` row**. Note the
+  direction: `credit_reservations` has no `summary_id` column — the FK points the other way, from
+  `summaries.reservation_id` (`20260722120000_link_summary_to_reservation.sql:25-35`) — so the assertion
+  is a `not exists` (or left join) against `summaries`, not a null check on the reservation.
 - Immediate resubmit of the same video (cache hit, **new** `requestId`): balance drops by 1 again, and no
   Supadata call is made — the asymmetry this phase accepts, observed deliberately rather than discovered.
-- Resubmit with the **same** `requestId`: balance does **not** move a second time.
+- Resubmit with the **same** `requestId`: balance does **not** move a second time, **and the response is
+  the same 422 with the same copy** — not a 409 "start a new generation". Checking only the balance would
+  pass while the caption-specific answer was silently lost.
+- A settled, summary-less reservation with **no** `refusal_reason` (write one directly, as an operator
+  settle would) still answers 409 — the replay is scoped to charges, not to every closed key.
 - A seeded `'empty'` cache row charges; a forced transient failure does **not**.
 - A successful generation still costs exactly `summaryCost` — the refusal charge never stacks onto the
   happy path.
@@ -750,11 +849,31 @@ other guard table here. **This row is also the fleet's serialization point**: ev
 `for update`, which is what turns concurrent read/evaluate/spend into a queue. That is the whole reason
 a singleton is right here rather than merely tidy.
 
+**The migration seeds the row, and seeds it uninitialized.** `max_credits`, `used_credits` and `read_at`
+are all **nullable**, and the migration ends with an `insert … on conflict do nothing` that creates the
+one row with all three null. This is not tidiness — a serialization point that does not exist cannot be
+locked, and `select … where singleton for update` on an empty table returns no row, silently skipping
+the queue the whole lever rests on. Seeding makes the lock unconditional from the first request on a
+fresh deployment.
+
+`read_at is null` is the **uninitialized** state and must be read as "no authoritative reading has ever
+been taken", never as "a very old reading". The distinction matters because the two take different
+paths: a stale reading still supports a decision (the reservations since `read_at` bound the drift), an
+absent one supports none at all. The column comment must say so.
+
 *`public.supadata_reservations`* — one row per *in-flight or recently settled* paid provider call:
 `reservation_id uuid primary key default gen_random_uuid()`, `credits integer not null` (the maximum
 the call could bill), `actual_credits integer` (null until settled, and **null also means "settled but
-unknown"** — see below), `settled boolean not null default false`, `created_at timestamptz not null
-default now()`. Same definer-only treatment. Indexed on `created_at` for the sweep and the delta.
+unknown"** — see below), `settled boolean not null default false`, `settled_at timestamptz` (null until
+settled), `created_at timestamptz not null default now()`. Same definer-only treatment. Indexed on
+`created_at` for the sweep and the delta, and on `settled_at` for the pruning boundary below.
+
+**`settled_at` is what makes the refresh safe to prune against.** `created_at` cannot answer "is this
+call's spend already inside the vendor's snapshot?" — a reservation created long before a `/v1/me` read
+may still be *in flight* when that read is taken, in which case the snapshot cannot contain it. Only a
+call that finished before the reading was taken is certainly represented in it. Without this column the
+save RPC has no way to tell the two apart and must either double-count or delete live work; see
+`save_supadata_budget`.
 
 *`reserve_supadata_credits(p_credits integer, p_stop_reserve integer, p_reading_max_age_seconds integer,
 p_stale_seconds integer)`* — the breaker itself, and the only place the decision is made. In order,
@@ -764,29 +883,74 @@ inside one transaction:
    mid-call leaves a row behind, and without a sweep that row wedges the breaker permanently. This is
    the same reasoning and the same shape as `acquire_generation_lease`'s stale sweep
    (`20260720170000_generation_lock_lease.sql:44-46`) — reuse it rather than inventing a variant.
-2. **`select … from supadata_budget where singleton for update`** — the serialization point.
-3. Compute `remaining = max_credits - used_credits - outstanding`, where `outstanding` is
-   `sum(coalesce(actual_credits, credits))` over reservations created since `read_at`. The
-   `coalesce` is the pessimism that makes this correct: an unsettled call and a settled-but-unknown
-   one both count at their reserved **maximum**, so an ambiguous failure is charged rather than
-   forgiven. Only a call that reported a real `x-billable-requests` value gets counted at its actual
-   figure.
-4. Decide: refuse if `remaining - p_credits < p_stop_reserve`; otherwise insert the reservation row
+2. **`select … from supadata_budget where singleton for update`** — the serialization point. The row
+   is guaranteed to exist because the migration seeds it; the RPC must nonetheless not assume its
+   *contents*, only its presence.
+3. **Decide whether a reading is usable at all, and return before reserving if it is not.** Under the
+   same lock, if `read_at is null` (never initialized) **or** `read_at` is older than
+   `p_reading_max_age_seconds` (stale), and no other caller currently holds the refresh claim, stamp
+   `refresh_claimed_at` and return **`refresh_required`** — inserting **no** reservation row. If
+   another caller already holds the claim, fall through to step 4 and decide on the reading we have
+   (or, when there is none at all, return `uninitialized` so the caller can fail open explicitly
+   rather than evaluate against nulls).
+4. Compute `remaining = max_credits - used_credits - outstanding`, where `outstanding` is
+   `sum(coalesce(actual_credits, credits))` over reservations that are unsettled **or** were settled
+   after `read_at`. The `coalesce` is the pessimism that makes this correct: an unsettled call and a
+   settled-but-unknown one both count at their reserved **maximum**, so an ambiguous failure is
+   charged rather than forgiven. Only a call that reported a real `x-billable-requests` value gets
+   counted at its actual figure.
+5. Decide: refuse if `remaining - p_credits < p_stop_reserve`; otherwise insert the reservation row
    and return its id.
-5. Also return `should_refresh` — true when the reading is older than `p_reading_max_age_seconds`
-   **and** no other caller has claimed the refresh (stamping `refresh_claimed_at` under the same lock).
-   This is what makes the refresh, and therefore D5a's warn, fire **once** per TTL across the fleet
-   instead of once per concurrently-stale reader.
+
+**Why refresh is a state *before* the reservation, not a flag on it.** The obvious shape — reserve,
+then tell the caller to refresh — is wrong, and wrong in a way that silently disarms the breaker. The
+refresh ends in `save_supadata_budget`, which prunes reservations the new reading already contains; the
+claimant's own reservation was necessarily created before that save, has not been spent yet, and cannot
+be in the snapshot. Any pruning rule expressed in `created_at` therefore deletes the row protecting the
+call that is about to happen: the later settle finds nothing, and concurrent callers re-spend credit
+that was supposedly held. Splitting the states removes the problem at the source rather than patching
+the pruning rule — a caller that must refresh holds **no reservation while it does so**, and reruns the
+whole decision afterwards against the fresh reading. The decision is therefore always made against a
+reading the reservation postdates.
+
+The four outcomes are disjoint and the caller must handle all of them: `reserved` (id returned, spend
+authorized), `refused` (over the stop reserve), `refresh_required` (no reservation, caller must refresh
+and call again), and `uninitialized` (no reading and someone else is already fetching one — fail open,
+untracked). The service union in Phase 6 mirrors these one-for-one and adds one case the RPC cannot
+report on its own.
+
+**Every decision also returns the statistics behind it**, under the same lock that produced it:
+`max_credits`, `used_credits`, the `outstanding` total just computed, and `read_at`. This is not
+telemetry padding — Phase 6's threshold report promises a self-sufficient payload (used, max, delta,
+which threshold fired, reading age), and the only alternative is a second read after the lock has been
+released. That read races every other reserve and would report figures that never coexisted, which is
+worse than useless in an incident. The numbers leave the lock with the decision they justify or they
+are not trustworthy at all.
 
 *`settle_supadata_reservation(p_reservation_id uuid, p_actual_credits integer)`* — marks the row
-settled and records the real figure, or leaves `actual_credits` null when the vendor reported none.
-**It never deletes the row**: deleting it before the ledger flush would open a window where the spend
-is visible nowhere at all. Rows are cleared by the next `/v1/me` refresh, which supersedes them.
+settled, stamps `settled_at = now()`, and records the real figure, or leaves `actual_credits` null when
+the vendor reported none. **It never deletes the row**: deleting it before the ledger flush would open a
+window where the spend is visible nowhere at all. Rows are cleared by the next `/v1/me` refresh, which
+supersedes them.
 
-*`save_supadata_budget(p_max_credits integer, p_used_credits integer)`* — upsert the singleton row with
-`read_at = now()`, clear `refresh_claimed_at`, and **delete reservations created before the new
-`read_at`** — the fresh vendor reading already contains their spend, so keeping them would double-count.
-This deletion is what keeps the reservation table bounded without a separate pruning job.
+*`save_supadata_budget(p_max_credits integer, p_used_credits integer, p_read_taken_at timestamptz)`* —
+update the singleton row (it always exists) with the new figures and `read_at = p_read_taken_at`, clear
+`refresh_claimed_at`, and **delete only reservations that were settled at or before `p_read_taken_at`**
+— those, and only those, are certainly inside the vendor's snapshot, so keeping them would double-count.
+Everything unsettled, and everything settled after the reading was taken, is **retained**: the snapshot
+cannot contain work that had not finished when it was taken, and deleting such a row would forgive real
+spend and strand a pending settle.
+
+**`p_read_taken_at` is the caller's pre-call timestamp, not `now()`.** The caller records the clock
+immediately *before* issuing `GET /v1/me` and passes that value. Using `now()` inside the RPC would
+place the boundary after the HTTP round trip, sweeping away calls that settled *during* it — calls the
+snapshot provably cannot include, since it was computed by the vendor before they finished. Pessimism
+belongs on the retention side: retaining a reservation the reading already covers costs a temporarily
+over-conservative breaker, deleting one it does not covers costs real overdraw.
+
+Bounding follows from this rather than from a separate pruning job: every settled reservation is
+deleted by the first refresh that postdates its settlement, so the table holds at most the in-flight
+calls plus one TTL's worth of completed ones.
 
 Why neither source suffices alone (D5): `/v1/me` is authoritative but is an HTTP call that would land
 directly before the transcript fetch and break the 1 req/s spacing `generate.ts:552-556` maintains,
@@ -808,8 +972,19 @@ anchor.
 - An unsettled reservation older than the stale window is swept, and its credit returns to the pool
 - A settled reservation with `actual_credits = null` still counts at its reserved **maximum**, not zero
 - A settled reservation with a real `actual_credits` counts at that figure
-- `save_supadata_budget` deletes reservations created before the new `read_at`, and keeps later ones
-- Exactly one caller gets `should_refresh = true` when two sessions read a stale row concurrently
+- **The seeded row exists and reads uninitialized**: immediately after the migration, `supadata_budget`
+  holds exactly one row with `read_at is null`, and `select … for update` on it succeeds
+- **A clean database initializes on the first request rather than failing open forever**: against the
+  seeded-but-null row, the first `reserve_supadata_credits` returns `refresh_required` and inserts **no**
+  reservation; after `save_supadata_budget`, a second call is evaluated against the new reading and
+  returns `reserved` or `refused`. This is the assertion that proves the breaker ever becomes active —
+  without it, an uninitialized deployment is indistinguishable from a permanently disabled one
+- **A refresh does not delete the work it is about to authorize**: a reservation that is unsettled, and
+  one settled *after* `p_read_taken_at`, both survive `save_supadata_budget`; only a reservation settled
+  at or before that timestamp is deleted. This is F1's failure mode asserted directly in SQL
+- Exactly one caller gets `refresh_required` when two sessions read a stale (or uninitialized) row
+  concurrently; the other gets a decision against the existing reading, or `uninitialized` when there
+  is none
 - The **reconciliation query** — the `case`-per-outcome form in Critical Implementation Details, which
   Phase 7 uses against the live ledger and which is *not* an RPC — returns 1 for an `unavailable` row
   with a null header and 0 for an `error` row with a null header. Write it here against hand-inserted
@@ -841,7 +1016,7 @@ blocked.
 
 #### 1. Budget service
 
-**File**: `src/lib/services/supadata-budget.ts` (new)
+**Files**: `src/lib/services/supadata-budget.ts` (new), `src/lib/services/metadata.ts` (one-line export)
 
 **Intent**: Own the thresholds, the refresh, and the notification seam.
 
@@ -855,27 +1030,93 @@ when `max - used - delta < 3` is exactly the condition under which a generation 
 Its comment must carry the derivation *including why metadata counts twice* — otherwise the next reader
 counts one metadata call, "corrects" it to 2, and reopens the overdraw this constant exists to close.
 
-Also `RESERVATION_STALE_SECONDS` — the sweep window for an abandoned reservation. It must exceed the
-longest a paid call can legitimately take (`METADATA_TIMEOUT_MS` is 10 s, the transcript path polls with
-backoff and is the long one), because a sweep that fires early un-reserves a call that is still running
-and reopens the race. Erring long costs a temporarily over-conservative breaker; erring short costs
-correctness. Reuse `acquire_generation_lease`'s 600 s default unless the transcript poll ceiling argues
-otherwise.
+Also `RESERVATION_STALE_SECONDS = 600` — the sweep window for an abandoned reservation. It must exceed
+the longest a paid call can legitimately take, because a sweep that fires early un-reserves a call that
+is still running and reopens the race. Erring long costs a temporarily over-conservative breaker;
+erring short costs correctness, so the number is chosen against the **ceiling**, not the typical case:
 
-`reserveBudget(admin, apiKey, credits)` — the whole breaker in one call. It invokes
-`reserve_supadata_credits`, which decides atomically and hands back either a `reservationId` or a
-refusal. When the RPC reports `should_refresh`, **this caller and only this caller** performs
-`GET /v1/me`, saves the reading, and evaluates **warn** (D5a). The refresh claim under the row lock is
-what enforces "at most once per TTL" across the fleet, and it is why no `warned_at` column or
-period-reset logic is needed — a naive "fire whenever above threshold" would be one incident emitting
-thousands of events.
+| Guarded operation | Ceiling | From |
+| --- | --- | --- |
+| Transcript fetch | 90 s | `TRANSCRIPT_TIMEOUT_MS` (`transcript.ts:62`) |
+| Job poll path | ~240 s | 12 attempts, 1 s doubling to a 30 s cap (`:29-32`) — **unreachable under D1** |
+| Metadata (both attempts) | ~21 s | `METADATA_TIMEOUT_MS` 10 s × 2 plus the 1.2 s spacing (`metadata.ts:29`) |
+
+600 s clears the longest *reachable* ceiling by more than 6×, and still clears the unreachable poll path
+by 2.5× — so the number survives D1 ever being reverted, which is the scenario that would otherwise
+silently invalidate it. It also matches `acquire_generation_lease`'s existing 600 s default, so the two
+stale windows in this codebase stay the same number rather than drifting into a pair a reader has to
+distinguish.
+
+`BUDGET_READ_TIMEOUT_MS = 2_000` — the `/v1/me` deadline. Deliberately **one fifth** of
+`METADATA_TIMEOUT_MS`: metadata's 10 s buys a real user-visible value and is spent after the debit, while
+this call is advisory bookkeeping that sits *in front of* paid work. Waiting ten seconds to discover we
+cannot learn anything is strictly worse than failing open in two, because the wait is added to every
+request that claims the refresh. Two seconds is far above the observed latency of a small JSON endpoint
+and far below the point where the user notices.
+
+`reserveBudget(admin, apiKey, credits)` — the whole breaker in one call, and internally a **two-pass**
+one. It resolves to a **discriminated union, not an id-or-null**, narrowed at the boundary the way
+`beginGeneration`'s outcome union already is (`credits.ts:102-173`):
+
+| Outcome | Carries | The caller must |
+| --- | --- | --- |
+| `reserved` | `reservationId`, statistics | make the paid call, **settle in `finally`** |
+| `refused` | statistics | skip the call; 503 at the transcript point, `'skipped_budget'` at the metadata point |
+| `untracked` | the reason it could not be tracked | **make the paid call and settle nothing** |
+
+**`untracked` is the case that must not be collapsed into either neighbour**, and it is the one the
+plan otherwise leaves unrepresentable. Fail-open means proceeding *without* a reservation, so it is not
+`reserved` — there is no id to settle, and a settle call against a missing row is exactly the silent
+corruption the sweep cannot detect. Nor is it `refused` — the call goes ahead. Every fail-open path
+lands here: an RPC error, an `uninitialized` reading nobody has refreshed yet, a failed or timed-out
+`/v1/me`, a malformed body, and a second pass that did not terminate. Typing it as `id | null` and
+branching on truthiness is the predictable shortcut, and it makes "we could not track this call" and
+"we tracked it" indistinguishable at the call site.
+
+Because settlement is conditional on an id, both endpoint check points read the same way: settle in the
+`finally` **only** when the outcome was `reserved`. `refreshRequired` never escapes the service — it is
+consumed internally by the second pass.
+
+Statistics ride along on `reserved` and `refused` so `reportBudgetThreshold` can build its payload from
+the same locked read that made the decision, never from a follow-up query. It invokes `reserve_supadata_credits`, which decides atomically and hands back one of the four
+outcomes above. `reserved`, `refused` and `uninitialized` return immediately. On `refresh_required` —
+and **only** this caller, which is what the claim under the row lock enforces — it performs
+`GET /v1/me`, calls `save_supadata_budget` with the timestamp it took *before* the request, evaluates
+**warn** (D5a), waits (below), and then **calls `reserve_supadata_credits` a second time**, returning
+that decision. The refresh claim is why no `warned_at` column or period-reset logic is needed — a naive
+"fire whenever above threshold" would be one incident emitting thousands of events.
+
+**The second pass is not an optimization; it is the only place the refreshed reading is used.** A
+refresh that does not re-decide has spent an HTTP call to learn a number it then ignores — and the
+first pass deliberately returned no reservation, so there is nothing to spend against yet. It is also
+what keeps the reservation strictly *newer* than the reading that authorized it, which is the property
+`save_supadata_budget`'s retention rule depends on.
+
+**The second pass must not loop.** It can itself come back `refresh_required` only if the claim was
+cleared and re-taken in between; treat any non-terminal outcome on the second pass as `proceed
+untracked` and report it through the seam rather than recursing. One refresh per `reserveBudget` call,
+bounded by construction.
+
+If the refresh fails at any step — transport, timeout, non-2xx, malformed body — **no save happens**,
+the claim is left to expire, and the call returns the explicit untracked fail-open outcome rather than
+retrying or reserving against a reading it does not have. An uninitialized deployment whose very first
+`/v1/me` fails therefore proceeds untracked and tries again on the next request, which is the correct
+direction: a bookkeeping endpoint's outage must not stop a product whose transcript API is fine.
 
 **A refresh must be spaced from the paid call that follows it.** This is the one place the plan would
 otherwise contradict itself: `generate.ts:552-556` documents keeping the two Supadata requests seconds
 apart because the plan allows 1 req/s, and an in-line `/v1/me` lands directly in front of the transcript
-fetch. So the refreshing caller — and only it — waits `RETRY_DELAY_MS` (1200 ms, the interval
-`metadata.ts:6` already uses for exactly this limit; import it rather than restating the number) after
-`/v1/me` returns, before `reserveBudget` hands back its decision. Because the refresh is claimed by one
+fetch. So the refreshing caller — and only it — waits `RETRY_DELAY_MS` (1200 ms) after `/v1/me` returns,
+before its second reserve pass.
+
+**`RETRY_DELAY_MS` is private today and must be exported, not restated.** It is a module-level constant
+at `metadata.ts:5-6` with no `export`, so importing it is a one-word change to that file — the only
+reason `metadata.ts` appears in this phase's file list. Its comment ("Past the rate-limit window on the
+Free plan's 1 req/s, with margin") describes a **vendor-wide** limit, not a metadata-specific retry
+policy, so a second consumer is exactly what it should have; extend the comment to name this one. Do not
+copy the number: two 1200s that must agree, in two files, with only a comment linking them, is the
+drift this phase can least afford — the whole point of the wait is that it matches the spacing the rest
+of the pipeline already honours. Because the refresh is claimed by one
 caller per TTL, this cost is paid by roughly one request every 15 minutes, not per request. Every other
 caller reads the stored row and waits for nothing.
 
@@ -889,7 +1130,8 @@ invoked on **every** exit from the paid call, including the throwing ones, for t
 meter flush lives in `POST.finally`: a reservation that is never settled is a credit the fleet keeps
 believing is spent until the sweep window elapses. Pass `null` when the vendor reported no
 `x-billable-requests` header — that is "unknown", and the RPC deliberately keeps counting it at the
-reserved maximum rather than treating it as free.
+reserved maximum rather than treating it as free. **Where `actualCredits` comes from is not obvious and
+is specified in the next section** — neither provider function returns a billed figure today.
 
 **Reserve the maximum, not the expectation.** The transcript call reserves 1. The metadata call
 reserves **2**, because `fetchVideoMetadata` may retry once and that retry is separately billed
@@ -903,10 +1145,10 @@ reason: the second breaker call sits **after** the user has been debited and the
 where a throw bypasses the refund path and strands both the app-credit reservation and the provider
 reservation. Three concrete requirements, none of them inferable from "fails open" alone:
 
-- `GET /v1/me` runs under `AbortSignal.timeout`, mirroring `METADATA_TIMEOUT_MS`
-  (`metadata.ts:30`). A hung bookkeeping call must not outlive the request it is advising. Pick a
-  **shorter** deadline than metadata's 10 s — this call is advisory, and waiting ten seconds to learn
-  we cannot learn anything is worse than failing open in two.
+- `GET /v1/me` runs under `AbortSignal.timeout(BUDGET_READ_TIMEOUT_MS)`, the same mechanism
+  `METADATA_TIMEOUT_MS` uses (`metadata.ts:29`) and for the same reason — Cloudflare caps CPU time, not
+  time spent waiting on a subrequest, so nothing else bounds it. A hung bookkeeping call must not
+  outlive the request it is advising; the 2 s figure and its derivation are pinned above.
 - The response is **narrowed at the boundary**, not destructured on faith. A vendor that changes the
   shape of `usedCredits`/`limit` must produce a reported failure, not `NaN` arithmetic that silently
   computes a remaining balance nobody can trust.
@@ -936,7 +1178,45 @@ the warn level would surface the near-miss while hiding the actual outage.
 tracked outside this roadmap. Until then the warn threshold is decorative and budget exhaustion
 surfaces via the stop threshold — users seeing an error, the worst channel and the one C exists to avoid.
 
-#### 2. Endpoint wiring — two check points
+#### 2. Scoped billing observation
+
+**File**: `src/lib/services/supadata-ledger.ts`
+
+**Intent**: Give `settleBudget` a real source for `actualCredits`. Without this the phase has a hole
+exactly where its correctness lives, and the implementer invents an answer under time pressure.
+
+**The figure exists but is not reachable.** `fetchTranscript` returns `TranscriptResult`
+(`transcript.ts:279-339`) and `fetchVideoMetadata` returns `VideoMetadata | null`
+(`metadata.ts:164-195`); neither carries what the vendor billed. Every per-attempt figure is already
+pushed into `SupadataMeter`, but its public surface is `record`, `attachSummary` and a whole-request
+`drain` (`supadata-ledger.ts:41-76`) — request-scoped, not call-scoped, and draining it here would
+destroy the rows `POST.finally` still needs to flush.
+
+**Contract**: two additions to `SupadataMeter`, non-destructive.
+
+*`checkpoint(): number`* — returns the current row count. Taken immediately **before** each guarded
+operation.
+
+*`billedSince(checkpoint: number, operation): number | null`* — reduces only the rows recorded after
+that checkpoint and only for the named operation, returning:
+
+- the **sum** of `billableCredits` when every matching row reported a figure — this is what makes the
+  metadata retry settle at 2 rather than 1, since both attempts land as separate rows;
+- **`null`** when *any* matching row has a null `billableCredits`. Unknown is contagious and must not
+  be coerced to 0: a `206 transcript-unavailable` is billed 1 and reports no header, so summing nulls
+  as zero would settle a real charge as free — the exact under-count the per-outcome reconciliation
+  formula exists to avoid;
+- **`0`** when no rows matched at all, which is the honest answer for a guarded call that never ran.
+
+**Filtering on `operation` is load-bearing, not defensive.** The two check points are nested inside one
+request, and the transcript reservation must not be settled by a metadata row that happened to be
+recorded after its checkpoint. Mismatched rows are ignored rather than summed.
+
+Both call sites therefore read: `const mark = meter.checkpoint()` → reserve → run the guarded call →
+`settleBudget(admin, id, meter.billedSince(mark, 'transcript'))` in the `finally`. The meter keeps its
+existing job unchanged; `drain` still flushes the whole request in `POST.finally` and is untouched.
+
+#### 3. Endpoint wiring — two check points
 
 **File**: `src/pages/api/summaries/generate.ts`
 
@@ -967,7 +1247,7 @@ paid for, so refusing to protect a decorative thumbnail would be strictly worse.
 nulls exactly as a metadata failure already does, and record `metadata_via = 'skipped_budget'` so the
 degraded row explains itself.
 
-#### 3. The client's 503 handling
+#### 4. The client's 503 handling
 
 **File**: `src/components/summaries/GenerateSummaryForm.tsx`
 
@@ -997,6 +1277,12 @@ to survive.
   one number in one place: `grep -n "stale" src/lib/services/supadata-budget.ts supabase/migrations/20260731130000_supadata_budget.sql`
 - Both call sites settle in a `finally`, not on the happy path only:
   `grep -n "settleBudget" src/pages/api/summaries/generate.ts` shows each inside a `finally` block
+- `billedSince` sums two metadata rows to 2, returns `null` when either row's `billableCredits` is
+  null, returns 0 when no rows matched, and ignores rows of the other operation — asserted directly
+  against a hand-built meter, since this is the reducer every settlement depends on
+- `reserveBudget`'s return type has three cases, and `untracked` is one of them — not an `id | null`:
+  `grep -n "untracked" src/lib/services/supadata-budget.ts src/pages/api/summaries/generate.ts`
+- Settlement is reachable only from the `reserved` branch — no call site settles after `untracked`
 
 #### Manual Verification:
 
@@ -1046,9 +1332,10 @@ Worker secrets: the breaker uses the existing `SUPADATA_API_KEY`.
 
 **This deploy is also when the refusal charge goes live for real users.** It is the only change in the
 slice that takes something from a user rather than saving the operator money, and it ships silently by
-design (D14). Worth a deliberate look at `credit_reservations` in the first day for settled rows with no
-`summary_id` — that is the charge, and its rate is the first evidence of whether the friction is
-proportionate.
+design (D14). Worth a deliberate look at `credit_reservations` in the first day for settled rows with a
+non-null `refusal_reason` — that is the charge, and Phase 3's classification makes it a one-column
+filter rather than an anti-join against `summaries`. Its rate, broken down by reason, is the first
+evidence of whether the friction is proportionate.
 
 #### 2. Live verification pass
 
@@ -1068,7 +1355,8 @@ metadata is cold (expect +1, or +2 on a retry).
 Two additions from the 2026-08-01 scope extension, both free of extra Supadata spend:
 
 - The caption-less step now also asserts `http_status = 206` on its ledger row (P2) and a **1-credit drop
-  in the submitting user's balance** with a matching settled, summary-less `credit_reservations` row (P3).
+  in the submitting user's balance** with a matching settled `credit_reservations` row carrying
+  `refusal_reason = 'unavailable'` and no `summaries` row (P3).
 - Reconciliation gains a cross-check it could not make before: the `unavailable → 1` branch of the
   per-outcome formula can be validated against the recorded status rather than against our own `outcome`
   label. If those two ever disagree, the formula is wrong and the delta will say so.
@@ -1078,7 +1366,7 @@ A step that comes in one credit *over* its expectation is not a discrepancy if t
 happens, since nothing else in this slice can tell us how often the retry actually fires.
 
 The document must state what was **not** verified live and why: the stop threshold cannot be reached
-without spending ~95 credits, so Phase 4 verified it by overriding the constant; and D1 means the Whisper
+without spending ~95 credits, so Phase 6 verified it by overriding the constant; and D1 means the Whisper
 job path is now unreachable by construction and will never be verified at all.
 
 ### Success Criteria:
@@ -1143,7 +1431,8 @@ needed a `too_long` outcome to bound its rows. No pruning is needed at MVP scale
 Four migrations, applied in phase order. `20260731120000_metadata_cache.sql` (P4) is the only risky one
 — it drops and recreates `persist_summary`, so it must be pushed and deployed back to back (Phase 7).
 The other three are purely additive: `…100000_supadata_call_http_status` (P2) adds one nullable column,
-`…110000_charge_failed_transcript` (P3) adds one function and no table, and
+`…110000_charge_failed_transcript` (P3) adds one nullable column and two functions and no table —
+notably it does **not** touch `begin_generation`, which is what keeps it additive, and
 `…130000_supadata_budget` (P5) adds tables and functions but drops nothing — which is what lets each of
 those phases land locally and be proved in SQL without any deploy coordination at all.
 
@@ -1211,6 +1500,8 @@ against the per-outcome ledger total.
 - [ ] 2.6 Caption-less video records `http_status = 206` with `outcome = 'unavailable'` and null billable
 - [ ] 2.7 Captioned video records `http_status = 200` with `billable_credits = 1`
 - [ ] 2.8 The same generation's `metadata` row has `http_status = null` — scope boundary holds
+- [ ] 2.9 A forced vendor error records its status alongside `outcome = 'error'` — the failure arm is
+      plumbed, not just the success arm
 
 ### Phase 3: Charging for a refusal in the billable class
 
@@ -1220,18 +1511,23 @@ against the per-outcome ledger total.
 - [ ] 3.2 `charge_failed_transcript` is executable by `service_role` only
 - [ ] 3.3 The same `(user_id, request_id)` twice returns `'replay'` and decrements once
 - [ ] 3.4 A zero balance returns `'insufficient'` and writes no row
-- [ ] 3.5 The charge is invoked at exactly four 422 sites, not five
-- [ ] 3.6 Type checking and lint pass
-- [ ] 3.7 Build succeeds
+- [ ] 3.5 `get_refusal_replay` returns the stored reason for a charged key and `null` for a
+      summary-less row written without one
+- [ ] 3.6 The charge is invoked at exactly four 422 sites, not five
+- [ ] 3.7 Type checking and lint pass
+- [ ] 3.8 Build succeeds
 
 #### Manual
 
-- [ ] 3.8 Cold caption-less video: 422, balance −1, one settled reservation with no `summary_id`
-- [ ] 3.9 Cache-hit resubmit with a new `requestId`: balance −1 again, no Supadata call made
-- [ ] 3.10 Resubmit with the same `requestId`: balance does not move a second time
-- [ ] 3.11 A seeded `'empty'` cache row charges; a forced transient failure does not
-- [ ] 3.12 A successful generation still costs exactly `summaryCost` — no stacking
-- [ ] 3.13 Balance 0: the 402 gate answers first and no charge row is written
+- [ ] 3.9 Cold caption-less video: 422, balance −1, one settled reservation for the request id with no
+      matching `summaries` row
+- [ ] 3.10 Cache-hit resubmit with a new `requestId`: balance −1 again, no Supadata call made
+- [ ] 3.11 Resubmit with the same `requestId`: balance does not move, and the reply is the same 422
+      with the same copy — not a 409
+- [ ] 3.12 A settled, summary-less reservation with no `refusal_reason` still answers 409
+- [ ] 3.13 A seeded `'empty'` cache row charges; a forced transient failure does not
+- [ ] 3.14 A successful generation still costs exactly `summaryCost` — no stacking
+- [ ] 3.15 Balance 0: the 402 gate answers first and no charge row is written
 
 ### Phase 4: `metadata_cache` and the hit marker
 
@@ -1261,14 +1557,18 @@ against the per-outcome ledger total.
 - [ ] 5.5 A stale unsettled reservation is swept and its credit returns to the pool
 - [ ] 5.6 A settled reservation with `actual_credits = null` still counts at its reserved maximum
 - [ ] 5.7 A settled reservation with a real `actual_credits` counts at that figure
-- [ ] 5.8 `save_supadata_budget` deletes reservations before the new `read_at`, keeps later ones
-- [ ] 5.9 Exactly one of two concurrent stale readers gets `should_refresh = true`
-- [ ] 5.10 Reconciliation query returns 1 for `unavailable`/null-header, 0 for `error`/null-header
+- [ ] 5.8 The seeded row exists and reads uninitialized — one row, `read_at is null`, lockable
+- [ ] 5.9 A clean database initializes on the first request: `refresh_required` with no reservation,
+      then a real decision against the saved reading
+- [ ] 5.10 A refresh does not delete the work it is about to authorize — unsettled and
+      settled-after-`p_read_taken_at` rows survive; only settled-at-or-before is deleted
+- [ ] 5.11 Exactly one of two concurrent stale (or uninitialized) readers gets `refresh_required`
+- [ ] 5.12 Reconciliation query returns 1 for `unavailable`/null-header, 0 for `error`/null-header
 
 #### Manual
 
-- [ ] 5.11 `npm run lint` and `npm run build` unchanged from Phase 4 (no TypeScript in this phase)
-- [ ] 5.12 The reserve → settle → refresh cycle leaves `supadata_reservations` empty, walked by hand
+- [ ] 5.13 `npm run lint` and `npm run build` unchanged from Phase 4 (no TypeScript in this phase)
+- [ ] 5.14 The reserve → settle → refresh cycle leaves `supadata_reservations` empty, walked by hand
 
 ### Phase 6: Wiring the breaker
 
@@ -1278,20 +1578,24 @@ against the per-outcome ledger total.
 - [ ] 6.2 Build succeeds
 - [ ] 6.3 The sweep window is passed to the RPC, not duplicated in SQL
 - [ ] 6.4 Both call sites settle in a `finally`, not on the happy path only
+- [ ] 6.5 `billedSince` sums a retry to 2, returns null on any unknown row, 0 on no rows, and ignores
+      the other operation's rows
+- [ ] 6.6 `reserveBudget` returns a three-case union including `untracked`, not an `id | null`
+- [ ] 6.7 Settlement is reachable only from the `reserved` branch
 
 #### Manual
 
-- [ ] 6.5 Cold video refused before any Supadata call under an overridden reserve, with the breaker's
+- [ ] 6.8 Cold video refused before any Supadata call under an overridden reserve, with the breaker's
       own 503 copy visible in the UI — not the "isn't configured" fallback
-- [ ] 6.6 A budget refusal consumes no transcript rate-limit attempt
-- [ ] 6.7 Warm video still generates under the same override
-- [ ] 6.8 Warm transcript + cold metadata: summary produced, `metadata_via = 'skipped_budget'`
-- [ ] 6.9 No unsettled reservation survives a completed generation or a mid-fetch throw
-- [ ] 6.10 Unreadable budget state: generation proceeds and the state is reported (fail-open)
-- [ ] 6.11 A hung and a malformed `/v1/me` both fail open, report, and strand no reservation
-- [ ] 6.12 Warn fires at most once per TTL, including for two simultaneous stale readers
-- [ ] 6.13 A refresh-triggering generation still succeeds — no `limit-exceeded` on the paid call
-- [ ] 6.14 Overrides reverted
+- [ ] 6.9 A budget refusal consumes no transcript rate-limit attempt
+- [ ] 6.10 Warm video still generates under the same override
+- [ ] 6.11 Warm transcript + cold metadata: summary produced, `metadata_via = 'skipped_budget'`
+- [ ] 6.12 No unsettled reservation survives a completed generation or a mid-fetch throw
+- [ ] 6.13 Unreadable budget state: generation proceeds and the state is reported (fail-open)
+- [ ] 6.14 A hung and a malformed `/v1/me` both fail open, report, and strand no reservation
+- [ ] 6.15 Warn fires at most once per TTL, including for two simultaneous stale readers
+- [ ] 6.16 A refresh-triggering generation still succeeds — no `limit-exceeded` on the paid call
+- [ ] 6.17 Overrides reverted
 
 ### Phase 7: Deploy and live verification
 

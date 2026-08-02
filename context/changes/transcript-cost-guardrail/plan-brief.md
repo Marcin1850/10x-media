@@ -20,7 +20,11 @@ everything downstream shifted by two.
 
 ## Starting Point
 
-`fetchTranscript` requests `mode=auto` (`transcript.ts:255`), which falls back to Whisper silently.
+*The baseline this slice was planned against (2026-07-31), kept as written. Phase 1 has since closed the
+first item locally — `TRANSCRIPT_MODE = "native"` — but nothing is deployed, so this still describes
+production until Phase 7.*
+
+`fetchTranscript` requested `mode=auto` (`transcript.ts:255`), which falls back to Whisper silently.
 S-07's `transcript_cache` and `supadata_calls` ledger are live, so transcript reuse already works and
 spend is already measured — but `fetchVideoMetadata` (`generate.ts:568`) is called unconditionally with
 no lookup, making it 100% of a repeat generation's cost. Nothing anywhere reads the org's remaining
