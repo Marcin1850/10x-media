@@ -171,8 +171,11 @@ async function supadataGet<T>(
   // Read before any throw: an error response is still a billable call, and the row recording it is the
   // single most valuable thing this ledger captures. `response.status` is read here for the same
   // reason and travels the same two paths (D13) — returned on success, carried on the error
-  // otherwise. A `206 transcript-unavailable` leaves through the `!response.ok` arm below, so the
-  // success path alone would record nothing for the exact case this column exists for.
+  // otherwise. Note a `206 transcript-unavailable` is NOT one of the error cases: `Response.ok` is
+  // true across 200–299, so it leaves through the success path and `fetchTranscript` classifies it
+  // `unavailable` on the missing string `content`. That path only stays open because
+  // `isTranscriptOrJobId` deliberately accepts a body with neither `jobId` nor `content`; tighten that
+  // guard and the caption-less case turns into an `error` row. Manual criterion 2.6 is the gate.
   const billableCredits = readBillableCredits(response);
   const httpStatus = response.status;
   const isJson = response.headers.get("content-type")?.includes("application/json") ?? false;

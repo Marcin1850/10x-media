@@ -28,7 +28,7 @@
 - **Location**: `src/lib/services/transcript.ts:174`
 - **Detail**: The comment says a `206 transcript-unavailable` response enters the `!response.ok` arm. Fetch defines `Response.ok` as true for every 200–299 response, including 206. The current behavior is still correct: `isTranscriptOrJobId` deliberately accepts an object without `jobId`, and `fetchTranscript` classifies the missing string content as `unavailable` at lines 366–368 while recording `httpStatus = 206`. The misleading comment hides that dependency and could cause a future guard-tightening change to break the caption-less path while maintainers believe the error arm covers it.
 - **Fix**: Correct the comment to describe the 206 success-path classification and make manual criterion 2.6 the explicit regression gate.
-- **Decision**: PENDING
+- **Decision**: FIXED (2026-08-02) — comment at `transcript.ts:171-178` rewritten. It now states that `Response.ok` is true across 200–299, that the 206 therefore leaves through the success path and is classified `unavailable` on the missing string `content`, that the path depends on `isTranscriptOrJobId` accepting a body with neither `jobId` nor `content`, and that manual criterion 2.6 (`plan.md:1500`) is the regression gate. Comment-only; no behavior change.
 
 ## Verification
 

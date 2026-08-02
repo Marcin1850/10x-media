@@ -19,6 +19,14 @@ migration: no drop, no signature change, grants preserved, still no deploy windo
 omits the key simply writes null, which is one of the column's three documented meanings). The phase
 keeps its "purely additive" character; only the "no RPC change" sub-clause was wrong.
 
+**Phase 2 impl-review triaged 2026-08-02** — verdict APPROVED (0 critical, 0 warnings, 1 observation);
+F1 fixed, none skipped. The `supadataGet` comment claimed a `206 transcript-unavailable` left through
+the `!response.ok` arm; `Response.ok` is true across 200–299, so it actually leaves through the success
+path and is classified `unavailable` on the missing string `content`. Behavior was already correct — the
+comment's stated reason was not, and it hid the load-bearing dependency on `isTranscriptOrJobId`
+accepting a body with neither `jobId` nor `content`. Comment-only fix; manual criterion 2.6 named as the
+regression gate. Manual rows 2.6–2.9 remain deliberately pending.
+
 **Scope extended 2026-08-01 (user) — plan is now 7 phases, not 5.** Phase 1's verification surfaced two
 gaps, both now phases of their own, inserted as 2 and 3 with everything downstream shifted by two:
 
