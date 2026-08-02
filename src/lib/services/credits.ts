@@ -175,6 +175,173 @@ export async function beginGeneration(
 }
 
 /**
+ * Why a submission was refused, for a refusal that COSTS the user a credit (S-09 D14). Mirrors the
+ * `credit_reservations.refusal_reason` CHECK exactly — the endpoint reconstructs the 422 body from the
+ * stored value on a replay, so a reason with no copy behind it would be unanswerable.
+ *
+ * - `unavailable` — the vendor says this video has no caption track (a fresh 206, or a negative cache row)
+ * - `empty`       — a vendor SUCCESS on a wordless video, answered from the cache
+ * - `whitespace`  — a transcript arrived and holds no words
+ *
+ * The transient `failed`/`timeout` outcome is deliberately NOT here: an `error` with a null billable
+ * header means the operator's cost is *unknown*, and charging would resolve our own ambiguity against
+ * the user.
+ */
+export type RefusalReason = "unavailable" | "empty" | "whitespace";
+
+/**
+ * The outcome of a refusal charge. Deliberately mirrors `beginGeneration`'s vocabulary rather than
+ * inventing a second one for the same ledger:
+ *
+ * - `charged`      — one credit taken, one settled reservation written; `balance` is the result.
+ * - `replay`       — this `(userId, requestId)` already carries a non-refunded row. Nothing charged.
+ * - `insufficient` — the balance will not cover it. Nothing charged, and NOT an error: the 402 gate
+ *                    upstream blocks a zero balance before any paid call, so reaching here short of
+ *                    credit means the balance moved mid-request.
+ * - `notCharged`   — the RPC could not be reached or answered. See `chargeFailedTranscript` for why
+ *                    this is a resolution rather than a throw.
+ */
+export type ChargeFailedTranscriptResult =
+  | { outcome: "charged"; balance: number }
+  | { outcome: "replay"; balance: number }
+  | { outcome: "insufficient"; balance: number }
+  | { outcome: "notCharged" };
+
+export interface ChargeFailedTranscriptParams {
+  userId: string;
+  /**
+   * The request's OWN key, never a freshly generated one — that is the single easiest way to get this
+   * wrong. A charge keyed independently would bypass both the endpoint's replay handling and the
+   * partial unique index, so a client retrying an ambiguous failure would be billed once per attempt.
+   * Non-null by type: the caller SKIPS the charge when the client sent no key (a pre-F22 client),
+   * because failing toward not charging is the right direction for a fee the user cannot see.
+   */
+  requestId: string;
+  amount: number;
+  refusalReason: RefusalReason;
+}
+
+/**
+ * Log marker for a refusal charge that did not land. The operator absorbed the Supadata credit for
+ * this submission; the user was not billed. A cost signal, not a user-facing failure.
+ */
+const REFUSAL_NOT_CHARGED = "REFUSAL_NOT_CHARGED";
+
+/**
+ * Charges one app credit for a submission we refused and the operator paid for (D14).
+ *
+ * Reserve and settle are ONE statement inside the RPC, not two calls: there is no work between them
+ * to fail, and a row left `reserved` is exactly what the hourly reconciliation sweep refunds — so a
+ * pair would be racing that sweep for no benefit.
+ *
+ * **It never throws, and the direction is the opposite of the debit on the success path.** There, a
+ * throw protects the user from paying for work that did not happen. Here, a failure to charge costs
+ * the OPERATOR one credit while the user still gets the 422 they were owed — and answering the
+ * request matters more than collecting a fee on it. Every failure resolves as `notCharged`.
+ */
+export async function chargeFailedTranscript(
+  admin: SupabaseClient,
+  { userId, requestId, amount, refusalReason }: ChargeFailedTranscriptParams,
+): Promise<ChargeFailedTranscriptResult> {
+  // supabase-js resolves RPC errors into `error`, but a transport-level failure still REJECTS the
+  // promise. The try/catch is what makes "never throws" true rather than aspirational — same reason
+  // refundReservation carries one.
+  try {
+    // The admin client is supabase-js's untyped default (this repo has no generated Database types),
+    // so narrow the RPC result at the boundary rather than destructuring `any` — same as
+    // beginGeneration.
+    const { data, error } = (await admin.rpc("charge_failed_transcript", {
+      p_user_id: userId,
+      p_request_id: requestId,
+      p_amount: amount,
+      p_refusal_reason: refusalReason,
+    })) as {
+      data: { outcome: string; new_balance: number | null }[] | null;
+      error: { message: string } | null;
+    };
+
+    if (error) {
+      // eslint-disable-next-line no-console
+      console.error(`${REFUSAL_NOT_CHARGED}: ${refusalReason} for ${userId}/${requestId}: ${error.message}`);
+      return { outcome: "notCharged" };
+    }
+
+    // `returns table(...)` arrives as a one-element array. An empty one means the RPC contract changed
+    // under us; report it as not charged rather than reading silence as a success.
+    if (!data || data.length === 0) {
+      // eslint-disable-next-line no-console
+      console.error(`${REFUSAL_NOT_CHARGED}: charge_failed_transcript returned no row for ${userId}/${requestId}`);
+      return { outcome: "notCharged" };
+    }
+    const row = data[0];
+
+    switch (row.outcome) {
+      case "charged":
+      case "replay":
+      case "insufficient":
+        // A missing credits row reads as zero, matching beginGeneration's `insufficient` branch.
+        return { outcome: row.outcome, balance: row.new_balance ?? 0 };
+      default:
+        // eslint-disable-next-line no-console
+        console.error(`${REFUSAL_NOT_CHARGED}: unknown outcome '${row.outcome}' for ${userId}/${requestId}`);
+        return { outcome: "notCharged" };
+    }
+  } catch (cause) {
+    // eslint-disable-next-line no-console
+    console.error(`${REFUSAL_NOT_CHARGED}: ${refusalReason} for ${userId}/${requestId}:`, cause);
+    return { outcome: "notCharged" };
+  }
+}
+
+/**
+ * Answers "was this request key closed by a refusal CHARGE, and if so why?" — `null` when it was not.
+ *
+ * This is what keeps the fee's idempotency honest. The endpoint's identity probe runs before any
+ * transcript work, so a repeated `requestId` reaches `begin_generation` first, which sees our settled
+ * summary-less row and reports `unavailable` — answered today with a 409 "start a new generation".
+ * Without this lookup the retry of a caption-less submit would silently lose the caption-specific 422,
+ * and a balance-only check would pass while it happened.
+ *
+ * **It also never throws, but the fail direction is the OPPOSITE of the charge above and deliberately
+ * so**: an error returns `null`, which yields today's 409 rather than a replayed 422. Failing toward
+ * the existing behaviour is right for a lookup whose only job is to *improve* a reply that already
+ * exists.
+ *
+ * `null` covers both "no row on this key" and "a row that is not a refusal charge" — the second case
+ * is load-bearing rather than a fallback: an operator-side settle writes a settled, summary-less row
+ * with no reason, and that row must keep the 409 it was written for.
+ */
+export async function lookupRefusalReplay(
+  admin: SupabaseClient,
+  { userId, requestId }: { userId: string; requestId: string },
+): Promise<RefusalReason | null> {
+  try {
+    const { data, error } = (await admin.rpc("get_refusal_replay", {
+      p_user_id: userId,
+      p_request_id: requestId,
+    })) as { data: string | null; error: { message: string } | null };
+
+    if (error) {
+      // eslint-disable-next-line no-console
+      console.error(`get_refusal_replay failed for ${userId}/${requestId}: ${error.message}`);
+      return null;
+    }
+
+    // Narrowed at the boundary: the column is CHECKed, but the RPC is untyped here and an unrecognised
+    // value has no copy to reconstruct — treat it as "no replay" rather than answer with a lookup miss
+    // in the response body.
+    if (data === "unavailable" || data === "empty" || data === "whitespace") {
+      return data;
+    }
+    return null;
+  } catch (cause) {
+    // eslint-disable-next-line no-console
+    console.error(`get_refusal_replay failed for ${userId}/${requestId}:`, cause);
+    return null;
+  }
+}
+
+/**
  * Log marker for a debit that could not be resolved. Unlike the previous bare-refund design this is
  * no longer the only trace — the reservation row stays `reserved` in the ledger, so the debt is
  * recoverable by the reconciliation query even if this log line is lost.

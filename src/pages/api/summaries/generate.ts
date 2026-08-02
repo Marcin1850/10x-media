@@ -14,7 +14,14 @@ import {
   summaryCost,
   HARD_MAX_TRANSCRIPT_CHARS,
 } from "@/lib/services/summaries";
-import { getBalance, beginGeneration, refundReservation } from "@/lib/services/credits";
+import {
+  getBalance,
+  beginGeneration,
+  refundReservation,
+  chargeFailedTranscript,
+  lookupRefusalReplay,
+  type RefusalReason,
+} from "@/lib/services/credits";
 import { acquireGenerationLease, releaseGenerationLease } from "@/lib/services/generation-lock";
 import {
   recordTranscriptAttempt,
@@ -50,6 +57,32 @@ export const prerender = false;
 const TRANSCRIPT_NO_CAPTIONS_ERROR =
   "This video has no captions, so there is nothing to summarize. We can only summarize videos that have a caption track — try another video.";
 const TRANSCRIPT_UNAVAILABLE_ERROR = "Transcript unavailable for this video";
+
+/**
+ * The 422 body each CHARGEABLE refusal answers with (S-09 D14).
+ *
+ * A map rather than a string passed alongside the classification, because the two must not be able to
+ * drift: `refuseAndCharge` picks the copy from the reason it stores, and a repeated `requestId`
+ * reconstructs the copy from the reason it reads back out of the ledger. Two independent choices would
+ * surface as a retry answering with different words than the original — the one failure this phase's
+ * replay contract exists to prevent, and one that no balance assertion would catch.
+ *
+ * Note the shape mirrors D3, not D14: `'unavailable'` gets the caption-specific copy; `'empty'` and
+ * `'whitespace'` share the generic string because "a transcript arrived and holds no words" is a
+ * different claim from "this video has no caption track". Charging and copy are separate axes.
+ */
+const REFUSAL_COPY: Record<RefusalReason, string> = {
+  unavailable: TRANSCRIPT_NO_CAPTIONS_ERROR,
+  empty: TRANSCRIPT_UNAVAILABLE_ERROR,
+  whitespace: TRANSCRIPT_UNAVAILABLE_ERROR,
+};
+
+/**
+ * What an unusable submission costs the user (D14). One credit, flat — not `summaryCost`, which prices
+ * DELIVERED work and stays S-05's (a long video that turns out to have no captions is refused just as
+ * cheaply as a short one, because nothing was summarized either way).
+ */
+const REFUSAL_CHARGE = 1;
 
 const generateSchema = z.object({
   url: z.string().refine((url) => extractYoutubeId(url) !== null, {
@@ -169,6 +202,54 @@ interface GenerationInput {
 }
 
 /**
+ * The 422 a chargeable refusal answers with. Built from the classification alone, so the original
+ * refusal and its replay can never answer with different copy.
+ */
+function refusalResponse(reason: RefusalReason): Response {
+  return Response.json({ error: REFUSAL_COPY[reason] }, { status: 422 });
+}
+
+/**
+ * Refuses an unusable submission AND bills the user one credit for it (S-09 D14).
+ *
+ * Four of this endpoint's five 422 exits come through here; the transient `failed`/`timeout` one
+ * deliberately does not. The rule is drawn around what the user submitted, not around what we happened
+ * to pay: a video with no usable transcript is an unusable submission whether the answer came from a
+ * paid 206 or from the negative cache, while a transient fetch failure is our outage or the vendor's
+ * and its real cost is *unknown* (an `error` reports no `x-billable-requests` header).
+ *
+ * **The cache-hit charge is the one place in this slice where we take a credit having paid nothing**,
+ * and it is deliberate. The alternative — free inside D4's 2 h window, charged outside it — makes the
+ * same action cost differently depending on state the user cannot see, and rewards rapid resubmission
+ * of exactly the videos that window exists to re-check.
+ *
+ * The charge is fired and its outcome ignored for response purposes: `chargeFailedTranscript` never
+ * throws, and a failure to bill costs the operator one credit while the user still gets the answer
+ * they were owed. The response is unchanged from before this phase — same status, same string, no
+ * balance field (D14, the user's explicit call that this ships silently).
+ *
+ * A `null` requestId SKIPS the charge rather than inventing a key. See the service: a generated key
+ * would make the fee non-idempotent across exactly the retries `requestId` exists to absorb, and a
+ * refused submit is a plausible thing for a client to retry.
+ */
+async function refuseAndCharge(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  userId: string,
+  requestId: string | null,
+  reason: RefusalReason,
+): Promise<Response> {
+  if (requestId !== null) {
+    await chargeFailedTranscript(admin, {
+      userId,
+      requestId,
+      amount: REFUSAL_CHARGE,
+      refusalReason: reason,
+    });
+  }
+  return refusalResponse(reason);
+}
+
+/**
  * Turns the three "this request key is not new" outcomes into their response, or `null` when the
  * caller should carry on generating (F22). Shared by the probe and the debit, which ask the same
  * question at different points, so a repeat request gets the same answer whichever one catches it.
@@ -177,8 +258,15 @@ interface GenerationInput {
  * attempt ended — same summary, same ids, no second charge and no second OpenRouter call. It carries
  * no `transcriptLength`; that is a property of the fetch, not of the saved summary, and the client
  * only uses it on the long-video confirmation path.
+ *
+ * Async since D14, for the `unavailable` branch alone — see there.
  */
-function respondToRepeatedRequest(result: Awaited<ReturnType<typeof beginGeneration>>): Response | null {
+async function respondToRepeatedRequest(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  userId: string,
+  requestId: string | null,
+  result: Awaited<ReturnType<typeof beginGeneration>>,
+): Promise<Response | null> {
   switch (result.outcome) {
     case "replay":
       return Response.json({
@@ -196,10 +284,26 @@ function respondToRepeatedRequest(result: Awaited<ReturnType<typeof beginGenerat
         { error: "This summary is already being generated. Wait for it to finish." },
         { status: 429 },
       );
-    case "unavailable":
-      // The key's debit was closed without a summary — only an operator-side settle produces this.
+    case "unavailable": {
+      // The key's debit was closed without a summary. TWO things now produce that shape, and telling
+      // them apart is the non-obvious half of D14.
+      //
+      // A refusal charge writes a settled, summary-less row — and the probe that reaches this branch
+      // runs BEFORE any transcript work, so it catches the retry of a refused submit ahead of the 422
+      // that refused it. Answering 409 there would silently lose the caption-specific copy D3 exists to
+      // deliver, on exactly the videos it was written for. `refusal_reason` is what distinguishes the
+      // two, and the replay reconstructs the original body from it.
+      //
+      // A null reason is load-bearing, not a fallback: an operator-side settle_reservation() leaves the
+      // same shape with no reason, and that row keeps the 409 below, which is the case its wording
+      // describes. `lookupRefusalReplay` also returns null on any error — failing toward the existing
+      // reply is right for a lookup whose only job is to improve one.
+      const reason = requestId === null ? null : await lookupRefusalReplay(admin, { userId, requestId });
+      if (reason !== null) return refusalResponse(reason);
+
       // Neither replayable nor safe to re-run against a closed charge; the client must start over.
       return Response.json({ error: "This request was already processed. Start a new generation." }, { status: 409 });
+    }
     default:
       return null;
   }
@@ -291,7 +395,7 @@ async function runGeneration({
       return Response.json({ error: "Something went wrong. Please try again." }, { status: 500 });
     }
 
-    const settled = respondToRepeatedRequest(probe);
+    const settled = await respondToRepeatedRequest(admin, userId, requestId, probe);
     if (settled) return settled;
   }
 
@@ -371,11 +475,14 @@ async function runGeneration({
     if (cachedTranscript.outcome === "too_long") {
       return Response.json({ error: "This video's transcript is too long to summarize." }, { status: 413 });
     }
+    //
+    // Both negative outcomes CHARGE (D14), and this is the pair where the operator paid nothing —
+    // see `refuseAndCharge` for why a flat rule beats one that depends on the cache window.
     if (cachedTranscript.outcome === "unavailable") {
-      return Response.json({ error: TRANSCRIPT_NO_CAPTIONS_ERROR }, { status: 422 });
+      return await refuseAndCharge(admin, userId, requestId, "unavailable");
     }
     if (cachedTranscript.outcome !== "ok") {
-      return Response.json({ error: TRANSCRIPT_UNAVAILABLE_ERROR }, { status: 422 });
+      return await refuseAndCharge(admin, userId, requestId, "empty");
     }
     content = cachedTranscript.content;
     // NOT the original fetch's mechanism: this request made no Supadata call, and recording `'inline'`
@@ -434,8 +541,14 @@ async function runGeneration({
         // this video has no caption track, and under `native` nothing will ever produce one.
         // `failed`/`timeout` fall through to the generic string below — they are transient by
         // construction, say nothing about the video, and a retry genuinely may work.
-        return Response.json({ error: TRANSCRIPT_NO_CAPTIONS_ERROR }, { status: 422 });
+        //
+        // The canonical charging case (D14): this is the 206 we just paid a Supadata credit for.
+        return await refuseAndCharge(admin, userId, requestId, "unavailable");
       }
+      // The ONE exempt 422. `failed`/`timeout` is our outage or the vendor's, and an `error` with a
+      // null billable header means the operator's cost is *unknown* — charging here would resolve our
+      // own ambiguity against a user who did nothing wrong. It branches on the same `reason` the copy
+      // branches on, so the two decisions stay visibly aligned in one place.
       return Response.json({ error: TRANSCRIPT_UNAVAILABLE_ERROR }, { status: 422 });
     }
 
@@ -486,9 +599,11 @@ async function runGeneration({
   // here is also what makes the `'empty'` cache hit above safe to write as a plain early 422.
   //
   // Keeps the GENERIC copy (D3): a transcript arrived and it happens to hold no words, which is not
-  // the same claim as "this video has no caption track" and must not be reported as one.
+  // the same claim as "this video has no caption track" and must not be reported as one. It still
+  // CHARGES (D14): an unusable submission is an unusable submission whichever of the three sources
+  // above produced it.
   if (content.trim().length === 0) {
-    return Response.json({ error: TRANSCRIPT_UNAVAILABLE_ERROR }, { status: 422 });
+    return await refuseAndCharge(admin, userId, requestId, "whitespace");
   }
 
   const transcriptLength = content.length;
@@ -550,7 +665,7 @@ async function runGeneration({
   try {
     const reserved = await beginGeneration(admin, { userId, requestId, amount: cost });
 
-    const settled = respondToRepeatedRequest(reserved);
+    const settled = await respondToRepeatedRequest(admin, userId, requestId, reserved);
     if (settled) return settled;
 
     if (reserved.outcome === "insufficient") {

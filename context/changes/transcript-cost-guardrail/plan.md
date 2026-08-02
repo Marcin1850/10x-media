@@ -1507,15 +1507,15 @@ against the per-outcome ledger total.
 
 #### Automated
 
-- [ ] 3.1 Migration applies cleanly to the local stack
-- [ ] 3.2 `charge_failed_transcript` is executable by `service_role` only
-- [ ] 3.3 The same `(user_id, request_id)` twice returns `'replay'` and decrements once
-- [ ] 3.4 A zero balance returns `'insufficient'` and writes no row
-- [ ] 3.5 `get_refusal_replay` returns the stored reason for a charged key and `null` for a
+- [x] 3.1 Migration applies cleanly to the local stack
+- [x] 3.2 `charge_failed_transcript` is executable by `service_role` only
+- [x] 3.3 The same `(user_id, request_id)` twice returns `'replay'` and decrements once
+- [x] 3.4 A zero balance returns `'insufficient'` and writes no row
+- [x] 3.5 `get_refusal_replay` returns the stored reason for a charged key and `null` for a
       summary-less row written without one
-- [ ] 3.6 The charge is invoked at exactly four 422 sites, not five
-- [ ] 3.7 Type checking and lint pass
-- [ ] 3.8 Build succeeds
+- [x] 3.6 The charge is invoked at exactly four 422 sites, not five
+- [x] 3.7 Type checking and lint pass
+- [x] 3.8 Build succeeds
 
 #### Manual
 
@@ -1528,6 +1528,11 @@ against the per-outcome ledger total.
 - [ ] 3.13 A seeded `'empty'` cache row charges; a forced transient failure does not
 - [ ] 3.14 A successful generation still costs exactly `summaryCost` — no stacking
 - [ ] 3.15 Balance 0: the 402 gate answers first and no charge row is written
+
+Also asserted beyond 3.1–3.8, in two concurrent psql sessions: the same `(user_id, request_id)`
+charged from both sides yields one `'charged'` and one `'replay'`, one row, and a single decrement —
+the `select … for update` cannot serialize a key whose row does not exist yet, so the loser reaches
+the insert and is caught by `charge_failed_transcript`'s `unique_violation` handler.
 
 ### Phase 4: `metadata_cache` and the hit marker
 

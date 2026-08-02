@@ -1,13 +1,23 @@
 ---
 change_id: transcript-cost-guardrail
 title: Transcript cost guardrail
-status: impl_reviewed
+status: implementing
 created: 2026-07-31
 updated: 2026-08-02
 archived_at: null
 ---
 
 ## Notes
+
+**Phase 3 addition, 2026-08-02.** `charge_failed_transcript` carries an `exception when
+unique_violation` handler the plan did not specify. The plan says `'replay'` must be reached through
+the existing partial unique index, and the `select … for update` that does so is copied from
+`begin_generation` — but it cannot lock a row that does not exist yet, so two concurrent callers on
+one key both find nothing, serialize on the `user_credits` row lock instead, and the loser reaches the
+insert. Without the handler that surfaces as a raised exception, and the service would report "not
+charged" for a request that genuinely was charged by the other caller. The handler's implicit
+savepoint rolls back the loser's own decrement along with its failed insert, so the outcome is exactly
+`'replay'`: one row, one credit. Proved in two psql sessions rather than reasoned about.
 
 **Phase 2 adaptation, approved 2026-08-02 (user).** The plan's Phase 2 contract says "No RPC or grant
 change — `supadata_calls` is written through the existing insert path." That existing path,
