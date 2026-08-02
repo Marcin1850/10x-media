@@ -1,7 +1,7 @@
 ---
 change_id: transcript-cost-guardrail
 title: Transcript cost guardrail
-status: implementing
+status: plan_reviewed
 created: 2026-07-31
 updated: 2026-08-01
 archived_at: null
