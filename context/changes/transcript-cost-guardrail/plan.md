@@ -1507,15 +1507,15 @@ against the per-outcome ledger total.
 
 #### Automated
 
-- [x] 3.1 Migration applies cleanly to the local stack
-- [x] 3.2 `charge_failed_transcript` is executable by `service_role` only
-- [x] 3.3 The same `(user_id, request_id)` twice returns `'replay'` and decrements once
-- [x] 3.4 A zero balance returns `'insufficient'` and writes no row
+- [x] 3.1 Migration applies cleanly to the local stack — 6a62cf1
+- [x] 3.2 `charge_failed_transcript` is executable by `service_role` only — 6a62cf1
+- [x] 3.3 The same `(user_id, request_id)` twice returns `'replay'` and decrements once — 6a62cf1
+- [x] 3.4 A zero balance returns `'insufficient'` and writes no row — 6a62cf1
 - [x] 3.5 `get_refusal_replay` returns the stored reason for a charged key and `null` for a
-      summary-less row written without one
-- [x] 3.6 The charge is invoked at exactly four 422 sites, not five
-- [x] 3.7 Type checking and lint pass
-- [x] 3.8 Build succeeds
+      summary-less row written without one — 6a62cf1
+- [x] 3.6 The charge is invoked at exactly four 422 sites, not five — 6a62cf1
+- [x] 3.7 Type checking and lint pass — 6a62cf1
+- [x] 3.8 Build succeeds — 6a62cf1
 
 #### Manual
 
