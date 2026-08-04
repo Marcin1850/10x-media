@@ -81,7 +81,12 @@ function messageForStatus(status: number, serverError?: string): string {
     case 502:
       return "The transcript or summarization service failed. Please try again.";
     case 503:
-      return "Summary generation isn't configured.";
+      // Two very different causes answer 503, and collapsing them into the configuration one is what
+      // this used to do: a missing service-role or provider key (genuinely a configuration problem the
+      // user cannot affect) and a tripped budget breaker (a temporary capacity problem that resolves
+      // on its own). Prefer the server's string so "try again in a while" is not reported as "this is
+      // broken"; the fallback covers a non-JSON 503.
+      return serverError ?? "Summary generation isn't configured.";
     case 500:
       // Several distinct server-side 500s exist (pre-save infrastructure failures vs. a persistence
       // failure), each with its own message. Prefer the server's so a lock/balance/reserve failure

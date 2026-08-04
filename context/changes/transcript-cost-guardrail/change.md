@@ -9,6 +9,26 @@ archived_at: null
 
 ## Notes
 
+**Phase 6 implemented 2026-08-04 (local, undeployed)** — rows 6.1–6.7 pass; manual rows 6.8–6.17 are
+pending and need a running app plus a temporarily overridden `BUDGET_STOP_RESERVE` (6.17 is reverting
+it). The breaker is now wired at **two** check points, both on a miss path: before the transcript
+fetch (reserve 1) and before `fetchVideoMetadata` (reserve **2** — the separately-billed retry). The
+second point is not redundant: on a warm transcript with cold metadata the metadata call *is* the
+first paid call, which is exactly the traffic Phase 4's cache creates, and Phase 4's own manual row 4.9
+already produced that shape. The transcript reserve sits **before** `recordTranscriptAttempt` so a run
+of budget refusals cannot burn a user's transcript allowance for calls that never happened. Four
+things worth carrying: `reserveBudget` resolves to a **three-case** union — `untracked` is a real
+outcome, not `id | null`, because "we could not track this call" and "we tracked it" must not be the
+same value at a call site that decides whether to settle; settlement is a `finally` obligation at both
+points and reachable only from `reserved`; `SupadataMeter` gained `checkpoint`/`billedSince` because
+neither provider function returns a billed figure and draining the meter would destroy the rows
+`POST.finally` still flushes — `billedSince` returns **null on any unknown row**, since a 206 is
+billed 1 and reports no header, so summing nulls as 0 would settle a real charge as free; and
+`RETRY_DELAY_MS` is now **exported** from `metadata.ts` rather than copied, because the 1.2 s spacing
+after `/v1/me` and the one inside the metadata retry are the same vendor-wide limit. The client's 503
+now prefers the server's string (the same trap Phase 1 fixed for 422, in a second place) — without it
+the breaker's copy would never reach a user.
+
 **Phase 5 implemented 2026-08-04 (local, undeployed)** — rows 5.1–5.12 all pass; record at
 `reviews/sql-assertions-phase-5.md`. The reservation ledger is in place and **nothing calls it**: a
 migration and nothing else, which is the whole point of the split. The two assertions that cannot be

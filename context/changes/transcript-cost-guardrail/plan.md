@@ -1590,20 +1590,20 @@ so `coalesce` would have masked a "hit → skip the write" regression entirely.
 
 #### Automated
 
-- [x] 5.1 Migration applies cleanly to the local stack
-- [x] 5.2 `supadata_budget` cannot hold a second row
-- [x] 5.3 `supadata_budget` and `supadata_reservations` are reachable by `service_role` only
-- [x] 5.4 Concurrent reserves do not overdraw — one id, one refusal, never two ids
-- [x] 5.5 A stale unsettled reservation is swept and its credit returns to the pool
-- [x] 5.6 A settled reservation with `actual_credits = null` still counts at its reserved maximum
-- [x] 5.7 A settled reservation with a real `actual_credits` counts at that figure
-- [x] 5.8 The seeded row exists and reads uninitialized — one row, `read_at is null`, lockable
+- [x] 5.1 Migration applies cleanly to the local stack — 00353e2
+- [x] 5.2 `supadata_budget` cannot hold a second row — 00353e2
+- [x] 5.3 `supadata_budget` and `supadata_reservations` are reachable by `service_role` only — 00353e2
+- [x] 5.4 Concurrent reserves do not overdraw — one id, one refusal, never two ids — 00353e2
+- [x] 5.5 A stale unsettled reservation is swept and its credit returns to the pool — 00353e2
+- [x] 5.6 A settled reservation with `actual_credits = null` still counts at its reserved maximum — 00353e2
+- [x] 5.7 A settled reservation with a real `actual_credits` counts at that figure — 00353e2
+- [x] 5.8 The seeded row exists and reads uninitialized — one row, `read_at is null`, lockable — 00353e2
 - [x] 5.9 A clean database initializes on the first request: `refresh_required` with no reservation,
-      then a real decision against the saved reading
+      then a real decision against the saved reading — 00353e2
 - [x] 5.10 A refresh does not delete the work it is about to authorize — unsettled and
-      settled-after-`p_read_taken_at` rows survive; only settled-at-or-before is deleted
-- [x] 5.11 Exactly one of two concurrent stale (or uninitialized) readers gets `refresh_required`
-- [x] 5.12 Reconciliation query returns 1 for `unavailable`/null-header, 0 for `error`/null-header
+      settled-after-`p_read_taken_at` rows survive; only settled-at-or-before is deleted — 00353e2
+- [x] 5.11 Exactly one of two concurrent stale (or uninitialized) readers gets `refresh_required` — 00353e2
+- [x] 5.12 Reconciliation query returns 1 for `unavailable`/null-header, 0 for `error`/null-header — 00353e2
 
 #### Manual
 
@@ -1624,14 +1624,14 @@ pending user confirmation.
 
 #### Automated
 
-- [ ] 6.1 Type checking and lint pass
-- [ ] 6.2 Build succeeds
-- [ ] 6.3 The sweep window is passed to the RPC, not duplicated in SQL
-- [ ] 6.4 Both call sites settle in a `finally`, not on the happy path only
-- [ ] 6.5 `billedSince` sums a retry to 2, returns null on any unknown row, 0 on no rows, and ignores
+- [x] 6.1 Type checking and lint pass
+- [x] 6.2 Build succeeds
+- [x] 6.3 The sweep window is passed to the RPC, not duplicated in SQL
+- [x] 6.4 Both call sites settle in a `finally`, not on the happy path only
+- [x] 6.5 `billedSince` sums a retry to 2, returns null on any unknown row, 0 on no rows, and ignores
       the other operation's rows
-- [ ] 6.6 `reserveBudget` returns a three-case union including `untracked`, not an `id | null`
-- [ ] 6.7 Settlement is reachable only from the `reserved` branch
+- [x] 6.6 `reserveBudget` returns a three-case union including `untracked`, not an `id | null`
+- [x] 6.7 Settlement is reachable only from the `reserved` branch
 
 #### Manual
 
@@ -1646,6 +1646,14 @@ pending user confirmation.
 - [ ] 6.15 Warn fires at most once per TTL, including for two simultaneous stale readers
 - [ ] 6.16 A refresh-triggering generation still succeeds — no `limit-exceeded` on the paid call
 - [ ] 6.17 Overrides reverted
+
+Rows 6.1–6.7 pass. 6.5 was asserted by running the real `createSupadataMeter` against a hand-built
+row list (six cases including the cross-operation ones and non-destructiveness) — there is no test
+suite, so it was executed as a one-off `node --experimental-strip-types` script rather than reasoned
+about. 6.3's grep is against `20260731150000_supadata_budget.sql`, the actual filename (see Phase 5's
+note): the SQL names only the `p_stale_seconds` parameter, and 600 appears once, in
+`supadata-budget.ts`. Manual rows 6.8–6.17 are deliberately untouched — they need a running app and a
+temporarily overridden `BUDGET_STOP_RESERVE`.
 
 ### Phase 7: Deploy and live verification
 

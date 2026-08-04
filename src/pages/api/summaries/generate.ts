@@ -8,6 +8,12 @@ import { fetchVideoMetadata } from "@/lib/services/metadata";
 import { createSupadataMeter, flushSupadataCalls, type SupadataMeter } from "@/lib/services/supadata-ledger";
 import { getCachedTranscript, saveCachedTranscript } from "@/lib/services/transcript-cache";
 import { getCachedMetadata, saveCachedMetadata } from "@/lib/services/metadata-cache";
+import {
+  reserveBudget,
+  settleBudget,
+  TRANSCRIPT_BUDGET_CREDITS,
+  METADATA_BUDGET_CREDITS,
+} from "@/lib/services/supadata-budget";
 import { summarize } from "@/lib/services/llm";
 import {
   extractYoutubeId,
@@ -84,6 +90,19 @@ const REFUSAL_COPY: Record<RefusalReason, string> = {
  * cheaply as a short one, because nothing was summarized either way).
  */
 const REFUSAL_CHARGE = 1;
+
+/**
+ * The 503 a tripped budget breaker answers with (S-09 lever C).
+ *
+ * Operator-shaped on purpose: the user did nothing wrong and there is nothing they can fix, so the
+ * copy says the service cannot process NEW videos right now and that this is temporary — not a
+ * generic failure they will read as their own. 503 is both honest (the service genuinely cannot do the
+ * work) and already this endpoint's "generation is unavailable" status, so the client needs no new
+ * branch — but it did need to stop discarding the server's string, which is the one client change in
+ * this phase.
+ */
+const BUDGET_EXHAUSTED_ERROR =
+  "We've reached our transcript service limit for now, so new videos can't be processed. Please try again in a while.";
 
 const generateSchema = z.object({
   url: z.string().refine((url) => extractYoutubeId(url) !== null, {
@@ -520,7 +539,26 @@ async function runGeneration({
     transcriptAvailableLangs = cachedTranscript.availableLangs;
     transcriptMs = Date.now() - transcriptStartedAt;
   } else {
-    // A real paid fetch. Rate-limit it first; a genuine RPC failure fails the request CLOSED (500)
+    // A real paid fetch, and the first of this endpoint's two budget check points (S-09 lever C).
+    //
+    // Placed inside the MISS branch and nowhere near the endpoint entrance: the breaker gates SPEND,
+    // not the request (D5). A cache hit costs 0, and blocking it would break the product for no saving.
+    //
+    // And placed BEFORE recordTranscriptAttempt, not after it. That RPC records a paid-fetch attempt
+    // against a ten-attempt window, so ordering the budget check behind it would let a run of budget
+    // refusals — which make no Supadata call at all — burn a user's transcript allowance for work that
+    // never happened. Reserve first; record the attempt only once the reservation is in hand and the
+    // real fetch is about to run.
+    //
+    // `untracked` is a THIRD case and is deliberately not collapsed into either neighbour: it means we
+    // could not track this call, so the fetch goes ahead and NOTHING is settled — there is no id, and a
+    // settle against a missing row is the one corruption the sweep cannot detect.
+    const transcriptBudget = await reserveBudget(admin, supadataKey, TRANSCRIPT_BUDGET_CREDITS);
+    if (transcriptBudget.outcome === "refused") {
+      return Response.json({ error: BUDGET_EXHAUSTED_ERROR }, { status: 503 });
+    }
+
+    // Rate-limit it next; a genuine RPC failure fails the request CLOSED (500)
     // rather than proceed to the very unbounded fetch this guard exists to prevent.
     let allowed: boolean;
     try {
@@ -539,13 +577,32 @@ async function runGeneration({
 
     // A genuine upstream failure (network/Supadata error) throws → clean 502; a resolvable-but-
     // unavailable transcript returns ok:false → 422. Neither has debited a credit yet.
+    //
+    // The checkpoint is taken immediately BEFORE the guarded call and read back in the `finally`:
+    // neither provider function returns what the vendor billed, but every per-attempt figure is
+    // already in the meter, and `billedSince` reads that window without draining rows POST.finally
+    // still has to flush.
     let transcript: Awaited<ReturnType<typeof fetchTranscript>>;
+    const transcriptBudgetMark = meter.checkpoint();
     try {
       transcript = await fetchTranscript({ url }, supadataKey, meter);
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error("fetchTranscript failed:", error);
       return Response.json({ error: "The transcript service failed. Please try again." }, { status: 502 });
+    } finally {
+      // A `finally` OBLIGATION, not a happy-path step, for the same reason the meter flush lives in
+      // POST.finally: a reservation that is never settled is a credit the whole fleet keeps believing
+      // is spent until the sweep window elapses — and the error paths are exactly the ones a budget
+      // guard exists to survive. Reachable only from the `reserved` branch; an `untracked` call has no
+      // id to settle.
+      if (transcriptBudget.outcome === "reserved") {
+        await settleBudget(
+          admin,
+          transcriptBudget.reservationId,
+          meter.billedSince(transcriptBudgetMark, "transcript"),
+        );
+      }
     }
 
     // Cache immediately, BEFORE the long-video 409 below can return: a user who abandons the
@@ -757,28 +814,60 @@ async function runGeneration({
 
   if (metadata === null) {
     const metadataStartedAt = Date.now();
-    try {
-      metadata = await fetchVideoMetadata({ url }, supadataKey, meter);
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error("fetchVideoMetadata threw despite being total:", error);
+
+    // The SECOND budget check point, and the reason one in front of the transcript fetch is not
+    // enough: on a warm transcript with cold metadata this call IS the first paid call, which is
+    // exactly the traffic Phase 4's cache is designed to create. A breaker that only guarded the
+    // transcript would be bypassed by its own success.
+    //
+    // Reserves 2, not 1 — `fetchVideoMetadata` may retry once and that retry is separately billed.
+    const metadataBudget = await reserveBudget(admin, supadataKey, METADATA_BUDGET_CREDITS);
+
+    if (metadataBudget.outcome === "refused") {
+      // A trip HERE does not refuse the generation. The user has already been debited and the LLM has
+      // already been paid for, so protecting a decorative thumbnail by discarding a finished summary
+      // would be strictly worse than shipping it without one. Skip the call and persist nulls exactly
+      // as a metadata failure already does — `'skipped_budget'` is what makes the degraded row explain
+      // itself instead of looking like a vendor failure.
+      metadataVia = "skipped_budget";
+    } else {
+      const metadataBudgetMark = meter.checkpoint();
+      try {
+        metadata = await fetchVideoMetadata({ url }, supadataKey, meter);
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error("fetchVideoMetadata threw despite being total:", error);
+      } finally {
+        // Same `finally` obligation as the transcript point, and reachable only from `reserved`: an
+        // `untracked` outcome proceeded WITHOUT a reservation, so there is no id and nothing to close.
+        // `billedSince` filters on the operation because the two check points are nested inside one
+        // request — a metadata row must never settle the transcript's reservation or vice versa.
+        if (metadataBudget.outcome === "reserved") {
+          await settleBudget(admin, metadataBudget.reservationId, meter.billedSince(metadataBudgetMark, "metadata"));
+        }
+      }
+
+      // Set AFTER the call, not before it: a request went out either way, and whether it came back with
+      // a row is precisely the difference the two markers record. Stamping `'fetched'` up front made
+      // the value mean "attempted" while every comment on it claimed "billed" — and a failure is
+      // billed 0, so reading it as spend overcounts. `supadata_calls` remains the billing truth.
+      metadataVia = metadata === null ? "fetch_failed" : "fetched";
+
+      // Only a SUCCESS is cached (D9). A failed metadata call is billed 0, so caching the failure would
+      // save nothing while persisting nulls for a video whose next attempt would likely succeed — and
+      // `save_metadata_cache` does not coalesce, so writing nulls here would actively poison the row
+      // for every other user.
+      if (metadata !== null) {
+        await saveCachedMetadata(admin, youtubeId, metadata);
+      }
     }
-    // Overwrites the cache read's duration measured above — the bracket that actually ran wins.
+
+    // Overwrites the cache read's duration measured above — the bracket that actually ran wins. It
+    // spans the reservation as well as the call, so a `'skipped_budget'` row reports the refused
+    // reserve (a DB round trip, plus `/v1/me` and its 1.2 s spacing when this caller happened to claim
+    // the refresh) rather than any vendor work. One more reason `metadata_via` is the mandatory filter
+    // on any query comparing `metadata_ms`.
     metadataMs = Date.now() - metadataStartedAt;
-
-    // Set AFTER the call, not before it: a request went out either way, and whether it came back with
-    // a row is precisely the difference the two markers record. Stamping `'fetched'` up front made
-    // the value mean "attempted" while every comment on it claimed "billed" — and a failure is
-    // billed 0, so reading it as spend overcounts. `supadata_calls` remains the billing truth.
-    metadataVia = metadata === null ? "fetch_failed" : "fetched";
-
-    // Only a SUCCESS is cached (D9). A failed metadata call is billed 0, so caching the failure would
-    // save nothing while persisting nulls for a video whose next attempt would likely succeed — and
-    // `save_metadata_cache` does not coalesce, so writing nulls here would actively poison the row
-    // for every other user.
-    if (metadata !== null) {
-      await saveCachedMetadata(admin, youtubeId, metadata);
-    }
   }
 
   // Persist AND settle in ONE transaction (F23). These used to be two calls — an RLS-client insert
