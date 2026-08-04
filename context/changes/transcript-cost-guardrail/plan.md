@@ -1555,18 +1555,24 @@ the insert and is caught by `charge_failed_transcript`'s `unique_violation` hand
 
 #### Automated
 
-- [ ] 4.1 Migration applies cleanly to the local stack
-- [ ] 4.2 Exactly one `persist_summary` overload exists afterwards
-- [ ] 4.3 `metadata_cache` and `summaries.metadata_via` have the intended constraints and grants
-- [ ] 4.4 Type checking and lint pass
-- [ ] 4.5 Build succeeds
+- [x] 4.1 Migration applies cleanly to the local stack
+- [x] 4.2 Exactly one `persist_summary` overload exists afterwards
+- [x] 4.3 `metadata_cache` and `summaries.metadata_via` have the intended constraints and grants
+- [x] 4.4 Type checking and lint pass
+- [x] 4.5 Build succeeds
 
 #### Manual
 
-- [ ] 4.6 First generation: `metadata_via = 'fetched'`, ledger row written, cache row written
-- [ ] 4.7 Second generation: `metadata_via = 'stored'`, no new ledger row, `metadata_ms` near zero
-- [ ] 4.8 D12 — a cache hit still populates the per-user `videos` row
-- [ ] 4.9 A row aged past 30 days produces a fresh fetch
+- [x] 4.6 First generation: `metadata_via = 'fetched'`, ledger row written, cache row written — 2026-08-04, local
+- [x] 4.7 Second generation: `metadata_via = 'stored'`, no new ledger row, `metadata_ms` near zero — 2026-08-04, local
+- [x] 4.8 D12 — a cache hit still populates the per-user `videos` row — 2026-08-04, local
+- [x] 4.9 A row aged past 30 days produces a fresh fetch — 2026-08-04, local
+
+Record: `reviews/manual-verification-phase-4.md`. All four passed. The warm generation moved
+`usedCredits` by **0** — the slice's headline claim, observed locally for the first time — and the
+pass reconciled exactly (delta 4, ledger total 4). 4.8 was run on a **second account** rather than a
+second character: a second character upserts onto a `videos` row the first generation already filled,
+so `coalesce` would have masked a "hit → skip the write" regression entirely.
 
 ### Phase 5: The reservation ledger
 

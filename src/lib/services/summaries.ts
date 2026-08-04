@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { ChannelCharacter, TranscriptResolvedVia, VideoMetadata } from "@/types";
+import type { ChannelCharacter, MetadataVia, TranscriptResolvedVia, VideoMetadata } from "@/types";
 
 interface VideoRow {
   id: string;
@@ -41,6 +41,8 @@ interface SummaryRow {
   cost_usd: number | null;
   prompt_tokens: number | null;
   completion_tokens: number | null;
+  /** How the metadata was obtained (S-09). Null on rows predating the column. */
+  metadata_via: MetadataVia | null;
   created_at: string;
 }
 
@@ -122,6 +124,7 @@ export interface AppDatabase {
           p_cost_usd: number | null;
           p_prompt_tokens: number | null;
           p_completion_tokens: number | null;
+          p_metadata_via: string | null;
         };
         Returns: { outcome: string; video_id: string | null; summary_id: string | null }[];
       };
@@ -219,6 +222,13 @@ export interface PersistSummaryParams {
   costUsd?: number | null;
   promptTokens?: number | null;
   completionTokens?: number | null;
+  /**
+   * How the metadata was obtained (S-09 D10). Optional and defaulting to null like the telemetry
+   * above, so a caller that has not made the distinction persists null rather than a guess — but the
+   * generate endpoint always sets it, because a null here is indistinguishable from a pre-migration
+   * row and would silently re-break the cost-per-generation queries the column exists to keep honest.
+   */
+  metadataVia?: MetadataVia | null;
 }
 
 /**
@@ -265,6 +275,7 @@ export async function persistSummaryAndSettle(
     costUsd = null,
     promptTokens = null,
     completionTokens = null,
+    metadataVia = null,
   }: PersistSummaryParams,
 ): Promise<PersistSummaryResult> {
   // The admin client is supabase-js's untyped default (this repo has no generated Database types), so
@@ -300,6 +311,10 @@ export async function persistSummaryAndSettle(
     p_cost_usd: costUsd,
     p_prompt_tokens: promptTokens,
     p_completion_tokens: completionTokens,
+    // S-09 D10. Sits with the telemetry because that is what it is — but note it explains one of
+    // those columns rather than joining them: `metadata_ms` is only comparable across `'fetched'`
+    // rows, since a `'stored'` row brackets a database read instead of an HTTP call.
+    p_metadata_via: metadataVia,
   })) as {
     data: { outcome: string; video_id: string | null; summary_id: string | null }[] | null;
     error: { message: string } | null;

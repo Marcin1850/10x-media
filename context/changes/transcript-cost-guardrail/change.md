@@ -9,6 +9,21 @@ archived_at: null
 
 ## Notes
 
+**Phase 4 implemented and manually verified 2026-08-04 (local)** — rows 4.1–4.9 all pass; record at
+`reviews/manual-verification-phase-4.md`. `metadata_cache` + the `metadata_via` marker landed, and
+`persist_summary` went 23 → 24 arguments (`pg_proc` confirms exactly one overload, no stale version).
+**The warm generation moved `usedCredits` by 0** — S-07 got a repeat down to 1 credit by caching the
+transcript, this gets it to 0 by caching the metadata too; the pass reconciled exactly (delta 4,
+ledger total 4). Three things worth carrying: **4.8 was verified on a second account, not a second
+character** — a second character upserts onto a `videos` row the first generation already filled, so
+`coalesce` would have hidden a "hit → skip the write" regression completely; row 4.9 produced
+`resolved_via = 'stored'` with `metadata_via = 'fetched'`, i.e. the warm-transcript/cold-metadata
+traffic Phase 6's *second* check point exists for, which Phase 4 is what creates; and
+**`8jLOx1hD3_o` is not a usable test video** — a livestream with a 1 696 642-character transcript that
+answers 413 (it did incidentally re-confirm S-07's F6 `too_long` caching). **This phase's migration is
+the only one in the slice that opens a deploy window**, closed by Phase 7 running `db push` and
+`wrangler deploy` back to back.
+
 **Phases 2 and 3 manually verified 2026-08-04 (local)** — rows 2.6–2.9 and 3.9–3.15 all pass; record at
 `reviews/manual-verification-phases-2-3.md`. Run as one pass because the two phases share submissions.
 Supadata delta 3 reconciled exactly against the per-outcome ledger total — and this time the

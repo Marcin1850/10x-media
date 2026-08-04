@@ -7,6 +7,7 @@ import { fetchTranscript, TRANSCRIPT_REQUESTED_LANG } from "@/lib/services/trans
 import { fetchVideoMetadata } from "@/lib/services/metadata";
 import { createSupadataMeter, flushSupadataCalls, type SupadataMeter } from "@/lib/services/supadata-ledger";
 import { getCachedTranscript, saveCachedTranscript } from "@/lib/services/transcript-cache";
+import { getCachedMetadata, saveCachedMetadata } from "@/lib/services/metadata-cache";
 import { summarize } from "@/lib/services/llm";
 import {
   extractYoutubeId,
@@ -29,7 +30,7 @@ import {
   saveTranscriptQuote,
   discardTranscriptQuote,
 } from "@/lib/services/transcript-guard";
-import type { TranscriptResolvedVia } from "@/types";
+import type { MetadataVia, TranscriptResolvedVia } from "@/types";
 
 export const prerender = false;
 
@@ -458,6 +459,24 @@ async function runGeneration({
   // by video alone, so it is reused across characters AND across users.
   const cachedTranscript = cachedQuote ? null : await getCachedTranscript(admin, youtubeId);
 
+  // The metadata cache (S-09 D6/D7), looked up HERE — beside the transcript lookup and far from the
+  // fetch it serves. The FETCH does not move (D7): the comment block at that call site documents its
+  // placement as load-bearing for three reasons, and none of them apply to a free database read.
+  //
+  // After the 402 gate rather than at the endpoint entrance, on its own merits as well as by the
+  // plan: a user with no credits should not trigger even a free read. It still lands well before the
+  // debit, which is all Phase 6's second breaker check point needs.
+  //
+  // Hoisting the LOOKUP is the whole saving. On a warm video the transcript already costs 0, so this
+  // one call was 100% of a repeat generation's Supadata spend.
+  const metadataLookupStartedAt = Date.now();
+  const cachedMetadata = await getCachedMetadata(admin, youtubeId);
+  // Measured where the work happens, not where the variable is declared. This bracket times a
+  // database read; on a MISS the fetch below overwrites it with the HTTP call's duration. That is
+  // precisely the difference `metadata_via` exists to disambiguate — a `'stored'` row reporting ~0 ms
+  // is correct, not a broken measurement.
+  let metadataMs = Date.now() - metadataLookupStartedAt;
+
   if (cachedQuote) {
     content = cachedQuote.content;
     resolvedVia = cachedQuote.resolvedVia;
@@ -726,15 +745,37 @@ async function runGeneration({
   //
   // `metadata_ms` brackets the whole operation, retry and its ~1.2 s rate-limit sleep included: that
   // delay is real latency the user waited through, not overhead to be netted out.
-  let metadata: Awaited<ReturnType<typeof fetchVideoMetadata>> = null;
-  const metadataStartedAt = Date.now();
-  try {
-    metadata = await fetchVideoMetadata({ url }, supadataKey, meter);
-  } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error("fetchVideoMetadata threw despite being total:", error);
+  //
+  // S-09 D6/D7 EXTENDS the three reasons above rather than replacing them. A cache HIT removes the
+  // request outright, so the 1 req/s reason lapses on its own for that path — but the other two still
+  // govern the MISS path below, which is a real vendor call in exactly the position it always was.
+  // The lookup moved; the fetch did not.
+  let metadata: Awaited<ReturnType<typeof fetchVideoMetadata>> = cachedMetadata;
+  // Always set explicitly. A null would be indistinguishable from a pre-migration row and would
+  // silently re-break the cost-per-generation queries this column exists to keep honest.
+  let metadataVia: MetadataVia = "stored";
+
+  if (metadata === null) {
+    metadataVia = "fetched";
+    const metadataStartedAt = Date.now();
+    try {
+      metadata = await fetchVideoMetadata({ url }, supadataKey, meter);
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("fetchVideoMetadata threw despite being total:", error);
+    }
+    // Overwrites the cache read's duration measured above — the bracket that actually ran wins.
+    metadataMs = Date.now() - metadataStartedAt;
+
+    // Only a SUCCESS is cached (D9). A failed metadata call is billed 0, so caching the failure would
+    // save nothing while persisting nulls for a video whose next attempt would likely succeed — and
+    // `save_metadata_cache` does not coalesce, so writing nulls here would actively poison the row
+    // for every other user. `metadata_via` stays `'fetched'` either way: a call was made and billed,
+    // which is what that value records.
+    if (metadata !== null) {
+      await saveCachedMetadata(admin, youtubeId, metadata);
+    }
   }
-  const metadataMs = Date.now() - metadataStartedAt;
 
   // Persist AND settle in ONE transaction (F23). These used to be two calls — an RLS-client insert
   // followed by a best-effort settle — which left the ledger indistinguishable from failed work for
@@ -763,7 +804,12 @@ async function runGeneration({
       model: summary.model,
       resolvedVia,
       reservationId,
+      // D12, stated because "hit -> skip the write" is the natural regression: the metadata argument
+      // is populated on a HIT exactly as on a fetch. S-02 renders its list from the per-user `videos`
+      // row, which persist_summary's coalescing upsert writes from these values — so the cache FEEDS
+      // that upsert rather than replacing it, and a second user's row is populated on a hit too.
       metadata,
+      metadataVia,
       transcriptLang,
       transcriptAvailableLangs,
       transcriptChars: transcriptLength,

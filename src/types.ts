@@ -12,6 +12,21 @@ export type TranscriptResolvedVia = "inline" | "job" | "stored";
 /** What a real Supadata fetch can report — `"stored"` is excluded, since a cache hit made no call. */
 export type FetchedResolvedVia = Exclude<TranscriptResolvedVia, "stored">;
 
+/**
+ * How a generation obtained its video metadata (S-09 D10). Documented the same way as
+ * `TranscriptResolvedVia` and for the same reason: `"stored"` means the row came from
+ * `metadata_cache` and NO paid Supadata call was made, which is what explains a near-zero
+ * `metadata_ms`.
+ *
+ * `"fetched"` is a real, billed vendor call — and possibly TWO, since `fetchVideoMetadata` retries a
+ * retryable failure once and that retry is separately billed. `"skipped_budget"` (S-09 Phase 6) means
+ * the budget breaker refused the call and nulls were persisted, exactly as a metadata failure already
+ * does; the marker is what stops that degraded row looking like an unexplained gap.
+ *
+ * `metadata_ms` IS ONLY COMPARABLE ACROSS `"fetched"` ROWS — see the column comment.
+ */
+export type MetadataVia = "fetched" | "stored" | "skipped_budget";
+
 export interface Video {
   id: string;
   user_id: string;
@@ -71,8 +86,14 @@ export interface Summary {
   /** Time spent acquiring the transcript: the fetch, the quote read, or the cache read. */
   transcript_ms: number | null;
   llm_ms: number | null;
-  /** Includes the metadata retry and its ~1.2 s rate-limit sleep — real latency the user waited through. */
+  /**
+   * Includes the metadata retry and its ~1.2 s rate-limit sleep — real latency the user waited
+   * through — but ONLY on a `metadata_via = 'fetched'` row. On a `'stored'` row it brackets a
+   * database read and reads near zero, so any comparison across rows must filter on `metadata_via`.
+   */
   metadata_ms: number | null;
+  /** How the metadata was obtained (S-09). Null on rows predating the column. */
+  metadata_via: MetadataVia | null;
   /** OpenRouter's own reported cost, never a figure computed from tokens and a price table. */
   cost_usd: number | null;
   prompt_tokens: number | null;
