@@ -1505,11 +1505,15 @@ against the per-outcome ledger total.
 
 #### Manual
 
-- [ ] 2.6 Caption-less video records `http_status = 206` with `outcome = 'unavailable'` and null billable
-- [ ] 2.7 Captioned video records `http_status = 200` with `billable_credits = 1`
-- [ ] 2.8 The same generation's `metadata` row has `http_status = null` — scope boundary holds
-- [ ] 2.9 A forced vendor error records its status alongside `outcome = 'error'` — the failure arm is
-      plumbed, not just the success arm
+- [x] 2.6 Caption-less video records `http_status = 206` with `outcome = 'unavailable'` and null billable — 2026-08-04, local
+- [x] 2.7 Captioned video records `http_status = 200` with `billable_credits = 1` — 2026-08-04, local
+- [x] 2.8 The same generation's `metadata` row has `http_status = null` — scope boundary holds — 2026-08-04, local
+- [x] 2.9 A forced vendor error records its status alongside `outcome = 'error'` — the failure arm is
+      plumbed, not just the success arm — 2026-08-04, local
+
+Record: `reviews/manual-verification-phases-2-3.md` (run jointly with Phase 3). All four passed;
+Supadata delta 3 reconciled exactly against the per-outcome ledger total, and for the first time the
+`unavailable → 1` branch was corroborated by the recorded `206` rather than by our own `outcome` label.
 
 ### Phase 3: Charging for a refusal in the billable class
 
@@ -1527,15 +1531,20 @@ against the per-outcome ledger total.
 
 #### Manual
 
-- [ ] 3.9 Cold caption-less video: 422, balance −1, one settled reservation for the request id with no
-      matching `summaries` row
-- [ ] 3.10 Cache-hit resubmit with a new `requestId`: balance −1 again, no Supadata call made
-- [ ] 3.11 Resubmit with the same `requestId`: balance does not move, and the reply is the same 422
-      with the same copy — not a 409
-- [ ] 3.12 A settled, summary-less reservation with no `refusal_reason` still answers 409
-- [ ] 3.13 A seeded `'empty'` cache row charges; a forced transient failure does not
-- [ ] 3.14 A successful generation still costs exactly `summaryCost` — no stacking
-- [ ] 3.15 Balance 0: the 402 gate answers first and no charge row is written
+- [x] 3.9 Cold caption-less video: 422, balance −1, one settled reservation for the request id with no
+      matching `summaries` row — 2026-08-04, local
+- [x] 3.10 Cache-hit resubmit with a new `requestId`: balance −1 again, no Supadata call made — 2026-08-04, local
+- [x] 3.11 Resubmit with the same `requestId`: balance does not move, and the reply is the same 422
+      with the same copy — not a 409 — 2026-08-04, local
+- [x] 3.12 A settled, summary-less reservation with no `refusal_reason` still answers 409 — 2026-08-04, local
+- [x] 3.13 A seeded `'empty'` cache row charges; a forced transient failure does not — 2026-08-04, local
+- [x] 3.14 A successful generation still costs exactly `summaryCost` — no stacking — 2026-08-04, local
+- [x] 3.15 Balance 0: the 402 gate answers first and no charge row is written — 2026-08-04, local
+
+Record: `reviews/manual-verification-phases-2-3.md`. All seven passed. 3.11 and 3.12 are one assertion,
+not two: a replayed 422 and a coincidental re-run of the cached-`unavailable` path print the same
+response, so only the 409 control — same row shape, `refusal_reason` the sole difference — establishes
+that the replay branch fired.
 
 Also asserted beyond 3.1–3.8, in two concurrent psql sessions: the same `(user_id, request_id)`
 charged from both sides yields one `'charged'` and one `'replay'`, one row, and a single decrement —

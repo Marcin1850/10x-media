@@ -9,6 +9,16 @@ archived_at: null
 
 ## Notes
 
+**Phases 2 and 3 manually verified 2026-08-04 (local)** — rows 2.6–2.9 and 3.9–3.15 all pass; record at
+`reviews/manual-verification-phases-2-3.md`. Run as one pass because the two phases share submissions.
+Supadata delta 3 reconciled exactly against the per-outcome ledger total — and this time the
+`unavailable → 1` branch was corroborated by the recorded `http_status = 206` rather than resting on our
+own `outcome` label, which is the whole point of D13. Both phases stay **undeployed**; Phase 7 is the
+single deploy gate. Two things worth carrying forward: 3.11 is only meaningful paired with 3.12 (a
+replayed 422 and a re-run of the cached-`unavailable` path are indistinguishable from the response
+alone), and `z.uuid()` rejects a hand-typed non-v4 key with a 400 — reachable only now that F1 made
+`requestId` required, harmless for the first-party client.
+
 **Phase 3 impl-review triaged 2026-08-04** — verdict NEEDS ATTENTION (0 critical, 2 warnings, 1
 observation); all 3 findings fixed, none skipped. F1 made `requestId` **required** in `generateSchema`:
 leaving it optional exported the "no key ⇒ skip the charge" rule to the trust boundary, so any
