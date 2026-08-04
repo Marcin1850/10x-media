@@ -1590,25 +1590,35 @@ so `coalesce` would have masked a "hit → skip the write" regression entirely.
 
 #### Automated
 
-- [ ] 5.1 Migration applies cleanly to the local stack
-- [ ] 5.2 `supadata_budget` cannot hold a second row
-- [ ] 5.3 `supadata_budget` and `supadata_reservations` are reachable by `service_role` only
-- [ ] 5.4 Concurrent reserves do not overdraw — one id, one refusal, never two ids
-- [ ] 5.5 A stale unsettled reservation is swept and its credit returns to the pool
-- [ ] 5.6 A settled reservation with `actual_credits = null` still counts at its reserved maximum
-- [ ] 5.7 A settled reservation with a real `actual_credits` counts at that figure
-- [ ] 5.8 The seeded row exists and reads uninitialized — one row, `read_at is null`, lockable
-- [ ] 5.9 A clean database initializes on the first request: `refresh_required` with no reservation,
+- [x] 5.1 Migration applies cleanly to the local stack
+- [x] 5.2 `supadata_budget` cannot hold a second row
+- [x] 5.3 `supadata_budget` and `supadata_reservations` are reachable by `service_role` only
+- [x] 5.4 Concurrent reserves do not overdraw — one id, one refusal, never two ids
+- [x] 5.5 A stale unsettled reservation is swept and its credit returns to the pool
+- [x] 5.6 A settled reservation with `actual_credits = null` still counts at its reserved maximum
+- [x] 5.7 A settled reservation with a real `actual_credits` counts at that figure
+- [x] 5.8 The seeded row exists and reads uninitialized — one row, `read_at is null`, lockable
+- [x] 5.9 A clean database initializes on the first request: `refresh_required` with no reservation,
       then a real decision against the saved reading
-- [ ] 5.10 A refresh does not delete the work it is about to authorize — unsettled and
+- [x] 5.10 A refresh does not delete the work it is about to authorize — unsettled and
       settled-after-`p_read_taken_at` rows survive; only settled-at-or-before is deleted
-- [ ] 5.11 Exactly one of two concurrent stale (or uninitialized) readers gets `refresh_required`
-- [ ] 5.12 Reconciliation query returns 1 for `unavailable`/null-header, 0 for `error`/null-header
+- [x] 5.11 Exactly one of two concurrent stale (or uninitialized) readers gets `refresh_required`
+- [x] 5.12 Reconciliation query returns 1 for `unavailable`/null-header, 0 for `error`/null-header
 
 #### Manual
 
 - [ ] 5.13 `npm run lint` and `npm run build` unchanged from Phase 4 (no TypeScript in this phase)
 - [ ] 5.14 The reserve → settle → refresh cycle leaves `supadata_reservations` empty, walked by hand
+
+Record: `reviews/sql-assertions-phase-5.md`. Rows 5.1–5.12 all pass; 5.4 and 5.11 were run in two psql
+sessions with the second issued while the first transaction was still open, and the **blocking
+interval** (1.2–1.5 s, released only by the first session's commit) is what makes them serialization
+proofs rather than coincidences. Two adaptations recorded there: the migration is
+`20260731150000_supadata_budget.sql` (the plan's `130000` slot was taken by a Phase 4 follow-up), and
+the refresh claim's TTL — which the plan needs but never names — is a derived constant inside the
+function rather than a fifth argument, because the four-argument signature is pinned by Phase 6.
+Rows 5.13/5.14 were both exercised (lint and build clean, the lifecycle walked once) but stay unticked
+pending user confirmation.
 
 ### Phase 6: Wiring the breaker
 

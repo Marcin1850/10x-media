@@ -1,13 +1,30 @@
 ---
 change_id: transcript-cost-guardrail
 title: Transcript cost guardrail
-status: impl_reviewed
+status: implementing
 created: 2026-07-31
 updated: 2026-08-04
 archived_at: null
 ---
 
 ## Notes
+
+**Phase 5 implemented 2026-08-04 (local, undeployed)** — rows 5.1–5.12 all pass; record at
+`reviews/sql-assertions-phase-5.md`. The reservation ledger is in place and **nothing calls it**: a
+migration and nothing else, which is the whole point of the split. The two assertions that cannot be
+established by reading the code were run in two psql sessions with the second issued while the first
+transaction was still open — one seat, one id, one refusal (5.4), and exactly one `refresh_required`
+between two stale readers (5.11); the **blocking interval**, released only by the first session's
+commit, is what makes them proofs rather than coincidences. Two adaptations: the migration is
+`20260731150000_supadata_budget.sql`, not the plan's `130000` (that slot went to
+`summaries_single_writer`, a Phase 4 follow-up, and `140000` to `metadata_via_fetch_failed`) — Phase
+6's criterion 6.3 greps the path and must use the real one; and **the refresh claim's TTL is a gap the
+plan left open** — it needs one (a claim whose refresh failed is left to expire) but never names it,
+and it cannot become a fifth argument because Phase 6 mirrors the pinned four-argument signature. It is
+a derived constant inside the function, 30 s: long enough to outlive one `/v1/me` round trip plus the
+1.2 s spacing plus the second pass (~4 s), short enough that a failed refresh costs seconds of
+untracked traffic rather than a full 900 s reading TTL. Manual rows 5.13/5.14 were exercised but stay
+pending user confirmation.
 
 **Phase 4 implemented and manually verified 2026-08-04 (local)** — rows 4.1–4.9 all pass; record at
 `reviews/manual-verification-phase-4.md`. `metadata_cache` + the `metadata_via` marker landed, and
