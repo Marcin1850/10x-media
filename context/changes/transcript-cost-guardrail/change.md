@@ -3,11 +3,22 @@ change_id: transcript-cost-guardrail
 title: Transcript cost guardrail
 status: impl_reviewed
 created: 2026-07-31
-updated: 2026-08-02
+updated: 2026-08-04
 archived_at: null
 ---
 
 ## Notes
+
+**Phase 3 impl-review triaged 2026-08-04** — verdict NEEDS ATTENTION (0 critical, 2 warnings, 1
+observation); all 3 findings fixed, none skipped. F1 made `requestId` **required** in `generateSchema`:
+leaving it optional exported the "no key ⇒ skip the charge" rule to the trust boundary, so any
+authenticated caller could omit the field and drive the paid `unavailable` path for free. The pre-F22
+compatibility clause is superseded by a dated addendum in `plan.md`; the null-tolerant branches stay as
+an internal safety net. F2 narrowed the `unique_violation` handler — it now re-reads the
+`(user_id, request_id)` key and re-`raise`s when no non-refunded row exists, so an unrelated integrity
+failure can no longer be answered as a valid `replay`; both paths re-proved in psql. F3 corrected this
+file's own stale routing (deploy gate is Phase 7, not 5). Manual rows 3.9–3.15 remain deliberately
+pending.
 
 **Phase 3 addition, 2026-08-02.** `charge_failed_transcript` carries an `exception when
 unique_violation` handler the plan did not specify. The plan says `'replay'` must be reached through
@@ -57,7 +68,8 @@ from the first event, while the breaker only engages at plan exhaustion and refu
 **Phase 1 manually verified 2026-08-01 (local)** — rows 1.5–1.8 all pass; record at
 `reviews/manual-verification-phase-1.md`. Supadata delta 3 reconciled exactly against the per-outcome
 ledger total, independently re-confirming that a `null` `billable_credits` on a 206 means 1 credit.
-Phase 1 is complete and stays **undeployed** — Phase 5 is the single deploy gate. Caught during
+Phase 1 is complete and stays **undeployed** — **Phase 7** is the single deploy gate (written as
+Phase 5 before the same-day scope extension above renumbered the tail). Caught during
 pre-flight: a dev server from 2026-07-29 was still holding port 4321 and serving pre-Phase-1 code;
 killed before testing. Worth re-checking on every future manual pass.
 
@@ -74,10 +86,13 @@ billed), and the budget breaker is an **atomic reservation** under the singleton
 followed by a spend. The breaker grew accordingly — `supadata_reservations`, reserve/settle RPCs, a
 settlement obligation on every paid path, and a client 503 change.
 
-**Phase count is now 5.** The breaker was split: Phase 3 is the reservation ledger (migration only,
+**Phase count is now 5.** ~~The breaker was split: Phase 3 is the reservation ledger (migration only,
 proved in SQL, called by nothing), Phase 4 wires it into the endpoint, Phase 5 is the deploy + live
-pass that used to be Phase 4. The split puts the atomicity assertion where it is cheap to prove and
-keeps the phase touching the paid pipeline small enough to review.
+pass that used to be Phase 4.~~ **SUPERSEDED 2026-08-01 by the scope extension above — the count is 7
+and every number in this paragraph shifted by two: the reservation ledger is Phase 5, the endpoint
+wiring Phase 6, the deploy + live pass Phase 7.** The reasoning still holds: the split puts the
+atomicity assertion where it is cheap to prove and keeps the phase touching the paid pipeline small
+enough to review.
 
 S-09 from roadmap
 

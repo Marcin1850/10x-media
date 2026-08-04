@@ -173,8 +173,25 @@ begin
 -- user is charged exactly once and the second caller reports 'replay' like any other repeat. Without
 -- the handler the exception would propagate and the service would report "not charged" for a request
 -- that genuinely was charged, by the other caller.
+--
+-- The handler proves the race rather than assuming it: `unique_violation` is raised by ANY unique
+-- index in the block, so a future constraint or an id collision would otherwise be answered as a
+-- valid 'replay' with no charged row behind it. Re-reading the key is what keeps 'replay' meaning
+-- "somebody else already charged this exact key" — anything else re-raises and reaches the service
+-- as the integrity failure it is. The row is visible to this read because a unique_violation is only
+-- raised once the conflicting transaction has COMMITTED.
 exception
   when unique_violation then
+    select cr.id into existing_id
+    from public.credit_reservations cr
+    where cr.user_id = p_user_id
+      and cr.request_id = p_request_id
+      and cr.status <> 'refunded';
+
+    if existing_id is null then
+      raise;
+    end if;
+
     outcome := 'replay';
     select uc.balance into new_balance
     from public.user_credits uc

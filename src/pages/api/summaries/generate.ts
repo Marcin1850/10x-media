@@ -91,9 +91,11 @@ const generateSchema = z.object({
   character: z.enum(["informational", "educational"]),
   allowLong: z.boolean().optional().default(false),
   // Identifies ONE user-initiated generation, repeated verbatim when the client retries after an
-  // ambiguous failure (request delivered, reply lost). Optional so a cached client that predates F22
-  // still works: absent means no deduplication, which is exactly the pre-F22 behaviour.
-  requestId: z.uuid().optional(),
+  // ambiguous failure (request delivered, reply lost). REQUIRED at the boundary: `refuseAndCharge`
+  // skips the D14 fee when it has no key, so an optional field would let any caller opt out of the
+  // charge by omitting it. A cached pre-F22 client gets a 400 until it reloads — the correct trade,
+  // since the only first-party call site has always sent a UUID.
+  requestId: z.uuid(),
 });
 
 export const POST: APIRoute = async (context) => {
@@ -169,7 +171,7 @@ export const POST: APIRoute = async (context) => {
       youtubeId,
       character,
       allowLong,
-      requestId: requestId ?? null,
+      requestId,
       supadataKey: SUPADATA_API_KEY,
       openrouterKey: OPENROUTER_API_KEY,
       meter,
@@ -192,7 +194,11 @@ interface GenerationInput {
   youtubeId: string;
   character: "informational" | "educational";
   allowLong: boolean;
-  /** Client-owned identity for ONE generation, repeated on retry. `null` when the client predates F22. */
+  /**
+   * Client-owned identity for ONE generation, repeated on retry. The POST schema now requires it, so
+   * `null` is unreachable from the endpoint; the type stays nullable because the null-tolerant paths
+   * below are the safety net that keeps a keyless call from being charged non-idempotently.
+   */
   requestId: string | null;
   /** Passed in rather than re-read from `astro:env`: the POST preflight already proved both non-null. */
   supadataKey: string;
@@ -230,7 +236,9 @@ function refusalResponse(reason: RefusalReason): Response {
  *
  * A `null` requestId SKIPS the charge rather than inventing a key. See the service: a generated key
  * would make the fee non-idempotent across exactly the retries `requestId` exists to absorb, and a
- * refused submit is a plausible thing for a client to retry.
+ * refused submit is a plausible thing for a client to retry. The POST schema requires the field, so
+ * that branch is a safety net, not a supported client shape — omitting the key buys a 400, not a free
+ * refusal.
  */
 async function refuseAndCharge(
   admin: NonNullable<ReturnType<typeof createAdminClient>>,

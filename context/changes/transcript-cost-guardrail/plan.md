@@ -282,6 +282,14 @@ failure — the exact scenario `requestId` exists for — would be charged once 
 `requestId` is absent (a pre-F22 client), the charge must be skipped rather than made
 non-idempotent — failing toward not charging is the correct direction for a fee the user cannot see.
 
+> **Addendum (2026-08-04, Phase 3 impl review F1).** The skip-when-absent rule above is right *inside*
+> the handler, but leaving `requestId` optional in `generateSchema` exported it to the trust boundary:
+> any authenticated caller could omit the field and drive the paid `unavailable` path for free. The
+> field is now **required** in `generateSchema`; the null-tolerant branches in `refuseAndCharge` and
+> `runGeneration` stay as an internal safety net. The pre-F22 compatibility clause is therefore
+> superseded — a cached old client receives a 400 until it reloads, accepted because the only
+> first-party call site (`GenerateSummaryForm.tsx`) has always sent `crypto.randomUUID()`.
+
 **The charge is settled in the same statement that reserves it.** Not two calls. A `'reserved'` row is
 what the hourly reconciliation sweep refunds, so a reserve-then-settle pair would be racing a sweep for
 no benefit — there is no work in between to fail. One RPC that inserts the row already `'settled'` is
