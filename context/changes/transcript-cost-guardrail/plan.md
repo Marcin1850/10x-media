@@ -1624,14 +1624,14 @@ pending user confirmation.
 
 #### Automated
 
-- [x] 6.1 Type checking and lint pass
-- [x] 6.2 Build succeeds
-- [x] 6.3 The sweep window is passed to the RPC, not duplicated in SQL
-- [x] 6.4 Both call sites settle in a `finally`, not on the happy path only
+- [x] 6.1 Type checking and lint pass — 01b0f34
+- [x] 6.2 Build succeeds — 01b0f34
+- [x] 6.3 The sweep window is passed to the RPC, not duplicated in SQL — 01b0f34
+- [x] 6.4 Both call sites settle in a `finally`, not on the happy path only — 01b0f34
 - [x] 6.5 `billedSince` sums a retry to 2, returns null on any unknown row, 0 on no rows, and ignores
-      the other operation's rows
-- [x] 6.6 `reserveBudget` returns a three-case union including `untracked`, not an `id | null`
-- [x] 6.7 Settlement is reachable only from the `reserved` branch
+      the other operation's rows — 01b0f34
+- [x] 6.6 `reserveBudget` returns a three-case union including `untracked`, not an `id | null` — 01b0f34
+- [x] 6.7 Settlement is reachable only from the `reserved` branch — 01b0f34
 
 #### Manual
 
