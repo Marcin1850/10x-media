@@ -1555,11 +1555,11 @@ the insert and is caught by `charge_failed_transcript`'s `unique_violation` hand
 
 #### Automated
 
-- [x] 4.1 Migration applies cleanly to the local stack
-- [x] 4.2 Exactly one `persist_summary` overload exists afterwards
-- [x] 4.3 `metadata_cache` and `summaries.metadata_via` have the intended constraints and grants
-- [x] 4.4 Type checking and lint pass
-- [x] 4.5 Build succeeds
+- [x] 4.1 Migration applies cleanly to the local stack — 0142ead
+- [x] 4.2 Exactly one `persist_summary` overload exists afterwards — 0142ead
+- [x] 4.3 `metadata_cache` and `summaries.metadata_via` have the intended constraints and grants — 0142ead
+- [x] 4.4 Type checking and lint pass — 0142ead
+- [x] 4.5 Build succeeds — 0142ead
 
 #### Manual
 
