@@ -37,7 +37,7 @@
   - Tradeoff: More complex and easier to drift as new server-owned columns are added.
   - Confidence: MEDIUM — PostgreSQL supports the shape, but the required client-write column set is not documented.
   - Blind spot: No current direct-write use case was found to validate the exact allowed column list.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A — added `supabase/migrations/20260731130000_summaries_single_writer.sql`, mirroring `20260726120000_videos_single_writer.sql`. Applied locally; catalogue now shows `authenticated` holding only `SELECT`/`DELETE` on `summaries`, with `summaries_insert_authenticated` and `summaries_update_authenticated` dropped.
 
 ### F2 — The RPC swap creates a non-atomic production outage window
 
@@ -51,7 +51,7 @@
   - Tradeoff: Temporarily duplicates the function body and requires a follow-up contract migration.
   - Confidence: HIGH — both caller versions can coexist under distinct RPC names without PostgREST overload ambiguity.
   - Blind spot: The production traffic level and existing deployment rollback automation were not measured.
-- **Decision**: PENDING
+- **Decision**: SKIPPED — the in-place RPC swap stands; the deploy gap is accepted for this change.
 
 ### F3 — `fetched` is documented as billed even when failures cost zero
 
@@ -61,7 +61,7 @@
 - **Location**: `src/types.ts:21`
 - **Detail**: On every cache miss, the endpoint sets `metadata_via = 'fetched'` before calling `fetchVideoMetadata`, and it retains that value when the helper returns `null` after a failed request (`generate.ts:758-776`). That behavior correctly means “a vendor request was attempted,” but the type comment, migration column comment, and endpoint comment describe the value as necessarily billed. The same implementation states that failed metadata calls are billed 0. Treating the marker itself as billing truth would therefore overcount failures; exact billing belongs to `supadata_calls`.
 - **Fix**: Rewrite the three comments to define `fetched` as “vendor request attempted; consult `supadata_calls` for exact billing.”
-- **Decision**: PENDING
+- **Decision**: FIXED differently — rather than resolve the ambiguity in prose, the outcome moved into the marker. Added `supabase/migrations/20260731140000_metadata_via_fetch_failed.sql` widening `summaries_metadata_via_check` to `('fetched', 'fetch_failed', 'stored', 'skipped_budget')` and rewriting the column comment; `MetadataVia` in `src/types.ts:28` gained `"fetch_failed"` with both doc comments reworded; `generate.ts` now stamps the marker AFTER the call (`metadata === null ? "fetch_failed" : "fetched"`) instead of before it. `supadata_calls` is named as billing truth in all three places. Not backfilled — pre-existing `'fetched'` rows are not retroactively separable. Plan D10 updated with a matching addendum. Verified: migration applied locally, constraint reads the four values, `npm run lint` and `npm run build` pass.
 
 ## Verification
 

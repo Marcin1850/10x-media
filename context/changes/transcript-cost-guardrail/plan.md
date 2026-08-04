@@ -729,6 +729,18 @@ and is already visible in the ledger. No advisory lock, for the same reason.
 written by Phase 6 and is declared here so the constraint is not altered twice; nothing writes it yet.
 A column comment must state that `metadata_ms` is only comparable across `'fetched'` rows.
 
+> **Addendum (2026-08-04, impl review phase 4 / F3)** — the value set is now `('fetched',
+> 'fetch_failed', 'stored', 'skipped_budget')`, widened by
+> `20260731140000_metadata_via_fetch_failed.sql`. As first written, `'fetched'` was stamped before the
+> vendor call and kept when that call returned nothing, so one value covered both outcomes while every
+> comment on it read "billed" — and a failed metadata call is billed 0, which is exactly why D9 does
+> not cache it. `'fetched'` now means the call returned metadata, `'fetch_failed'` means it was made
+> and returned nothing. Neither is a spend figure; `supadata_calls` stays the billing truth.
+> `metadata_ms` is comparable across both vendor-calling values, but service-time queries want
+> `'fetched'` alone. Not backfilled: rows written before that migration cannot be told apart after the
+> fact, and inferring the difference is what D11/D13 refuse to do. Phase 6's `'skipped_budget'` is
+> unaffected.
+
 *`persist_summary` swap, 23 → 24 arguments* — `drop function` with the **full old signature**, then
 `create function` with `p_metadata_via text` appended, then `revoke`/`grant` against the **new**
 signature. `create or replace` would produce a second overload rather than a replacement. Everything

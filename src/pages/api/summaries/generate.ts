@@ -756,7 +756,6 @@ async function runGeneration({
   let metadataVia: MetadataVia = "stored";
 
   if (metadata === null) {
-    metadataVia = "fetched";
     const metadataStartedAt = Date.now();
     try {
       metadata = await fetchVideoMetadata({ url }, supadataKey, meter);
@@ -767,11 +766,16 @@ async function runGeneration({
     // Overwrites the cache read's duration measured above — the bracket that actually ran wins.
     metadataMs = Date.now() - metadataStartedAt;
 
+    // Set AFTER the call, not before it: a request went out either way, and whether it came back with
+    // a row is precisely the difference the two markers record. Stamping `'fetched'` up front made
+    // the value mean "attempted" while every comment on it claimed "billed" — and a failure is
+    // billed 0, so reading it as spend overcounts. `supadata_calls` remains the billing truth.
+    metadataVia = metadata === null ? "fetch_failed" : "fetched";
+
     // Only a SUCCESS is cached (D9). A failed metadata call is billed 0, so caching the failure would
     // save nothing while persisting nulls for a video whose next attempt would likely succeed — and
     // `save_metadata_cache` does not coalesce, so writing nulls here would actively poison the row
-    // for every other user. `metadata_via` stays `'fetched'` either way: a call was made and billed,
-    // which is what that value records.
+    // for every other user.
     if (metadata !== null) {
       await saveCachedMetadata(admin, youtubeId, metadata);
     }
