@@ -558,6 +558,26 @@ async function runGeneration({
       return Response.json({ error: BUDGET_EXHAUSTED_ERROR }, { status: 503 });
     }
 
+    /**
+     * Closes the reservation on the exits BETWEEN acquiring it and reaching the fetch's `finally`.
+     *
+     * Reserving before the rate limiter is deliberate (see above), and it opens a gap the `finally`
+     * below cannot cover: the rate-limit guard can return 500 or 429 while a live reservation is
+     * held, and NO Supadata call has happened on either path. Leaving those rows to the 600 s sweep
+     * holds a credit against the WHOLE FLEET for ten minutes per rejected request, so a burst of
+     * rate-limited traffic manufactures budget exhaustion out of calls that never cost anything —
+     * the breaker refusing paid work on the strength of spend that does not exist.
+     *
+     * Settled at 0, not deleted: 0 is a KNOWN figure here, not the "unknown" that `null` means and
+     * that the outstanding total charges at the reserved maximum. Nothing was requested, so nothing
+     * could be billed. Every exit after this point is covered by the `finally`.
+     */
+    const releaseUnspentTranscriptBudget = async (): Promise<void> => {
+      if (transcriptBudget.outcome === "reserved") {
+        await settleBudget(admin, transcriptBudget.reservationId, 0);
+      }
+    };
+
     // Rate-limit it next; a genuine RPC failure fails the request CLOSED (500)
     // rather than proceed to the very unbounded fetch this guard exists to prevent.
     let allowed: boolean;
@@ -566,9 +586,11 @@ async function runGeneration({
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error("recordTranscriptAttempt failed:", error);
+      await releaseUnspentTranscriptBudget();
       return Response.json({ error: "Something went wrong. Please try again." }, { status: 500 });
     }
     if (!allowed) {
+      await releaseUnspentTranscriptBudget();
       return Response.json(
         { error: "Too many transcript requests. Please wait a moment and try again." },
         { status: 429 },

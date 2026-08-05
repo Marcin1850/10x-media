@@ -947,6 +947,18 @@ released. That read races every other reserve and would report figures that neve
 worse than useless in an incident. The numbers leave the lock with the decision they justify or they
 are not trustworthy at all.
 
+> **Addendum (2026-08-05, Phase 5 impl review F5).** "Every decision" above is stated too broadly, and
+> it contradicts this section's own ordered algorithm, where step 3 returns before step 4 computes
+> `outstanding`. The four outcomes are not one kind of thing: `reserved` and `refused` are **decisions**
+> and do carry the complete set, because a decision is exactly what those figures justify.
+> `refresh_required` and `uninitialized` are **control states** — they decide nothing, and they return
+> before there is anything to decide against. `refresh_required` therefore carries `max_credits`,
+> `used_credits` and `read_at` (the stale reading it is about to replace) with `outstanding` null;
+> `uninitialized` carries nothing, because by definition no reading exists. The commitment that
+> actually matters is unchanged and is the one the implementation keeps: **whatever figures accompany a
+> decision were read under the lock that made it.** The parallel `BudgetStatistics` doc comment in
+> `supadata-budget.ts` is corrected to match.
+
 *`settle_supadata_reservation(p_reservation_id uuid, p_actual_credits integer)`* — marks the row
 settled, stamps `settled_at = now()`, and records the real figure, or leaves `actual_credits` null when
 the vendor reported none. **It never deletes the row**: deleting it before the ledger flush would open a

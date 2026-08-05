@@ -120,11 +120,23 @@ function sleep(ms: number): Promise<void> {
  * Not telemetry padding: `reportBudgetThreshold` promises a self-sufficient payload, and the only
  * alternative is a second query after the lock is released — which races every other reserve and
  * reports numbers that never coexisted. That is worse than useless in an incident.
+ *
+ * **Every field is nullable, and the nulls are not uniform — they say WHICH STATE produced them.** A
+ * DECISION (`reserved`, `refused`) carries the complete set, because that is precisely what it
+ * justifies. A CONTROL STATE carries less because there is less: the RPC's `refresh_required` returns
+ * before the outstanding total is computed, so it carries the stale reading it is about to replace
+ * with `outstanding` null, and `uninitialized` carries nothing at all, because by definition no
+ * reading exists. The invariant that holds across all of them is the one that matters — whatever
+ * figures are present were read under the lock that produced them. Do not "fill in" a null here from
+ * a later query; that is the unlocked second read this type exists to avoid.
  */
 export interface BudgetStatistics {
   maxCredits: number | null;
   usedCredits: number | null;
-  /** Credits held by reservations written since the reading — local spend the vendor has not seen. */
+  /**
+   * Credits held by reservations written since the reading — local spend the vendor has not seen.
+   * Null when the state returned before the total was computed, NOT when it is zero.
+   */
   outstanding: number | null;
   /** When the reading was taken. Null only when the decision was made without one. */
   readAt: string | null;
@@ -154,9 +166,23 @@ export type ReserveBudgetResult =
 type ReserveRpcResult =
   | { outcome: "reserved"; reservationId: string; stats: BudgetStatistics }
   | { outcome: "refused"; stats: BudgetStatistics }
-  | { outcome: "refreshRequired"; stats: BudgetStatistics }
+  /** `claimId` fences the save that follows — see `saveVendorBudget`. Only this outcome carries one. */
+  | { outcome: "refreshRequired"; claimId: string; stats: BudgetStatistics }
   | { outcome: "uninitialized" }
   | { outcome: "error"; message: string };
+
+/**
+ * What `save_supadata_budget` did. Three cases, not a boolean, because the middle one is not a
+ * failure and must not be logged as one.
+ *
+ * - `saved`      — the reading is stored and the superseded reservations are pruned.
+ * - `claim-lost` — this caller stalled past the refresh claim's TTL, a successor took the claim over,
+ *                  and its reading is already stored. NOTHING was written, deliberately: a late save
+ *                  would move the anchor BACKWARDS over rows the successor already pruned. Worth
+ *                  seeing on its own, because it means a Worker ran ~30 s behind.
+ * - `failed`     — transport or RPC error. We know nothing about the stored state.
+ */
+type SaveBudgetResult = "saved" | "claim-lost" | "failed";
 
 /**
  * A budget event worth someone's attention. Its payload is SELF-SUFFICIENT by design — used, max, the
@@ -252,6 +278,7 @@ async function callReserveRpc(admin: SupabaseClient, credits: number): Promise<R
             used_credits: number | null;
             outstanding: number | null;
             read_at: string | null;
+            refresh_claim_id: string | null;
           }[]
         | null;
       error: { message: string } | null;
@@ -281,7 +308,12 @@ async function callReserveRpc(admin: SupabaseClient, credits: number): Promise<R
       case "refused":
         return { outcome: "refused", stats };
       case "refresh_required":
-        return { outcome: "refreshRequired", stats };
+        // A claim without its id cannot be saved back, so the refresh would spend an HTTP call and
+        // then be rejected by the fence. Same contract violation as an id-less reservation above.
+        if (!row.refresh_claim_id) {
+          return { outcome: "error", message: "reserve_supadata_credits granted a refresh without a claim id" };
+        }
+        return { outcome: "refreshRequired", claimId: row.refresh_claim_id, stats };
       case "uninitialized":
         return { outcome: "uninitialized" };
       default:
@@ -293,12 +325,28 @@ async function callReserveRpc(admin: SupabaseClient, credits: number): Promise<R
 }
 
 /**
+ * A credit figure we are willing to store: a nonnegative integer. `Number.isInteger` already excludes
+ * `NaN` and both infinities, so this is the whole domain check. See `readVendorBudget` for why finite
+ * is not sufficient.
+ */
+function isCreditFigure(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+/**
  * `GET /v1/me`, bounded and narrowed. Returns null on ANY failure — transport rejection, our own
  * deadline, a non-2xx status, a non-JSON body or a shape we do not recognise.
  *
  * The narrowing is not defensive tidiness: a vendor that changes the shape of `usedCredits`/`maxCredits`
  * must produce a REPORTED failure, not `NaN` arithmetic that silently computes a remaining balance
  * nobody can trust and a breaker that never trips.
+ *
+ * **Finite is not enough — the figures must be NONNEGATIVE INTEGERS.** `-1` and `1.5` are both finite,
+ * and both are the same class of bug as `NaN` one step later: a negative `usedCredits` INVENTS budget
+ * in `max - used - outstanding`, and a fractional one is not representable in the `integer` columns
+ * that store it, so it would be silently rounded on the way in — the reading would then differ from
+ * what the vendor reported, in a value whose entire purpose is to be authoritative. Rejecting them
+ * routes through the same fail-open path as an unreachable `/v1/me`, which is reported, not swallowed.
  */
 async function readVendorBudget(apiKey: string): Promise<{ maxCredits: number; usedCredits: number } | null> {
   try {
@@ -312,8 +360,8 @@ async function readVendorBudget(apiKey: string): Promise<{ maxCredits: number; u
     const body = (await response.json()) as unknown;
     if (typeof body !== "object" || body === null) return null;
     const { maxCredits, usedCredits } = body as { maxCredits?: unknown; usedCredits?: unknown };
-    if (typeof maxCredits !== "number" || !Number.isFinite(maxCredits)) return null;
-    if (typeof usedCredits !== "number" || !Number.isFinite(usedCredits)) return null;
+    if (!isCreditFigure(maxCredits)) return null;
+    if (!isCreditFigure(usedCredits)) return null;
 
     return { maxCredits, usedCredits };
   } catch {
@@ -321,23 +369,39 @@ async function readVendorBudget(apiKey: string): Promise<{ maxCredits: number; u
   }
 }
 
-/** Stores a fresh reading and prunes what it supersedes. Returns false on any failure. */
+/**
+ * Stores a fresh reading and prunes what it supersedes, UNDER THE CLAIM THAT AUTHORIZED THE REFRESH.
+ *
+ * **No timestamp is passed, deliberately.** The snapshot boundary is `refresh_claimed_at`, generated
+ * by PostgreSQL when the claim was granted and read back off the locked row inside the RPC. A
+ * Worker-supplied boundary is the natural shape and it is wrong: `settled_at` is generated by
+ * PostgreSQL, so comparing it against `new Date()` from a Worker compares two clocks, and under
+ * positive Worker skew a call that really settled after the read began still prunes as if the vendor
+ * snapshot contained it. One clock generates both sides.
+ *
+ * **The claim is an ownership fence, not a formality.** Its 30 s TTL bounds how long the claim is
+ * honoured, not how long this Worker runs. A stalled caller loses the claim to a successor, and its
+ * late save would overwrite the successor's newer reading while the rows that successor pruned are
+ * already gone — spend that then appears in neither the anchor nor the reservation delta. The RPC
+ * answers `false` instead, which is `claim-lost` here.
+ */
 async function saveVendorBudget(
   admin: SupabaseClient,
   maxCredits: number,
   usedCredits: number,
-  readTakenAt: string,
-): Promise<boolean> {
+  claimId: string,
+): Promise<SaveBudgetResult> {
   try {
-    const { error } = (await admin.rpc("save_supadata_budget", {
+    const { data, error } = (await admin.rpc("save_supadata_budget", {
       p_max_credits: maxCredits,
       p_used_credits: usedCredits,
-      p_read_taken_at: readTakenAt,
-    })) as { error: { message: string } | null };
+      p_claim_id: claimId,
+    })) as { data: boolean | null; error: { message: string } | null };
 
-    return error === null;
+    if (error) return "failed";
+    return data === true ? "saved" : "claim-lost";
   } catch {
-    return false;
+    return "failed";
   }
 }
 
@@ -347,8 +411,10 @@ async function saveVendorBudget(
  * Pass one asks `reserve_supadata_credits`, which decides atomically under the singleton row lock and
  * hands back one of four outcomes. `reserved`, `refused` and `uninitialized` return immediately. On
  * `refresh_required` — and ONLY this caller, which is what the claim taken under that row lock
- * enforces — it fetches `/v1/me`, saves it with the timestamp taken BEFORE the request, evaluates the
- * warn threshold, waits out the rate-limit spacing, and reserves AGAIN.
+ * enforces — it fetches `/v1/me`, saves it UNDER THE CLAIM ID it was handed, evaluates the warn
+ * threshold, waits out the rate-limit spacing, and reserves AGAIN. The claim is what makes the save
+ * safe against this Worker stalling past the claim's TTL; the boundary the save prunes against comes
+ * from the database, not from here (see `saveVendorBudget`).
  *
  * **The second pass is not an optimization; it is the only place the refreshed reading is used.** A
  * refresh that does not re-decide has spent an HTTP call to learn a number it then ignores — and the
@@ -387,10 +453,6 @@ export async function reserveBudget(
       break;
   }
 
-  // Taken BEFORE the request, not after: `save_supadata_budget` prunes reservations settled at or
-  // before this instant, and a post-call timestamp would sweep away calls that settled DURING the
-  // round trip — calls the vendor's snapshot provably cannot contain.
-  const readTakenAt = new Date().toISOString();
   const reading = await readVendorBudget(apiKey);
   if (reading === null) {
     // The claim is deliberately left to EXPIRE rather than cleared: clearing it here would send the
@@ -398,8 +460,20 @@ export async function reserveBudget(
     return untracked("GET /v1/me failed, timed out, or returned an unusable body", first.stats);
   }
 
-  if (!(await saveVendorBudget(admin, reading.maxCredits, reading.usedCredits, readTakenAt))) {
-    return untracked("save_supadata_budget failed", first.stats);
+  // No timestamp travels with the reading. The boundary is the claim's own `refresh_claimed_at`,
+  // taken from PostgreSQL's clock just before this round trip started — see `saveVendorBudget`.
+  const saved = await saveVendorBudget(admin, reading.maxCredits, reading.usedCredits, first.claimId);
+  if (saved !== "saved") {
+    // `claim-lost` means a successor has already stored a reading at least as fresh as ours, so the
+    // stored state is fine — but this request has burned its one refresh and does not re-decide,
+    // matching the "one refresh per call, never recursed" bound below. Fail open and say which of
+    // the two it was: a lost claim means a Worker ran ~30 s behind, which is worth seeing.
+    return untracked(
+      saved === "claim-lost"
+        ? "refresh claim expired and was taken over before the reading could be saved"
+        : "save_supadata_budget failed",
+      first.stats,
+    );
   }
 
   // Warn is evaluated HERE, on the fresh reading, by the one caller that refreshed it. That is why no

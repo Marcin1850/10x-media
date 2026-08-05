@@ -4,8 +4,15 @@
 - **Plan**: `context/changes/transcript-cost-guardrail/plan.md`
 - **Scope**: Phase 5 of 7
 - **Date**: 2026-08-04
-- **Verdict**: NEEDS ATTENTION
+- **Verdict**: NEEDS ATTENTION → **TRIAGED 2026-08-05, all 6 findings FIXED**
 - **Findings**: 0 critical, 4 warnings, 2 observations
+
+> **Triage outcome (2026-08-05).** All six were fixed. F1/F2 were implemented together and reshaped the
+> Phase 5 RPC contract (`reserve_supadata_credits` gains a `refresh_claim_id` output; `save_supadata_budget`
+> takes that claim instead of a caller timestamp and returns boolean); the migration was edited in place
+> because it is branch-local and was never deployed. F3 was the only change outside Phase 5's own files.
+> `reserveBudget`'s public signature is unchanged, so no other call site moved. Evidence for the 27 new
+> assertions is in `sql-assertions-phase-5.md` (addendum); `npm run lint` and `npm run build` both clean.
 
 ## Verdicts
 
@@ -32,7 +39,7 @@
   - Tradeoff: Changes the Phase 5 RPC contract and the Phase 6 service mapping, so SQL concurrency assertions and TypeScript verification must be rerun.
   - Confidence: HIGH — the stale-owner interleaving is concrete and the repository already contains the same class of fix.
   - Blind spot: The exact delayed-worker behavior should be reproduced with a two-session test before triage is closed.
-- **Decision**: PENDING
+- **Decision**: FIXED — `supadata_budget.refresh_claim_id` added, minted under the reserve lock and returned as a seventh output column; `save_supadata_budget` now takes the claim id in place of a timestamp and returns boolean. Migration edited in place (branch-local, never deployed). The blind spot was closed: rows 5.15–5.22 in `sql-assertions-phase-5.md` reproduce the delayed-claimant interleaving and show the late save returning FALSE with the anchor, `read_at` and the reservation table all untouched.
 
 ### F2 — Worker time is used to prune rows timestamped by PostgreSQL
 
@@ -46,7 +53,7 @@
   - Tradeoff: Extends the reserve result and save call, and should be implemented together with F1's claim fencing.
   - Confidence: HIGH — the current code demonstrably compares timestamps from different clocks.
   - Blind spot: Actual Worker/PostgreSQL clock skew has not been measured; the finding concerns correctness under reachable skew, not an observed production incident.
-- **Decision**: PENDING
+- **Decision**: FIXED — implemented together with F1, and it cost a parameter rather than adding one. Once `save_supadata_budget` is fenced on the claim it reads `refresh_claimed_at` off the locked row and uses that as both `read_at` and the prune boundary, so no Worker clock crosses the boundary at all: `new Date().toISOString()` and the `p_read_taken_at` parameter are both deleted. The claim stamp is taken before the `/v1/me` round trip, so the boundary stays conservative. Asserted as row 5.23.
 
 ### F3 — Pre-fetch rate-limit exits leave a live reservation behind
 
@@ -56,7 +63,7 @@
 - **Location**: `src/pages/api/summaries/generate.ts:556`
 - **Detail**: The current Phase 6 caller reserves transcript credit before `recordTranscriptAttempt`, then returns on the guard's 500 or 429 paths at lines 569 and 572 without settling. No Supadata call occurred, but the row remains unsettled and consumes fleet budget until the 600-second sweep. Repeated rate-limit traffic can therefore create false budget exhaustion. This is a cross-phase integration finding: the Phase 5 RPC itself is not the leaking call site, but its "reserved implies settle" contract is violated by the current caller.
 - **Fix**: Settle the acquired reservation with `actual_credits = 0` before both pre-provider returns, preferably through one reservation-scope cleanup path.
-- **Decision**: PENDING
+- **Decision**: FIXED — one `releaseUnspentTranscriptBudget()` cleanup closure now covers both pre-provider exits, settling at `0` (a KNOWN zero, not the `null` that means "unknown" and charges at the reserved maximum). The metadata check point was audited for the same class and has no gap: its reserve is immediately followed by the `try`/`finally`.
 
 ### F4 — Budget state and RPC inputs lack defensive invariants
 
@@ -70,7 +77,7 @@
   - Tradeoff: Requires deciding whether fractional vendor values are valid and handling rejected readings through the existing fail-open reporting path.
   - Confidence: HIGH — each malformed value currently reaches arithmetic or state mutation without rejection.
   - Blind spot: Supadata's formal credit-field domain was not re-verified against live vendor documentation in this phase review.
-- **Decision**: PENDING
+- **Decision**: FIXED. Six named check constraints (nonnegative budget figures, all-or-nothing reading, all-or-nothing claim, positive reservation credits, nonnegative actual, settlement state machine); all four `reserve_supadata_credits` policy inputs validated, plus nonnegative guards on `settle_supadata_reservation` and `save_supadata_budget`; `readVendorBudget` narrows both figures with `isCreditFigure` (nonnegative INTEGER, not merely finite). **The fractional-vendor-value tradeoff was resolved as REJECT**: `max_credits`/`used_credits` are `integer` columns, so a fractional reading was never representable and accepting one meant silent rounding of the single value whose purpose is to be authoritative — it now routes through the existing reported fail-open path. Asserted as rows 5.26–5.37.
 
 ### F5 — Early outcomes do not carry the complete statistics promised by the plan
 
@@ -80,7 +87,7 @@
 - **Location**: `supabase/migrations/20260731150000_supadata_budget.sql:255`
 - **Detail**: The plan says every decision returns `max_credits`, `used_credits`, `outstanding`, and `read_at` from the locked state. `refresh_required` returns `outstanding = null`, while `uninitialized` returns all statistics null; the outstanding total is only computed later at lines 287–291. The plan is internally ambiguous because its ordered algorithm also says these outcomes return before outstanding is computed. No planned mechanism is missing, but the persisted contract overstates what early outcomes provide.
 - **Fix**: Narrow the plan/type contract to distinguish partial control-state statistics from complete reserve/refuse decision statistics, computing stale-reading outstanding before return where it is useful.
-- **Decision**: PENDING
+- **Decision**: FIXED (contract narrowed, no behaviour change). `plan.md` carries a dated addendum resolving its own internal ambiguity in favour of the ordered algorithm: `reserved`/`refused` are DECISIONS and carry the complete set, `refresh_required`/`uninitialized` are CONTROL STATES that return before there is anything to compute. The commitment is restated as being about PROVENANCE — whatever figures accompany an outcome were read under the lock that produced it — not completeness. The migration header and the `BudgetStatistics` doc comment now say the same thing. Deliberately did NOT compute a stale-reading outstanding early: it would add a scan to the refresh path to populate a field no caller reads.
 
 ### F6 — Failed refreshes can grow the reservation table beyond the documented TTL bound
 
@@ -90,7 +97,7 @@
 - **Location**: `supabase/migrations/20260731150000_supadata_budget.sql:287`
 - **Detail**: Settled rows are pruned only after a successful budget refresh. During a prolonged `/v1/me` failure, the supported fail-open path leaves the old anchor in place while settled rows continue to accumulate and every reserve aggregates across them. The table comment's claim that it contains at most one TTL of completed work is therefore not guaranteed, although the MVP traffic ceiling limits near-term impact.
 - **Fix**: Remove known-zero settlements immediately or add a safe cleanup path for rows that provably represent zero spend without relying on a successful vendor refresh.
-- **Decision**: PENDING
+- **Decision**: FIXED — both halves. `reserve_supadata_credits` now drops `settled = true and actual_credits = 0` alongside its existing stale sweep, independent of any vendor refresh; the predicate is deliberately `= 0` rather than null-tolerant, since an unknown settlement must keep counting at its reserved maximum. The change is behaviour-neutral by construction (`coalesce(actual_credits, credits)` is 0 either way), asserted as row 5.41. F3's fix made this a bigger class than it was when the review was written — the rate-limit release path settles at a known 0. The table comment's unguaranteed "one TTL" claim was also corrected to state the real bound: retention is tied to a refresh SUCCEEDING, not to elapsed time. Asserted as rows 5.38–5.41.
 
 ## Verification Evidence
 

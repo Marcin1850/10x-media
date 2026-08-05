@@ -3,11 +3,23 @@ change_id: transcript-cost-guardrail
 title: Transcript cost guardrail
 status: impl_reviewed
 created: 2026-07-31
-updated: 2026-08-04
+updated: 2026-08-05
 archived_at: null
 ---
 
 ## Notes
+
+**Phase 5 impl review triaged 2026-08-05 (local, undeployed)** — all six findings fixed. F1/F2
+reshaped the Phase 5 RPC contract: `reserve_supadata_credits` returns a seventh column
+`refresh_claim_id`, and `save_supadata_budget(int, int, uuid) returns boolean` takes that claim in
+place of a caller-supplied timestamp — the fence stops a claimant that stalled past the 30 s TTL from
+overwriting its successor's newer reading, and reading the boundary off the locked row removes the
+Worker-vs-PostgreSQL clock comparison. `20260731150000_supadata_budget.sql` was edited **in place**
+(branch-local, never deployed) and carries re-application guards so it re-runs cleanly on a machine
+that applied the earlier revision — anyone with a local stack should re-apply it with psql, since
+`supabase migration up` will not re-run a recorded migration. `reserveBudget`'s public signature is
+unchanged, so no call site outside the module moved. Evidence: 27 new assertion rows (5.15–5.41) in
+`reviews/sql-assertions-phase-5.md`. Nothing deployed.
 
 **Phase 6 implemented 2026-08-04 (local, undeployed)** — rows 6.1–6.7 pass; manual rows 6.8–6.17 are
 pending and need a running app plus a temporarily overridden `BUDGET_STOP_RESERVE` (6.17 is reverting
