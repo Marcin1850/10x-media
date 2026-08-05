@@ -218,3 +218,45 @@ correctness regression dressed as cleanup.
 Re-restored to the seeded, **uninitialized** shape: `supadata_reservations` empty, and `max_credits`,
 `used_credits`, `read_at`, `refresh_claimed_at`, `refresh_claim_id` all null. `npm run lint` and
 `npm run build` both clean after the TypeScript changes in `supadata-budget.ts` and `generate.ts`.
+
+---
+
+# Manual rows 5.13 / 5.14 — closed 2026-08-05
+
+Both were held open through the impl review rather than ticked on the pre-triage evidence, and both
+were re-run against the revised migration.
+
+## 5.13 — lint and build
+
+`npm run lint` and `npm run build` both exit 0. The row's parenthetical "(no TypeScript in this
+phase)" no longer holds: F1/F2 moved the RPC contract, and the contract has a TypeScript side, so
+`supadata-budget.ts` and `generate.ts` changed under Phase 5 after all. That makes the row a stronger
+check than it was written to be — it now confirms the new signatures compile rather than confirming a
+migration left the generated types alone. The `@astrojs/sitemap` warning about a missing `site` option
+is pre-existing and unrelated.
+
+## 5.14 — reserve → settle → refresh, walked by hand
+
+Re-walked under the fenced `save_supadata_budget(int, int, uuid)`; the earlier record used the
+three-timestamp signature, which no longer exists. Started from the seeded, uninitialized row.
+
+| Step | Action | Assertion | Result |
+| --- | --- | --- | --- |
+| S1 | `reserve(1, 3, 900, 600)` on an uninitialized row | `refresh_required`, **no** reservation written, a claim issued | **t** |
+| S2 | `save(100, 10, claim1)` | returns **true**; reading stored, claim released | **t** |
+| S3 | `reserve(1, 3, 900, 600)` against the real reading | `reserved`; exactly one **unsettled** row | **t** |
+| S4 | `settle(res, 1)` | returns **true**; the row is **not** deleted — spend stays visible until a reading supersedes it | **t** |
+| S5 | age `read_at` 20 min (past the 900 s TTL), then `reserve` | `refresh_required` with a **new** claim ≠ `claim1`; the settled row survives the claim | **t** |
+| S6 | `save(100, 11, claim2)` | returns **true** | **t** |
+| S7 | — | **`supadata_reservations` is EMPTY**, and the anchor carries the spend instead (`used_credits = 11`) | **t** |
+
+The settlement at S4 was deliberately given a **nonzero** `actual_credits`, so F6's known-zero sweep
+provably cannot be what emptied the table at S7 — the refresh prune is, which is the property this row
+exists to assert. S5 doubles as a check that a refresh claim does not prune on its own: only the save
+does.
+
+## State left behind
+
+Restored to the seeded, uninitialized shape — `supadata_reservations` empty, all five
+`supadata_budget` figures null. **Phase 5 is now fully verified**; Phase 6's manual rows 6.8–6.17
+remain untouched and need a running app with a temporarily overridden `BUDGET_STOP_RESERVE`.

@@ -1619,8 +1619,8 @@ so `coalesce` would have masked a "hit → skip the write" regression entirely.
 
 #### Manual
 
-- [ ] 5.13 `npm run lint` and `npm run build` unchanged from Phase 4 (no TypeScript in this phase)
-- [ ] 5.14 The reserve → settle → refresh cycle leaves `supadata_reservations` empty, walked by hand
+- [x] 5.13 `npm run lint` and `npm run build` unchanged from Phase 4 (no TypeScript in this phase) — 2026-08-05, local
+- [x] 5.14 The reserve → settle → refresh cycle leaves `supadata_reservations` empty, walked by hand — 2026-08-05, local
 
 Record: `reviews/sql-assertions-phase-5.md`. Rows 5.1–5.12 all pass; 5.4 and 5.11 were run in two psql
 sessions with the second issued while the first transaction was still open, and the **blocking
@@ -1629,8 +1629,21 @@ proofs rather than coincidences. Two adaptations recorded there: the migration i
 `20260731150000_supadata_budget.sql` (the plan's `130000` slot was taken by a Phase 4 follow-up), and
 the refresh claim's TTL — which the plan needs but never names — is a derived constant inside the
 function rather than a fifth argument, because the four-argument signature is pinned by Phase 6.
-Rows 5.13/5.14 were both exercised (lint and build clean, the lifecycle walked once) but stay unticked
-pending user confirmation.
+Rows 5.13/5.14 closed 2026-08-05, **after** the impl-review triage rather than before it — see the
+addendum in `reviews/sql-assertions-phase-5.md`. Both were re-run against the revised migration,
+which is why they were worth holding open:
+
+- **5.13** — its parenthetical "(no TypeScript in this phase)" no longer describes the phase. The F1/F2
+  fix moved the RPC contract, and the contract has a TypeScript side, so `supadata-budget.ts` and
+  `generate.ts` both changed under Phase 5. The row is therefore a *stronger* check than written: lint
+  and build now confirm the new signatures compile, not merely that a migration left the types alone.
+  Both clean, exit 0.
+- **5.14** — the earlier walk used `save_supadata_budget(int, int, timestamptz)`, a signature that no
+  longer exists, so ticking it on that evidence would have recorded a cycle the code can no longer
+  run. Re-walked in seven steps under the fenced signature, from the seeded uninitialized row through
+  refresh → save → reserve → settle → stale → refresh → save, ending with an empty table. The
+  settlement was deliberately given a NONZERO `actual_credits`, so the new zero-sweep provably is not
+  what emptied the table — the refresh prune is, which is the property the row exists to assert.
 
 ### Phase 6: Wiring the breaker
 

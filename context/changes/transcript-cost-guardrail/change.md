@@ -9,6 +9,11 @@ archived_at: null
 
 ## Notes
 
+**Phase 5 fully verified 2026-08-05** — manual rows 5.13 and 5.14 closed after the triage, re-run
+against the revised migration (5.14's earlier walk used a signature that no longer exists). Phase 5 is
+done end to end; the next open work is Phase 6's manual rows 6.8–6.17, which need a running app and a
+temporarily overridden `BUDGET_STOP_RESERVE`.
+
 **Phase 5 impl review triaged 2026-08-05 (local, undeployed)** — all six findings fixed. F1/F2
 reshaped the Phase 5 RPC contract: `reserve_supadata_credits` returns a seventh column
 `refresh_claim_id`, and `save_supadata_budget(int, int, uuid) returns boolean` takes that claim in
