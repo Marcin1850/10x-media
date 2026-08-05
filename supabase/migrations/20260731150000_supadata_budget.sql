@@ -325,11 +325,28 @@ begin
     raise exception 'reserve_supadata_credits requires a positive stale window, got: %', p_stale_seconds;
   end if;
 
-  -- 1. SWEEP. A Worker killed mid-call leaves an unsettled row behind, and without a sweep that row
-  -- wedges the breaker permanently — its credits are held against the fleet forever. Same reasoning
-  -- and same shape as acquire_generation_lease's stale sweep (20260720170000:42-44); the window is
-  -- supplied by the caller so it stays one number in one place (RESERVATION_STALE_SECONDS).
-  delete from public.supadata_reservations r
+  -- 1. SWEEP — CLOSE THE ROW, DO NOT ERASE IT. A Worker killed mid-call leaves an unsettled row
+  -- behind with nobody left to settle it. Same trigger as acquire_generation_lease's stale sweep
+  -- (20260720170000:42-44); the window is supplied by the caller so it stays one number in one place
+  -- (RESERVATION_STALE_SECONDS).
+  --
+  -- DELETING THE ROW WOULD FORGIVE A CHARGE THAT MAY WELL HAVE HAPPENED. The window proves the call
+  -- is no longer RUNNING. It proves nothing about whether the vendor BILLED it: a Worker can die
+  -- AFTER Supadata charged the request and BEFORE the settlement `finally` runs, and the stored
+  -- reading can predate that spend. A delete then drops it from the local delta and the breaker
+  -- authorizes against an understated balance — indefinitely, for as long as /v1/me is unreachable.
+  --
+  -- So the sweep SETTLES AT UNKNOWN instead. `actual_credits = null` already means "counts at its
+  -- reserved maximum" at step 4 — the same pessimism settle_supadata_reservation applies to a missing
+  -- x-billable-requests header — so the credits stay held until a /v1/me reading that POSTDATES
+  -- settled_at supersedes the row (save_supadata_budget's prune). That is precisely the authority a
+  -- delete here does not have. Erring this way costs a temporarily over-conservative breaker during a
+  -- vendor outage; erring the other way costs real overdraw. `settled = false` keeps it idempotent:
+  -- a row swept once is not re-stamped by the next reserve.
+  update public.supadata_reservations r
+  set settled = true,
+      settled_at = now(),
+      actual_credits = null
   where r.settled = false
     and r.created_at < now() - make_interval(secs => p_stale_seconds);
 

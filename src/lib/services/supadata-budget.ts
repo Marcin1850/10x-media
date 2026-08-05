@@ -72,12 +72,14 @@ export const METADATA_BUDGET_CREDITS = 2;
 export const BUDGET_STOP_RESERVE = TRANSCRIPT_BUDGET_CREDITS + METADATA_BUDGET_CREDITS;
 
 /**
- * How long an unsettled reservation is honoured before the sweep reclaims it. 600 s.
+ * How long an unsettled reservation is honoured before the sweep closes it. 600 s.
  *
- * A Worker killed mid-call leaves a row behind; without a sweep that row holds its credits against the
- * fleet forever. The window is chosen against the CEILING of the operations it guards, not the typical
- * case, because a sweep that fires early un-reserves a call that is still running and reopens the very
- * race the reservation exists to close:
+ * A Worker killed mid-call leaves a row nobody will ever settle. The sweep closes it at UNKNOWN rather
+ * than deleting it (see the RPC's step 1), so the credits stay held until a fresh reading supersedes
+ * them — the window decides when we stop waiting for a settle, not whether the call was free. It is
+ * chosen against the CEILING of the operations it guards, not the typical case, because a sweep that
+ * fires early closes a call that is still running: its real `x-billable-requests` figure is then lost,
+ * the late settle finds no open row, and the reservation is stuck at its pessimistic maximum.
  *
  *   Transcript fetch      90 s  — `TRANSCRIPT_TIMEOUT_MS`
  *   Job poll path       ~240 s  — 12 attempts, 1 s doubling to a 30 s cap. UNREACHABLE under D1
@@ -411,8 +413,9 @@ async function saveVendorBudget(
  * Pass one asks `reserve_supadata_credits`, which decides atomically under the singleton row lock and
  * hands back one of four outcomes. `reserved`, `refused` and `uninitialized` return immediately. On
  * `refresh_required` — and ONLY this caller, which is what the claim taken under that row lock
- * enforces — it fetches `/v1/me`, saves it UNDER THE CLAIM ID it was handed, evaluates the warn
- * threshold, waits out the rate-limit spacing, and reserves AGAIN. The claim is what makes the save
+ * enforces — it fetches `/v1/me`, saves it UNDER THE CLAIM ID it was handed, waits out the
+ * rate-limit spacing, reserves AGAIN, and evaluates the warn threshold on THAT result rather than on
+ * the reading, which does not know the local delta (see `reportNearMiss`). The claim makes the save
  * safe against this Worker stalling past the claim's TTL; the boundary the save prunes against comes
  * from the database, not from here (see `saveVendorBudget`).
  *
@@ -427,8 +430,10 @@ async function saveVendorBudget(
  * never recursed. One refresh per call, bounded by construction.
  *
  * If the refresh fails at any step, NO save happens, the claim is left to expire, and the call fails
- * open — never retrying and never reserving against a reading it does not have. An uninitialized
- * deployment whose very first `/v1/me` fails proceeds untracked and tries again on the next request.
+ * open — never retrying and never reserving against a reading it does not have. It still pays the
+ * rate-limit spacing on the way out: a `/v1/me` that failed was still a request, and paid work
+ * follows a failed refresh exactly as it follows a successful one. An uninitialized deployment whose
+ * very first `/v1/me` fails proceeds untracked and tries again on the next request.
  */
 export async function reserveBudget(
   admin: SupabaseClient,
@@ -454,53 +459,49 @@ export async function reserveBudget(
   }
 
   const reading = await readVendorBudget(apiKey);
+
+  // Past this line a `/v1/me` request HAS BEEN SENT, so the spacing below is owed on EVERY exit —
+  // which is why the failures record a reason instead of returning one. A failed refresh is followed
+  // by paid Supadata work at the call site exactly like a successful one, so returning early from
+  // here would skip the barrier on precisely the paths where the vendor is already unhappy and turn a
+  // breaker degradation into a `limit-exceeded` on the request the user is waiting for.
+  let failure: string | null = null;
+
   if (reading === null) {
     // The claim is deliberately left to EXPIRE rather than cleared: clearing it here would send the
     // next request straight back into a refresh that is currently failing, once per request.
-    return untracked("GET /v1/me failed, timed out, or returned an unusable body", first.stats);
+    failure = "GET /v1/me failed, timed out, or returned an unusable body";
+  } else {
+    // No timestamp travels with the reading. The boundary is the claim's own `refresh_claimed_at`,
+    // taken from PostgreSQL's clock just before this round trip started — see `saveVendorBudget`.
+    const saved = await saveVendorBudget(admin, reading.maxCredits, reading.usedCredits, first.claimId);
+
+    if (saved !== "saved") {
+      // `claim-lost` means a successor has already stored a reading at least as fresh as ours, so the
+      // stored state is fine — but this request has burned its one refresh and does not re-decide,
+      // matching the "one refresh per call, never recursed" bound below. Fail open and say which of
+      // the two it was: a lost claim means a Worker ran ~30 s behind, which is worth seeing.
+      failure =
+        saved === "claim-lost"
+          ? "refresh claim expired and was taken over before the reading could be saved"
+          : "save_supadata_budget failed";
+    }
   }
 
-  // No timestamp travels with the reading. The boundary is the claim's own `refresh_claimed_at`,
-  // taken from PostgreSQL's clock just before this round trip started — see `saveVendorBudget`.
-  const saved = await saveVendorBudget(admin, reading.maxCredits, reading.usedCredits, first.claimId);
-  if (saved !== "saved") {
-    // `claim-lost` means a successor has already stored a reading at least as fresh as ours, so the
-    // stored state is fine — but this request has burned its one refresh and does not re-decide,
-    // matching the "one refresh per call, never recursed" bound below. Fail open and say which of
-    // the two it was: a lost claim means a Worker ran ~30 s behind, which is worth seeing.
-    return untracked(
-      saved === "claim-lost"
-        ? "refresh claim expired and was taken over before the reading could be saved"
-        : "save_supadata_budget failed",
-      first.stats,
-    );
-  }
-
-  // Warn is evaluated HERE, on the fresh reading, by the one caller that refreshed it. That is why no
-  // `warned_at` column or period-reset logic is needed: the refresh claim already limits this to about
-  // once per reading TTL, where a naive "fire whenever above threshold" would make one incident emit
-  // thousands of events.
-  if (reading.maxCredits > 0 && reading.usedCredits >= reading.maxCredits * BUDGET_WARN_FRACTION) {
-    reportBudgetThreshold({
-      threshold: "warn",
-      maxCredits: reading.maxCredits,
-      usedCredits: reading.usedCredits,
-      outstanding: null,
-      readingAgeSeconds: 0,
-    });
-  }
-
-  // The one place this module would otherwise contradict the rest of the pipeline: `generate.ts`
-  // keeps its two Supadata requests seconds apart because the Free plan allows 1 req/s, and an
-  // in-line `/v1/me` lands directly in front of the transcript fetch. Only the REFRESHING caller
-  // waits, which is roughly one request per TTL — every other caller reads the stored row and waits
-  // for nothing. `RETRY_DELAY_MS` is imported rather than restated: two 1200s in two files linked
-  // only by a comment is the drift this phase can least afford.
+  // THE BARRIER. The one place this module would otherwise contradict the rest of the pipeline:
+  // `generate.ts` keeps its two Supadata requests seconds apart because the Free plan allows 1 req/s,
+  // and an in-line `/v1/me` lands directly in front of the transcript fetch. Only the REFRESHING
+  // caller waits, which is roughly one request per TTL — every other caller reads the stored row and
+  // waits for nothing. `RETRY_DELAY_MS` is imported rather than restated: two 1200s in two files
+  // linked only by a comment is the drift this phase can least afford.
   await sleep(RETRY_DELAY_MS);
+
+  if (failure !== null) return untracked(failure, first.stats);
 
   const second = await callReserveRpc(admin, credits);
   switch (second.outcome) {
     case "reserved":
+      reportNearMiss(second.stats);
       return second;
     case "refused":
       reportRefusal(second.stats);
@@ -508,6 +509,42 @@ export async function reserveBudget(
     default:
       return untracked(`second pass did not terminate: '${second.outcome}'`, first.stats);
   }
+}
+
+/**
+ * The near-miss event, evaluated on the SECOND reserve rather than on the reading that preceded it.
+ *
+ * The reading alone cannot answer the question the event asks. `usedCredits` is what the vendor had
+ * seen when the snapshot was computed; the credits reserved since then are invisible to it, so a plan
+ * at 79/100 with two outstanding stays silent at an effective 81. The second reserve returns `used`,
+ * `max` AND `outstanding` from one locked read, which is the only place all three coexist — a
+ * follow-up query would race every other reserve and report numbers that never held together.
+ *
+ * **`outstanding` EXCLUDES the reservation just authorized.** The RPC totals it at step 4 and inserts
+ * at step 5, so the threshold reads "spend already committed before this call", not "after". That is
+ * the conservative direction for a near-miss: the stop reserve, not this event, is what keeps the
+ * authorized call from overdrawing.
+ *
+ * Only the refreshing caller reaches this line, which is what keeps the cadence to roughly once per
+ * reading TTL without a `warned_at` column — a naive "fire whenever above threshold" would make one
+ * incident emit thousands of events. A refusal skips it: `reportRefusal` has already reported the
+ * stronger fact, and a stop event that arrived alongside a warn would read as two separate incidents.
+ */
+function reportNearMiss(stats: BudgetStatistics): void {
+  const { maxCredits, usedCredits, outstanding } = stats;
+  // A `reserved` outcome carries the complete set by contract; the guard is what makes that contract
+  // checked rather than assumed, and a missing figure means the threshold cannot be evaluated at all.
+  if (maxCredits === null || usedCredits === null || outstanding === null) return;
+  if (maxCredits <= 0) return;
+  if (usedCredits + outstanding < maxCredits * BUDGET_WARN_FRACTION) return;
+
+  reportBudgetThreshold({
+    threshold: "warn",
+    maxCredits,
+    usedCredits,
+    outstanding,
+    readingAgeSeconds: readingAgeSeconds(stats.readAt),
+  });
 }
 
 /** A refusal is an incident, not a near-miss — see `reportBudgetThreshold`. */
@@ -552,9 +589,10 @@ export async function settleBudget(
       return;
     }
 
-    // `false` means the row was already gone — swept because the call outlived
-    // RESERVATION_STALE_SECONDS, which is worth seeing rather than swallowing: it means a paid call
-    // ran unreserved for part of its life and the sweep, not this settle, decided the accounting.
+    // `false` means the row was no longer open — the call outlived RESERVATION_STALE_SECONDS and the
+    // sweep already closed it at UNKNOWN, which is worth seeing rather than swallowing: the sweep's
+    // pessimistic maximum, not this settle's real figure, is what the fleet will be charged until the
+    // next reading supersedes the row.
     if (data !== true) {
       // eslint-disable-next-line no-console
       console.error(`${BUDGET_EVENT} settle found no open reservation ${reservationId} (swept?)`);
