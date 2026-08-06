@@ -3,11 +3,41 @@ change_id: transcript-cost-guardrail
 title: Transcript cost guardrail
 status: impl_reviewed
 created: 2026-07-31
-updated: 2026-08-05
+updated: 2026-08-06
 archived_at: null
 ---
 
 ## Notes
+
+**Phase 6 fully verified 2026-08-06 (local, undeployed)** — manual rows 6.8–6.17 all pass; record at
+`reviews/manual-verification-phase-6.md`. Spend **3 credits** (78 → 81 of 100), reconciled exactly
+against the per-outcome ledger total. **Phase 6 is done end to end, so every phase but 7 is now
+closed** — the next open work is the deploy gate itself. Five things worth carrying:
+
+- **A clean deployment initializes its breaker on the first real request.** 6.8 arrived against an
+  all-null `supadata_budget` row: first pass `refresh_required`, `/v1/me`, save, then the *second* pass
+  made the refusal — `readingAgeSeconds: 3` in the emitted event. This is the app-level counterpart of
+  Phase 5's SQL row 5.9, and it is what distinguishes an uninitialized deployment from a permanently
+  disabled one.
+- **The malformed `/v1/me` never reached the anchor** (6.14). The assertion that matters is not the log
+  line but that `supadata_budget.max_credits` was still null afterwards. Destructured on faith, a
+  string `maxCredits` makes `max - used - outstanding` go `NaN` and the breaker silently never trips
+  again — a guard that is off while looking on.
+- **The metadata retry fired on its own in 6.16**, so `billedSince` met a genuine mixed batch (one
+  `error` with no header, one `ok` billed 1) and settled `null` rather than 1. First live sighting of
+  the separately-billed retry that `METADATA_BUDGET_CREDITS = 2` exists for, and of "unknown is
+  contagious" on real data rather than the hand-built meter of 6.5.
+- **6.15's concurrency pair cost 0 credits**, by pre-filling both accounts' rate-limit windows so each
+  request reserved and then took a 429 with no vendor call. The warn is emitted *before* the rate
+  limiter is consulted, so the events are identical to a real generation's; the proof of "exactly one
+  claims the refresh" is the **6× wall-time gap** (1.68 s vs 0.26 s), since only the refreshing caller
+  pays `/v1/me` plus the 1.2 s barrier. It also exercised `releaseUnspentTranscriptBudget` and the
+  zero-sweep — the gap between reserving and the rate limiter that no stated criterion names.
+- **6.17's evidence is an empty `git status`**, not a reading of the constants. Every override carried a
+  `TEMP-P6-MANUAL` marker naming its real value and the row that reverts it, so a half-finished pass
+  could not leave a plausible-looking number behind. Also: `TVA738-ERqg` is a **long** video (69 989
+  chars) and answers the 409 confirmation gate before either check point — next to Phase 4's
+  `8jLOx1hD3_o` note.
 
 **Phase 5 fully verified 2026-08-05** — manual rows 5.13 and 5.14 closed after the triage, re-run
 against the revised migration (5.14's earlier walk used a signature that no longer exists). Phase 5 is

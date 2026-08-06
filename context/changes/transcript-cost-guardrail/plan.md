@@ -1660,25 +1660,45 @@ which is why they were worth holding open:
 
 #### Manual
 
-- [ ] 6.8 Cold video refused before any Supadata call under an overridden reserve, with the breaker's
-      own 503 copy visible in the UI — not the "isn't configured" fallback
-- [ ] 6.9 A budget refusal consumes no transcript rate-limit attempt
-- [ ] 6.10 Warm video still generates under the same override
-- [ ] 6.11 Warm transcript + cold metadata: summary produced, `metadata_via = 'skipped_budget'`
-- [ ] 6.12 No unsettled reservation survives a completed generation or a mid-fetch throw
-- [ ] 6.13 Unreadable budget state: generation proceeds and the state is reported (fail-open)
-- [ ] 6.14 A hung and a malformed `/v1/me` both fail open, report, and strand no reservation
-- [ ] 6.15 Warn fires at most once per TTL, including for two simultaneous stale readers
-- [ ] 6.16 A refresh-triggering generation still succeeds — no `limit-exceeded` on the paid call
-- [ ] 6.17 Overrides reverted
+- [x] 6.8 Cold video refused before any Supadata call under an overridden reserve, with the breaker's
+      own 503 copy visible in the UI — not the "isn't configured" fallback — 2026-08-06, local
+- [x] 6.9 A budget refusal consumes no transcript rate-limit attempt — 2026-08-06, local
+- [x] 6.10 Warm video still generates under the same override — 2026-08-06, local
+- [x] 6.11 Warm transcript + cold metadata: summary produced, `metadata_via = 'skipped_budget'` — 2026-08-06, local
+- [x] 6.12 No unsettled reservation survives a completed generation or a mid-fetch throw — 2026-08-06, local
+- [x] 6.13 Unreadable budget state: generation proceeds and the state is reported (fail-open) — 2026-08-06, local
+- [x] 6.14 A hung and a malformed `/v1/me` both fail open, report, and strand no reservation — 2026-08-06, local
+- [x] 6.15 Warn fires at most once per TTL, including for two simultaneous stale readers — 2026-08-06, local
+- [x] 6.16 A refresh-triggering generation still succeeds — no `limit-exceeded` on the paid call — 2026-08-06, local
+- [x] 6.17 Overrides reverted — 2026-08-06, local
 
 Rows 6.1–6.7 pass. 6.5 was asserted by running the real `createSupadataMeter` against a hand-built
 row list (six cases including the cross-operation ones and non-destructiveness) — there is no test
 suite, so it was executed as a one-off `node --experimental-strip-types` script rather than reasoned
 about. 6.3's grep is against `20260731150000_supadata_budget.sql`, the actual filename (see Phase 5's
 note): the SQL names only the `p_stale_seconds` parameter, and 600 appears once, in
-`supadata-budget.ts`. Manual rows 6.8–6.17 are deliberately untouched — they need a running app and a
-temporarily overridden `BUDGET_STOP_RESERVE`.
+`supadata-budget.ts`.
+
+Manual rows 6.8–6.17 closed 2026-08-06; record at `reviews/manual-verification-phase-6.md`. Spend **3
+credits** (78 → 81), reconciled exactly against the per-outcome ledger total — seven of the eleven
+submissions cost nothing, because a breaker is mostly verifiable on paths where no vendor call happens.
+Four things worth carrying:
+
+- **6.17's evidence is an empty `git status`**, not a reading of the constants. Every override carried a
+  `TEMP-P6-MANUAL` marker naming its real value and the row that reverts it, so a half-finished pass
+  could not leave a plausible-looking number behind.
+- **The metadata retry fired unprompted in 6.16**, so `billedSince` met a real mixed batch — one
+  `error` row with no header plus one `ok` billed 1 — and settled `null` rather than 1. "Unknown is
+  contagious" observed on live data, not on the hand-built meter of 6.5.
+- **6.15's concurrency pair cost 0 credits** by pre-filling both rate-limit windows: each request
+  reserved, then took a 429 with no vendor call. The warn is emitted before the rate limiter is
+  consulted, so the events are identical to a real generation's — and the 429 additionally exercised
+  `releaseUnspentTranscriptBudget` and the zero-sweep, the gap between reserving and the rate limiter
+  that no stated criterion names. The proof is the **6× wall-time gap** (1.68 s vs 0.26 s), not the
+  event count: only the refreshing caller pays `/v1/me` plus the 1.2 s barrier.
+- **`TVA738-ERqg` is a long video** (69 989 chars) and answers the 409 confirmation gate before either
+  check point. Next to Phase 4's `8jLOx1hD3_o` note: the usable warm-transcript/cold-metadata videos
+  here are `aircAruvnKk`, `_Ae4osPymXY` and `dFY97xFO_mY`.
 
 ### Phase 7: Deploy and live verification
 
