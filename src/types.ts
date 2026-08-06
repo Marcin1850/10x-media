@@ -12,6 +12,24 @@ export type TranscriptResolvedVia = "inline" | "job" | "stored";
 /** What a real Supadata fetch can report — `"stored"` is excluded, since a cache hit made no call. */
 export type FetchedResolvedVia = Exclude<TranscriptResolvedVia, "stored">;
 
+/**
+ * How a generation obtained its video metadata (S-09 D10). Documented the same way as
+ * `TranscriptResolvedVia` and for the same reason: `"stored"` means the row came from
+ * `metadata_cache` and NO paid Supadata call was made, which is what explains a near-zero
+ * `metadata_ms`.
+ *
+ * `"fetched"` is a vendor call that RETURNED metadata; `"fetch_failed"` is one that was made and came
+ * back with nothing. Both mean a request went out — and possibly TWO, since `fetchVideoMetadata`
+ * retries a retryable failure once — but only the first produced a row worth caching (D9), and a
+ * failure is billed 0. Neither value is a spend figure: `supadata_calls` logs each call individually
+ * and is the only source for what was actually billed. `"skipped_budget"` (S-09 Phase 6) means the
+ * budget breaker refused the call and nulls were persisted, exactly as a metadata failure already
+ * does; the marker is what stops that degraded row looking like an unexplained gap.
+ *
+ * `metadata_ms` IS ONLY COMPARABLE ACROSS ROWS THAT CALLED THE VENDOR — see the column comment.
+ */
+export type MetadataVia = "fetched" | "fetch_failed" | "stored" | "skipped_budget";
+
 export interface Video {
   id: string;
   user_id: string;
@@ -71,8 +89,16 @@ export interface Summary {
   /** Time spent acquiring the transcript: the fetch, the quote read, or the cache read. */
   transcript_ms: number | null;
   llm_ms: number | null;
-  /** Includes the metadata retry and its ~1.2 s rate-limit sleep — real latency the user waited through. */
+  /**
+   * Includes the metadata retry and its ~1.2 s rate-limit sleep — real latency the user waited
+   * through — but ONLY on a row that actually called the vendor (`metadata_via = 'fetched'` or
+   * `'fetch_failed'`). On a `'stored'` row it brackets a database read and reads near zero, so any
+   * comparison across rows must filter on `metadata_via`; service-time queries want `'fetched'`
+   * alone, since a failure's duration is a timeout or an error rather than a service time.
+   */
   metadata_ms: number | null;
+  /** How the metadata was obtained (S-09). Null on rows predating the column. */
+  metadata_via: MetadataVia | null;
   /** OpenRouter's own reported cost, never a figure computed from tokens and a price table. */
   cost_usd: number | null;
   prompt_tokens: number | null;

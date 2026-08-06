@@ -13,6 +13,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * nothing (or no response arrived), `0` means it reported free. Keeping those distinct is what makes
  * a reconciliation gap against `GET /v1/me` diagnosable instead of merely visible. Nothing here
  * derives a price from `resolvedVia` — see the plan's "No inferred credit figure, anywhere".
+ *
+ * `httpStatus` (S-09 D13) extends that same principle to the reconciliation formula itself. Its
+ * `unavailable → 1 credit` branch is currently justified by `outcome`, which is OUR label applied at
+ * the call site rather than anything the vendor said; recording the status makes the billable 206 an
+ * observation, and lets the label and the status be checked against each other.
  */
 
 export type SupadataOperation = "transcript" | "transcript_poll" | "metadata";
@@ -26,6 +31,18 @@ export interface SupadataCallRecord {
   resolvedVia?: string | null;
   /** Verbatim `x-billable-requests`. `null` = not reported; `0` = reported free. Never inferred. */
   billableCredits: number | null;
+  /**
+   * The vendor's HTTP status, verbatim (S-09 D13). Populated by `transcript` calls only — the whole
+   * point is to make "a 206 costs a credit" an OBSERVATION rather than an inference from our own
+   * `outcome` label, and the reconciliation formula only branches on transcript rows.
+   *
+   * Optional and defaulting to `null` exactly as `resolvedVia` does, which is what keeps `metadata`
+   * and `transcript_poll` out of scope without a special case: they simply do not pass it. `null`
+   * also covers the honest third case — a request that never produced a response at all, where
+   * there IS no status to record. See the column comment in
+   * `20260731100000_supadata_call_http_status.sql`, which enumerates all three.
+   */
+  httpStatus?: number | null;
 }
 
 interface LedgerRow {
@@ -36,6 +53,7 @@ interface LedgerRow {
   outcome: SupadataCallOutcome;
   resolved_via: string | null;
   billable_credits: number | null;
+  http_status: number | null;
 }
 
 export interface SupadataMeter {
@@ -47,6 +65,33 @@ export interface SupadataMeter {
   record: (call: SupadataCallRecord) => void;
   /** Stamps every collected row with the summary it belongs to. Called once after a successful persist. */
   attachSummary: (summaryId: string) => void;
+  /**
+   * A mark in the row list, taken immediately BEFORE a guarded operation (S-09 Phase 6).
+   *
+   * The budget breaker needs to settle each reservation with what that ONE call actually billed, and
+   * the figure exists nowhere else: `fetchTranscript` returns a `TranscriptResult` and
+   * `fetchVideoMetadata` a `VideoMetadata | null`, neither of which carries a billed figure. Every
+   * per-attempt value is already here — but the meter's public surface is request-scoped, and
+   * draining it would destroy the rows `POST.finally` still has to flush. A checkpoint makes it
+   * call-scoped without taking anything away.
+   */
+  checkpoint: () => number;
+  /**
+   * What the rows recorded after `checkpoint` billed, for ONE operation. Non-destructive.
+   *
+   * - the SUM when every matching row reported a figure — which is what settles a metadata retry at 2
+   *   rather than 1, since both attempts land as separate rows;
+   * - `null` when ANY matching row has a null `billableCredits`. Unknown is contagious and must not be
+   *   coerced to 0: a `206 transcript-unavailable` is billed 1 credit and reports no header, so
+   *   summing nulls as zero would settle a real charge as free — the same under-count the per-outcome
+   *   reconciliation formula exists to avoid;
+   * - `0` when no rows matched at all, the honest answer for a guarded call that never ran.
+   *
+   * **Filtering on `operation` is load-bearing, not defensive.** The two check points are nested
+   * inside one request, so the transcript reservation must not be settled by a metadata row that
+   * happened to be recorded after its checkpoint. Mismatched rows are ignored, never summed.
+   */
+  billedSince: (checkpoint: number, operation: SupadataOperation) => number | null;
   drain: () => LedgerRow[];
 }
 
@@ -54,7 +99,7 @@ export function createSupadataMeter(): SupadataMeter {
   const rows: LedgerRow[] = [];
 
   return {
-    record({ operation, outcome, youtubeId = null, resolvedVia = null, billableCredits }) {
+    record({ operation, outcome, youtubeId = null, resolvedVia = null, billableCredits, httpStatus = null }) {
       rows.push({
         user_id: null,
         summary_id: null,
@@ -63,12 +108,32 @@ export function createSupadataMeter(): SupadataMeter {
         outcome,
         resolved_via: resolvedVia,
         billable_credits: billableCredits,
+        http_status: httpStatus,
       });
     },
     attachSummary(summaryId) {
       for (const row of rows) {
         row.summary_id = summaryId;
       }
+    },
+    checkpoint() {
+      return rows.length;
+    },
+    billedSince(checkpoint, operation) {
+      let total = 0;
+      let matched = 0;
+
+      for (let i = Math.max(0, checkpoint); i < rows.length; i += 1) {
+        const row = rows[i];
+        if (row.operation !== operation) continue;
+        // Returned the moment it is seen rather than tracked and resolved at the end: one unknown
+        // makes the whole window unknown, and there is nothing a later row could add to change that.
+        if (row.billable_credits === null) return null;
+        matched += 1;
+        total += row.billable_credits;
+      }
+
+      return matched === 0 ? 0 : total;
     },
     drain() {
       return rows.slice();

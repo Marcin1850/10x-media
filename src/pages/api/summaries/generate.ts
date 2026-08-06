@@ -7,6 +7,13 @@ import { fetchTranscript, TRANSCRIPT_REQUESTED_LANG } from "@/lib/services/trans
 import { fetchVideoMetadata } from "@/lib/services/metadata";
 import { createSupadataMeter, flushSupadataCalls, type SupadataMeter } from "@/lib/services/supadata-ledger";
 import { getCachedTranscript, saveCachedTranscript } from "@/lib/services/transcript-cache";
+import { getCachedMetadata, saveCachedMetadata } from "@/lib/services/metadata-cache";
+import {
+  reserveBudget,
+  settleBudget,
+  TRANSCRIPT_BUDGET_CREDITS,
+  METADATA_BUDGET_CREDITS,
+} from "@/lib/services/supadata-budget";
 import { summarize } from "@/lib/services/llm";
 import {
   extractYoutubeId,
@@ -14,7 +21,14 @@ import {
   summaryCost,
   HARD_MAX_TRANSCRIPT_CHARS,
 } from "@/lib/services/summaries";
-import { getBalance, beginGeneration, refundReservation } from "@/lib/services/credits";
+import {
+  getBalance,
+  beginGeneration,
+  refundReservation,
+  chargeFailedTranscript,
+  lookupRefusalReplay,
+  type RefusalReason,
+} from "@/lib/services/credits";
 import { acquireGenerationLease, releaseGenerationLease } from "@/lib/services/generation-lock";
 import {
   recordTranscriptAttempt,
@@ -22,9 +36,73 @@ import {
   saveTranscriptQuote,
   discardTranscriptQuote,
 } from "@/lib/services/transcript-guard";
-import type { TranscriptResolvedVia } from "@/types";
+import type { MetadataVia, TranscriptResolvedVia } from "@/types";
 
 export const prerender = false;
+
+/**
+ * The two strings behind this endpoint's 422 (S-09 D3).
+ *
+ * Under `TRANSCRIPT_MODE = 'native'` (D1) "this video has no caption track" stops being a rare
+ * accident and becomes the predictable, DURABLE answer for a whole class of videos — so it earns copy
+ * that names the cause and points the user at an action that works (pick another video) rather than a
+ * retry that almost certainly will not. Durable is not permanent: `unavailable` is negative-cached for
+ * only 2 h (D4), because captions can be added to a video later, so the same URL can legitimately
+ * succeed on a later submit. Everything else answering 422 keeps the generic string, because it means
+ * something genuinely different:
+ *
+ *   NO_CAPTIONS — the vendor says this video has no transcript, from a fresh fetch or from an
+ *                 `'unavailable'` cache row. Durable, and the user can act on it (pick another video).
+ *   GENERIC     — an `'empty'` cache row (a vendor SUCCESS on a wordless video), a whitespace-only
+ *                 transcript, and the transient `failed`/`timeout` fetch outcomes. Different causes,
+ *                 none of them "there are no captions", and some of which DO succeed on a retry.
+ *
+ * The status is 422 in every case; only the body differs. `GenerateSummaryForm`'s `messageForStatus`
+ * prefers the server's string for 422 precisely so this distinction survives the trip to the user —
+ * it used to hardcode one message and drop both of these.
+ */
+const TRANSCRIPT_NO_CAPTIONS_ERROR =
+  "This video has no captions, so there is nothing to summarize. We can only summarize videos that have a caption track — try another video.";
+const TRANSCRIPT_UNAVAILABLE_ERROR = "Transcript unavailable for this video";
+
+/**
+ * The 422 body each CHARGEABLE refusal answers with (S-09 D14).
+ *
+ * A map rather than a string passed alongside the classification, because the two must not be able to
+ * drift: `refuseAndCharge` picks the copy from the reason it stores, and a repeated `requestId`
+ * reconstructs the copy from the reason it reads back out of the ledger. Two independent choices would
+ * surface as a retry answering with different words than the original — the one failure this phase's
+ * replay contract exists to prevent, and one that no balance assertion would catch.
+ *
+ * Note the shape mirrors D3, not D14: `'unavailable'` gets the caption-specific copy; `'empty'` and
+ * `'whitespace'` share the generic string because "a transcript arrived and holds no words" is a
+ * different claim from "this video has no caption track". Charging and copy are separate axes.
+ */
+const REFUSAL_COPY: Record<RefusalReason, string> = {
+  unavailable: TRANSCRIPT_NO_CAPTIONS_ERROR,
+  empty: TRANSCRIPT_UNAVAILABLE_ERROR,
+  whitespace: TRANSCRIPT_UNAVAILABLE_ERROR,
+};
+
+/**
+ * What an unusable submission costs the user (D14). One credit, flat — not `summaryCost`, which prices
+ * DELIVERED work and stays S-05's (a long video that turns out to have no captions is refused just as
+ * cheaply as a short one, because nothing was summarized either way).
+ */
+const REFUSAL_CHARGE = 1;
+
+/**
+ * The 503 a tripped budget breaker answers with (S-09 lever C).
+ *
+ * Operator-shaped on purpose: the user did nothing wrong and there is nothing they can fix, so the
+ * copy says the service cannot process NEW videos right now and that this is temporary — not a
+ * generic failure they will read as their own. 503 is both honest (the service genuinely cannot do the
+ * work) and already this endpoint's "generation is unavailable" status, so the client needs no new
+ * branch — but it did need to stop discarding the server's string, which is the one client change in
+ * this phase.
+ */
+const BUDGET_EXHAUSTED_ERROR =
+  "We've reached our transcript service limit for now, so new videos can't be processed. Please try again in a while.";
 
 const generateSchema = z.object({
   url: z.string().refine((url) => extractYoutubeId(url) !== null, {
@@ -33,9 +111,11 @@ const generateSchema = z.object({
   character: z.enum(["informational", "educational"]),
   allowLong: z.boolean().optional().default(false),
   // Identifies ONE user-initiated generation, repeated verbatim when the client retries after an
-  // ambiguous failure (request delivered, reply lost). Optional so a cached client that predates F22
-  // still works: absent means no deduplication, which is exactly the pre-F22 behaviour.
-  requestId: z.uuid().optional(),
+  // ambiguous failure (request delivered, reply lost). REQUIRED at the boundary: `refuseAndCharge`
+  // skips the D14 fee when it has no key, so an optional field would let any caller opt out of the
+  // charge by omitting it. A cached pre-F22 client gets a 400 until it reloads — the correct trade,
+  // since the only first-party call site has always sent a UUID.
+  requestId: z.uuid(),
 });
 
 export const POST: APIRoute = async (context) => {
@@ -111,7 +191,7 @@ export const POST: APIRoute = async (context) => {
       youtubeId,
       character,
       allowLong,
-      requestId: requestId ?? null,
+      requestId,
       supadataKey: SUPADATA_API_KEY,
       openrouterKey: OPENROUTER_API_KEY,
       meter,
@@ -134,13 +214,67 @@ interface GenerationInput {
   youtubeId: string;
   character: "informational" | "educational";
   allowLong: boolean;
-  /** Client-owned identity for ONE generation, repeated on retry. `null` when the client predates F22. */
+  /**
+   * Client-owned identity for ONE generation, repeated on retry. The POST schema now requires it, so
+   * `null` is unreachable from the endpoint; the type stays nullable because the null-tolerant paths
+   * below are the safety net that keeps a keyless call from being charged non-idempotently.
+   */
   requestId: string | null;
   /** Passed in rather than re-read from `astro:env`: the POST preflight already proved both non-null. */
   supadataKey: string;
   openrouterKey: string;
   /** Collects one record per real Supadata HTTP call. Owned and flushed by `POST`, on every exit. */
   meter: SupadataMeter;
+}
+
+/**
+ * The 422 a chargeable refusal answers with. Built from the classification alone, so the original
+ * refusal and its replay can never answer with different copy.
+ */
+function refusalResponse(reason: RefusalReason): Response {
+  return Response.json({ error: REFUSAL_COPY[reason] }, { status: 422 });
+}
+
+/**
+ * Refuses an unusable submission AND bills the user one credit for it (S-09 D14).
+ *
+ * Four of this endpoint's five 422 exits come through here; the transient `failed`/`timeout` one
+ * deliberately does not. The rule is drawn around what the user submitted, not around what we happened
+ * to pay: a video with no usable transcript is an unusable submission whether the answer came from a
+ * paid 206 or from the negative cache, while a transient fetch failure is our outage or the vendor's
+ * and its real cost is *unknown* (an `error` reports no `x-billable-requests` header).
+ *
+ * **The cache-hit charge is the one place in this slice where we take a credit having paid nothing**,
+ * and it is deliberate. The alternative — free inside D4's 2 h window, charged outside it — makes the
+ * same action cost differently depending on state the user cannot see, and rewards rapid resubmission
+ * of exactly the videos that window exists to re-check.
+ *
+ * The charge is fired and its outcome ignored for response purposes: `chargeFailedTranscript` never
+ * throws, and a failure to bill costs the operator one credit while the user still gets the answer
+ * they were owed. The response is unchanged from before this phase — same status, same string, no
+ * balance field (D14, the user's explicit call that this ships silently).
+ *
+ * A `null` requestId SKIPS the charge rather than inventing a key. See the service: a generated key
+ * would make the fee non-idempotent across exactly the retries `requestId` exists to absorb, and a
+ * refused submit is a plausible thing for a client to retry. The POST schema requires the field, so
+ * that branch is a safety net, not a supported client shape — omitting the key buys a 400, not a free
+ * refusal.
+ */
+async function refuseAndCharge(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  userId: string,
+  requestId: string | null,
+  reason: RefusalReason,
+): Promise<Response> {
+  if (requestId !== null) {
+    await chargeFailedTranscript(admin, {
+      userId,
+      requestId,
+      amount: REFUSAL_CHARGE,
+      refusalReason: reason,
+    });
+  }
+  return refusalResponse(reason);
 }
 
 /**
@@ -152,8 +286,15 @@ interface GenerationInput {
  * attempt ended — same summary, same ids, no second charge and no second OpenRouter call. It carries
  * no `transcriptLength`; that is a property of the fetch, not of the saved summary, and the client
  * only uses it on the long-video confirmation path.
+ *
+ * Async since D14, for the `unavailable` branch alone — see there.
  */
-function respondToRepeatedRequest(result: Awaited<ReturnType<typeof beginGeneration>>): Response | null {
+async function respondToRepeatedRequest(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  userId: string,
+  requestId: string | null,
+  result: Awaited<ReturnType<typeof beginGeneration>>,
+): Promise<Response | null> {
   switch (result.outcome) {
     case "replay":
       return Response.json({
@@ -171,10 +312,26 @@ function respondToRepeatedRequest(result: Awaited<ReturnType<typeof beginGenerat
         { error: "This summary is already being generated. Wait for it to finish." },
         { status: 429 },
       );
-    case "unavailable":
-      // The key's debit was closed without a summary — only an operator-side settle produces this.
+    case "unavailable": {
+      // The key's debit was closed without a summary. TWO things now produce that shape, and telling
+      // them apart is the non-obvious half of D14.
+      //
+      // A refusal charge writes a settled, summary-less row — and the probe that reaches this branch
+      // runs BEFORE any transcript work, so it catches the retry of a refused submit ahead of the 422
+      // that refused it. Answering 409 there would silently lose the caption-specific copy D3 exists to
+      // deliver, on exactly the videos it was written for. `refusal_reason` is what distinguishes the
+      // two, and the replay reconstructs the original body from it.
+      //
+      // A null reason is load-bearing, not a fallback: an operator-side settle_reservation() leaves the
+      // same shape with no reason, and that row keeps the 409 below, which is the case its wording
+      // describes. `lookupRefusalReplay` also returns null on any error — failing toward the existing
+      // reply is right for a lookup whose only job is to improve one.
+      const reason = requestId === null ? null : await lookupRefusalReplay(admin, { userId, requestId });
+      if (reason !== null) return refusalResponse(reason);
+
       // Neither replayable nor safe to re-run against a closed charge; the client must start over.
       return Response.json({ error: "This request was already processed. Start a new generation." }, { status: 409 });
+    }
     default:
       return null;
   }
@@ -266,7 +423,7 @@ async function runGeneration({
       return Response.json({ error: "Something went wrong. Please try again." }, { status: 500 });
     }
 
-    const settled = respondToRepeatedRequest(probe);
+    const settled = await respondToRepeatedRequest(admin, userId, requestId, probe);
     if (settled) return settled;
   }
 
@@ -321,6 +478,24 @@ async function runGeneration({
   // by video alone, so it is reused across characters AND across users.
   const cachedTranscript = cachedQuote ? null : await getCachedTranscript(admin, youtubeId);
 
+  // The metadata cache (S-09 D6/D7), looked up HERE — beside the transcript lookup and far from the
+  // fetch it serves. The FETCH does not move (D7): the comment block at that call site documents its
+  // placement as load-bearing for three reasons, and none of them apply to a free database read.
+  //
+  // After the 402 gate rather than at the endpoint entrance, on its own merits as well as by the
+  // plan: a user with no credits should not trigger even a free read. It still lands well before the
+  // debit, which is all Phase 6's second breaker check point needs.
+  //
+  // Hoisting the LOOKUP is the whole saving. On a warm video the transcript already costs 0, so this
+  // one call was 100% of a repeat generation's Supadata spend.
+  const metadataLookupStartedAt = Date.now();
+  const cachedMetadata = await getCachedMetadata(admin, youtubeId);
+  // Measured where the work happens, not where the variable is declared. This bracket times a
+  // database read; on a MISS the fetch below overwrites it with the HTTP call's duration. That is
+  // precisely the difference `metadata_via` exists to disambiguate — a `'stored'` row reporting ~0 ms
+  // is correct, not a broken measurement.
+  let metadataMs = Date.now() - metadataLookupStartedAt;
+
   if (cachedQuote) {
     content = cachedQuote.content;
     resolvedVia = cachedQuote.resolvedVia;
@@ -333,16 +508,27 @@ async function runGeneration({
     transcriptMs = Date.now() - transcriptStartedAt;
   } else if (cachedTranscript) {
     // A negative hit answers for free what the fetch would have charged for. `'empty'` and
-    // `'unavailable'` both mean the same thing to the user — the same 422 the fetch path returns —
-    // but they are cached on different windows, which the RPC has already applied by the time a row
-    // comes back at all.
+    // `'unavailable'` both answer 422, and they are cached on different windows, which the RPC has
+    // already applied by the time a row comes back at all.
+    //
+    // They no longer share COPY, though (D3). `'unavailable'` is the vendor saying this video has no
+    // caption track — permanent under `native`, and worth telling the user in those words. `'empty'`
+    // is a vendor SUCCESS on a video that has captions containing no words (an instrumental piece),
+    // which is a different fact and must not be reported as a missing caption track.
+    //
     // A `'too_long'` row is the 413 answer itself, cached. It holds no body by design (F6), so it is
     // answered here rather than falling through to the hard-cap gate below, which reads `content`.
     if (cachedTranscript.outcome === "too_long") {
       return Response.json({ error: "This video's transcript is too long to summarize." }, { status: 413 });
     }
+    //
+    // Both negative outcomes CHARGE (D14), and this is the pair where the operator paid nothing —
+    // see `refuseAndCharge` for why a flat rule beats one that depends on the cache window.
+    if (cachedTranscript.outcome === "unavailable") {
+      return await refuseAndCharge(admin, userId, requestId, "unavailable");
+    }
     if (cachedTranscript.outcome !== "ok") {
-      return Response.json({ error: "Transcript unavailable for this video" }, { status: 422 });
+      return await refuseAndCharge(admin, userId, requestId, "empty");
     }
     content = cachedTranscript.content;
     // NOT the original fetch's mechanism: this request made no Supadata call, and recording `'inline'`
@@ -353,7 +539,46 @@ async function runGeneration({
     transcriptAvailableLangs = cachedTranscript.availableLangs;
     transcriptMs = Date.now() - transcriptStartedAt;
   } else {
-    // A real paid fetch. Rate-limit it first; a genuine RPC failure fails the request CLOSED (500)
+    // A real paid fetch, and the first of this endpoint's two budget check points (S-09 lever C).
+    //
+    // Placed inside the MISS branch and nowhere near the endpoint entrance: the breaker gates SPEND,
+    // not the request (D5). A cache hit costs 0, and blocking it would break the product for no saving.
+    //
+    // And placed BEFORE recordTranscriptAttempt, not after it. That RPC records a paid-fetch attempt
+    // against a ten-attempt window, so ordering the budget check behind it would let a run of budget
+    // refusals — which make no Supadata call at all — burn a user's transcript allowance for work that
+    // never happened. Reserve first; record the attempt only once the reservation is in hand and the
+    // real fetch is about to run.
+    //
+    // `untracked` is a THIRD case and is deliberately not collapsed into either neighbour: it means we
+    // could not track this call, so the fetch goes ahead and NOTHING is settled — there is no id, and a
+    // settle against a missing row is the one corruption the sweep cannot detect.
+    const transcriptBudget = await reserveBudget(admin, supadataKey, TRANSCRIPT_BUDGET_CREDITS);
+    if (transcriptBudget.outcome === "refused") {
+      return Response.json({ error: BUDGET_EXHAUSTED_ERROR }, { status: 503 });
+    }
+
+    /**
+     * Closes the reservation on the exits BETWEEN acquiring it and reaching the fetch's `finally`.
+     *
+     * Reserving before the rate limiter is deliberate (see above), and it opens a gap the `finally`
+     * below cannot cover: the rate-limit guard can return 500 or 429 while a live reservation is
+     * held, and NO Supadata call has happened on either path. Leaving those rows to the 600 s sweep
+     * holds a credit against the WHOLE FLEET for ten minutes per rejected request, so a burst of
+     * rate-limited traffic manufactures budget exhaustion out of calls that never cost anything —
+     * the breaker refusing paid work on the strength of spend that does not exist.
+     *
+     * Settled at 0, not deleted: 0 is a KNOWN figure here, not the "unknown" that `null` means and
+     * that the outstanding total charges at the reserved maximum. Nothing was requested, so nothing
+     * could be billed. Every exit after this point is covered by the `finally`.
+     */
+    const releaseUnspentTranscriptBudget = async (): Promise<void> => {
+      if (transcriptBudget.outcome === "reserved") {
+        await settleBudget(admin, transcriptBudget.reservationId, 0);
+      }
+    };
+
+    // Rate-limit it next; a genuine RPC failure fails the request CLOSED (500)
     // rather than proceed to the very unbounded fetch this guard exists to prevent.
     let allowed: boolean;
     try {
@@ -361,9 +586,11 @@ async function runGeneration({
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error("recordTranscriptAttempt failed:", error);
+      await releaseUnspentTranscriptBudget();
       return Response.json({ error: "Something went wrong. Please try again." }, { status: 500 });
     }
     if (!allowed) {
+      await releaseUnspentTranscriptBudget();
       return Response.json(
         { error: "Too many transcript requests. Please wait a moment and try again." },
         { status: 429 },
@@ -372,13 +599,32 @@ async function runGeneration({
 
     // A genuine upstream failure (network/Supadata error) throws → clean 502; a resolvable-but-
     // unavailable transcript returns ok:false → 422. Neither has debited a credit yet.
+    //
+    // The checkpoint is taken immediately BEFORE the guarded call and read back in the `finally`:
+    // neither provider function returns what the vendor billed, but every per-attempt figure is
+    // already in the meter, and `billedSince` reads that window without draining rows POST.finally
+    // still has to flush.
     let transcript: Awaited<ReturnType<typeof fetchTranscript>>;
+    const transcriptBudgetMark = meter.checkpoint();
     try {
       transcript = await fetchTranscript({ url }, supadataKey, meter);
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error("fetchTranscript failed:", error);
       return Response.json({ error: "The transcript service failed. Please try again." }, { status: 502 });
+    } finally {
+      // A `finally` OBLIGATION, not a happy-path step, for the same reason the meter flush lives in
+      // POST.finally: a reservation that is never settled is a credit the whole fleet keeps believing
+      // is spent until the sweep window elapses — and the error paths are exactly the ones a budget
+      // guard exists to survive. Reachable only from the `reserved` branch; an `untracked` call has no
+      // id to settle.
+      if (transcriptBudget.outcome === "reserved") {
+        await settleBudget(
+          admin,
+          transcriptBudget.reservationId,
+          meter.billedSince(transcriptBudgetMark, "transcript"),
+        );
+      }
     }
 
     // Cache immediately, BEFORE the long-video 409 below can return: a user who abandons the
@@ -397,8 +643,19 @@ async function runGeneration({
           availableLangs: null,
           resolvedVia: null,
         });
+        // The one durable reason, and the only one that earns the specific copy (D3): the vendor says
+        // this video has no caption track, and under `native` nothing will ever produce one.
+        // `failed`/`timeout` fall through to the generic string below — they are transient by
+        // construction, say nothing about the video, and a retry genuinely may work.
+        //
+        // The canonical charging case (D14): this is the 206 we just paid a Supadata credit for.
+        return await refuseAndCharge(admin, userId, requestId, "unavailable");
       }
-      return Response.json({ error: "Transcript unavailable for this video" }, { status: 422 });
+      // The ONE exempt 422. `failed`/`timeout` is our outage or the vendor's, and an `error` with a
+      // null billable header means the operator's cost is *unknown* — charging here would resolve our
+      // own ambiguity against a user who did nothing wrong. It branches on the same `reason` the copy
+      // branches on, so the two decisions stay visibly aligned in one place.
+      return Response.json({ error: TRANSCRIPT_UNAVAILABLE_ERROR }, { status: 422 });
     }
 
     // Past the hard cap the BODY is not cached — only the verdict (F6). Storing it would put rows in
@@ -446,8 +703,13 @@ async function runGeneration({
   // `saveTranscriptQuote` runs downstream of this guard, so it can never hold an empty — while the
   // shared cache is written straight after the fetch and therefore can. Covering all three sources
   // here is also what makes the `'empty'` cache hit above safe to write as a plain early 422.
+  //
+  // Keeps the GENERIC copy (D3): a transcript arrived and it happens to hold no words, which is not
+  // the same claim as "this video has no caption track" and must not be reported as one. It still
+  // CHARGES (D14): an unusable submission is an unusable submission whichever of the three sources
+  // above produced it.
   if (content.trim().length === 0) {
-    return Response.json({ error: "Transcript unavailable for this video" }, { status: 422 });
+    return await refuseAndCharge(admin, userId, requestId, "whitespace");
   }
 
   const transcriptLength = content.length;
@@ -509,7 +771,7 @@ async function runGeneration({
   try {
     const reserved = await beginGeneration(admin, { userId, requestId, amount: cost });
 
-    const settled = respondToRepeatedRequest(reserved);
+    const settled = await respondToRepeatedRequest(admin, userId, requestId, reserved);
     if (settled) return settled;
 
     if (reserved.outcome === "insufficient") {
@@ -562,15 +824,73 @@ async function runGeneration({
   //
   // `metadata_ms` brackets the whole operation, retry and its ~1.2 s rate-limit sleep included: that
   // delay is real latency the user waited through, not overhead to be netted out.
-  let metadata: Awaited<ReturnType<typeof fetchVideoMetadata>> = null;
-  const metadataStartedAt = Date.now();
-  try {
-    metadata = await fetchVideoMetadata({ url }, supadataKey, meter);
-  } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error("fetchVideoMetadata threw despite being total:", error);
+  //
+  // S-09 D6/D7 EXTENDS the three reasons above rather than replacing them. A cache HIT removes the
+  // request outright, so the 1 req/s reason lapses on its own for that path — but the other two still
+  // govern the MISS path below, which is a real vendor call in exactly the position it always was.
+  // The lookup moved; the fetch did not.
+  let metadata: Awaited<ReturnType<typeof fetchVideoMetadata>> = cachedMetadata;
+  // Always set explicitly. A null would be indistinguishable from a pre-migration row and would
+  // silently re-break the cost-per-generation queries this column exists to keep honest.
+  let metadataVia: MetadataVia = "stored";
+
+  if (metadata === null) {
+    const metadataStartedAt = Date.now();
+
+    // The SECOND budget check point, and the reason one in front of the transcript fetch is not
+    // enough: on a warm transcript with cold metadata this call IS the first paid call, which is
+    // exactly the traffic Phase 4's cache is designed to create. A breaker that only guarded the
+    // transcript would be bypassed by its own success.
+    //
+    // Reserves 2, not 1 — `fetchVideoMetadata` may retry once and that retry is separately billed.
+    const metadataBudget = await reserveBudget(admin, supadataKey, METADATA_BUDGET_CREDITS);
+
+    if (metadataBudget.outcome === "refused") {
+      // A trip HERE does not refuse the generation. The user has already been debited and the LLM has
+      // already been paid for, so protecting a decorative thumbnail by discarding a finished summary
+      // would be strictly worse than shipping it without one. Skip the call and persist nulls exactly
+      // as a metadata failure already does — `'skipped_budget'` is what makes the degraded row explain
+      // itself instead of looking like a vendor failure.
+      metadataVia = "skipped_budget";
+    } else {
+      const metadataBudgetMark = meter.checkpoint();
+      try {
+        metadata = await fetchVideoMetadata({ url }, supadataKey, meter);
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error("fetchVideoMetadata threw despite being total:", error);
+      } finally {
+        // Same `finally` obligation as the transcript point, and reachable only from `reserved`: an
+        // `untracked` outcome proceeded WITHOUT a reservation, so there is no id and nothing to close.
+        // `billedSince` filters on the operation because the two check points are nested inside one
+        // request — a metadata row must never settle the transcript's reservation or vice versa.
+        if (metadataBudget.outcome === "reserved") {
+          await settleBudget(admin, metadataBudget.reservationId, meter.billedSince(metadataBudgetMark, "metadata"));
+        }
+      }
+
+      // Set AFTER the call, not before it: a request went out either way, and whether it came back with
+      // a row is precisely the difference the two markers record. Stamping `'fetched'` up front made
+      // the value mean "attempted" while every comment on it claimed "billed" — and a failure is
+      // billed 0, so reading it as spend overcounts. `supadata_calls` remains the billing truth.
+      metadataVia = metadata === null ? "fetch_failed" : "fetched";
+
+      // Only a SUCCESS is cached (D9). A failed metadata call is billed 0, so caching the failure would
+      // save nothing while persisting nulls for a video whose next attempt would likely succeed — and
+      // `save_metadata_cache` does not coalesce, so writing nulls here would actively poison the row
+      // for every other user.
+      if (metadata !== null) {
+        await saveCachedMetadata(admin, youtubeId, metadata);
+      }
+    }
+
+    // Overwrites the cache read's duration measured above — the bracket that actually ran wins. It
+    // spans the reservation as well as the call, so a `'skipped_budget'` row reports the refused
+    // reserve (a DB round trip, plus `/v1/me` and its 1.2 s spacing when this caller happened to claim
+    // the refresh) rather than any vendor work. One more reason `metadata_via` is the mandatory filter
+    // on any query comparing `metadata_ms`.
+    metadataMs = Date.now() - metadataStartedAt;
   }
-  const metadataMs = Date.now() - metadataStartedAt;
 
   // Persist AND settle in ONE transaction (F23). These used to be two calls — an RLS-client insert
   // followed by a best-effort settle — which left the ledger indistinguishable from failed work for
@@ -599,7 +919,12 @@ async function runGeneration({
       model: summary.model,
       resolvedVia,
       reservationId,
+      // D12, stated because "hit -> skip the write" is the natural regression: the metadata argument
+      // is populated on a HIT exactly as on a fetch. S-02 renders its list from the per-user `videos`
+      // row, which persist_summary's coalescing upsert writes from these values — so the cache FEEDS
+      // that upsert rather than replacing it, and a second user's row is populated on a hit too.
       metadata,
+      metadataVia,
       transcriptLang,
       transcriptAvailableLangs,
       transcriptChars: transcriptLength,

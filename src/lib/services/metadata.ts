@@ -2,8 +2,16 @@ import { SupadataError, type Metadata } from "@supadata/js";
 import type { VideoMetadata } from "@/types";
 import { readBillableCredits, type SupadataMeter } from "./supadata-ledger";
 
-/** Past the rate-limit window on the Free plan's 1 req/s, with margin. */
-const RETRY_DELAY_MS = 1200;
+/**
+ * Past the rate-limit window on the Free plan's 1 req/s, with margin.
+ *
+ * The limit it describes is VENDOR-WIDE, not a metadata-specific retry policy, so it has a second
+ * consumer since S-09 Phase 6: `supadata-budget.ts` waits this long after `GET /v1/me` before the paid
+ * call that follows it, for exactly the same reason `generate.ts` keeps its two Supadata requests
+ * seconds apart. Exported rather than copied — two 1200s in two files, linked only by a comment, is
+ * precisely the drift that would silently break the spacing both callers depend on.
+ */
+export const RETRY_DELAY_MS = 1200;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
