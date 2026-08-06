@@ -1,13 +1,49 @@
 ---
 change_id: transcript-cost-guardrail
 title: Transcript cost guardrail
-status: impl_reviewed
+status: implemented
 created: 2026-07-31
 updated: 2026-08-06
 archived_at: null
 ---
 
 ## Notes
+
+**Phase 7 done — DEPLOYED TO PRODUCTION 2026-08-06. The slice is complete.** `supabase db push
+--linked` and `wrangler deploy` were issued **back to back in one shell command**, so the
+`persist_summary` swap window was never open across a human decision; Worker
+`393417a8-dedc-4a02-906e-f09e5c443637`. Live pass cost **4 Supadata credits** (81 → 85) against the
+~4-credit budget and reconciled exactly against the per-outcome ledger total; record at
+`reviews/manual-verification.md`. Six things worth carrying:
+
+- **Six migrations were pending, not the four criterion 7.1 and the Deploy contract name.** The plan's
+  own Phase 5 note recorded the renumbering — `…150000_supadata_budget`, with
+  `…130000_summaries_single_writer` and `…140000_metadata_via_fetch_failed` as Phase 4 follow-ups — but
+  the count was never corrected downstream. Only P4's opened a deploy window.
+- **The headline claim held at the vendor's billing level.** The repeat generation moved `usedCredits`
+  by **0**, and produced zero ledger rows *and* zero budget reservations — D5's "the breaker gates
+  spend, not the request" observed rather than argued, since a request that will not spend never
+  reaches a check point at all.
+- **D13 paid off exactly where it was aimed.** The `unavailable → 1` branch asserts a charge the vendor
+  never reports; here the same row carried the vendor's own `http_status = 206` and the two agreed. Had
+  they disagreed, the delta of 4 is what would have said so.
+- **The breaker initialized itself on the first real production request** — observable only once per
+  deployment, and the production counterpart of 6.8 / SQL row 5.9. Afterwards `read_at` never moved
+  again during the pass (900 s TTL), so steps 2–4 decided against a reading already 4 credits stale and
+  were still correct: the outstanding reservations carried the difference.
+- **Step 4 justified Phase 6's second check point on real traffic** — a warm transcript with cold
+  metadata made `fetchVideoMetadata` the request's only paid call, the exact shape a single-point
+  breaker would miss and the exact shape Phase 4's cache creates.
+- **The test account was topped up to run the pass.** The operator's own production account held 0
+  credits (generation disabled outright), so 8 were granted via `scripts/grant-credits.mjs` pointed at
+  production; the pass consumed 4, leaving 4. **The D14 refusal charge is now live for real users** —
+  watch `credit_reservations` on a non-null `refusal_reason` in the first day.
+
+What stays unverified in production, by choice: the stop threshold (~95 credits to reach honestly —
+Phase 6 proved it under an overridden constant), the fail-open paths (they need a broken vendor
+endpoint), the warn threshold's delivery (D5b, no receiver), and the Whisper job path, which under D1
+is **unreachable by construction and will never be verified at all** — leaving lever A's saving
+contractual rather than measured, exactly as the roadmap caveat warned. Next: `/10x-archive`.
 
 **Phase 6 fully verified 2026-08-06 (local, undeployed)** — manual rows 6.8–6.17 all pass; record at
 `reviews/manual-verification-phase-6.md`. Spend **3 credits** (78 → 81 of 100), reconciled exactly

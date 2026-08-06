@@ -1704,17 +1704,17 @@ Four things worth carrying:
 
 #### Automated
 
-- [x] 7.1 `migration list --linked` shows all four migrations applied
-- [x] 7.2 Deployed Worker version recorded
-- [x] 7.3 Reconciliation: per-outcome ledger total equals the observed `usedCredits` delta
+- [x] 7.1 `migration list --linked` shows all four migrations applied — baf0b04
+- [x] 7.2 Deployed Worker version recorded — baf0b04
+- [x] 7.3 Reconciliation: per-outcome ledger total equals the observed `usedCredits` delta — baf0b04
 
 #### Manual
 
-- [x] 7.4 Total spend within the ~4-credit budget (≤6 if metadata retries fire) — 2026-08-06, production
-- [x] 7.5 Repeat generation moves `usedCredits` by 0 — 2026-08-06, production
+- [x] 7.4 Total spend within the ~4-credit budget (≤6 if metadata retries fire) — 2026-08-06, production — baf0b04
+- [x] 7.5 Repeat generation moves `usedCredits` by 0 — 2026-08-06, production — baf0b04
 - [x] 7.6 Caption-less video shows the new copy live, records `http_status = 206`, and costs the
-      submitting user 1 credit — 2026-08-06, production
-- [x] 7.7 `roadmap.md` §S-09 and the Linear issue reflect completion — 2026-08-06
+      submitting user 1 credit — 2026-08-06, production — baf0b04
+- [x] 7.7 `roadmap.md` §S-09 and the Linear issue reflect completion — 2026-08-06 — baf0b04
 
 Record: `reviews/manual-verification.md`. Deployed 2026-08-06 as `supabase db push --linked` immediately
 followed by `wrangler deploy` **in one shell command**, Worker `393417a8-dedc-4a02-906e-f09e5c443637`.
