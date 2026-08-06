@@ -57,3 +57,10 @@
 - **Problem**: Lokalne dane (użytkownicy, `videos`, `summaries`) to zasób testowy zbudowany realnym kosztem — odtworzenie podsumowań kosztuje kredyty Supadata i OpenRouter oraz czas. Dodatkowo destrukcyjna komenda przerwana w połowie zostawia bazę niespójną (tu: schemat cofnięty do pierwszej migracji), więc naprawa wymaga kolejnego pełnego resetu.
 - **Rule**: Nigdy nie uruchamiaj destrukcyjnej komendy na lokalnej bazie bez wyraźnej zgody. Najpierw sięgnij po nieniszczącą alternatywę (`supabase migration up`, zapytanie do `pg_catalog`); jeśli krok naprawdę wymaga czystej bazy, poproś o zgodę i wyjaśnij, co zostanie utracone.
 - **Applies to**: implement, impl-review
+
+## Nigdy nie commituj identyfikatorów kont z przebiegu na prawdziwym środowisku
+
+- **Context**: Każdy record weryfikacyjny, nota w `change.md`/`plan.md`, komentarz w Linear lub treść commita powstająca po przebiegu na **prawdziwym** środowisku (produkcja, współdzielony staging) — w odróżnieniu od lokalnego.
+- **Problem**: Konwencja „w recordach używamy kont syntetycznych" (`verify-s09@local.test`) istniała od S-07, ale nigdy nie została zapisana — działała sama, bo wszystkie przebiegi były lokalne. Pierwszy przebieg produkcyjny (S-09 P7) nie miał syntetycznego odpowiednika, więc prawdziwy adres e-mail i UUID użytkownika trafiły do trzech plików i zostały zacommitowane. Repo jest **publiczne**. Złapane pytaniem użytkownika jeden krok przed pushem; wymagało przepisania dwóch commitów, co unieważniło już wpisany SHA i zmusiło do powtórzenia write-backu.
+- **Rule**: Zanim zacommitujesz cokolwiek z przebiegu na prawdziwym środowisku, usuń identyfikatory kont — e-mail, `user_id`, tokeny, klucze. Opisuj **rolę**, nie osobę („konto operatora"). Zakładaj, że repo jest publiczne. Moment, w którym lokalna konwencja „konta syntetyczne" przestaje mieć zastosowanie, to moment, w którym zasadę trzeba zastosować **świadomie** — a nie moment, w którym ona wygasa.
+- **Applies to**: implement, impl-review, archive
