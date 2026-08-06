@@ -1704,14 +1704,46 @@ Four things worth carrying:
 
 #### Automated
 
-- [ ] 7.1 `migration list --linked` shows all four migrations applied
-- [ ] 7.2 Deployed Worker version recorded
-- [ ] 7.3 Reconciliation: per-outcome ledger total equals the observed `usedCredits` delta
+- [x] 7.1 `migration list --linked` shows all four migrations applied
+- [x] 7.2 Deployed Worker version recorded
+- [x] 7.3 Reconciliation: per-outcome ledger total equals the observed `usedCredits` delta
 
 #### Manual
 
-- [ ] 7.4 Total spend within the ~4-credit budget (≤6 if metadata retries fire)
-- [ ] 7.5 Repeat generation moves `usedCredits` by 0
-- [ ] 7.6 Caption-less video shows the new copy live, records `http_status = 206`, and costs the
-      submitting user 1 credit
-- [ ] 7.7 `roadmap.md` §S-09 and the Linear issue reflect completion
+- [x] 7.4 Total spend within the ~4-credit budget (≤6 if metadata retries fire) — 2026-08-06, production
+- [x] 7.5 Repeat generation moves `usedCredits` by 0 — 2026-08-06, production
+- [x] 7.6 Caption-less video shows the new copy live, records `http_status = 206`, and costs the
+      submitting user 1 credit — 2026-08-06, production
+- [x] 7.7 `roadmap.md` §S-09 and the Linear issue reflect completion — 2026-08-06
+
+Record: `reviews/manual-verification.md`. Deployed 2026-08-06 as `supabase db push --linked` immediately
+followed by `wrangler deploy` **in one shell command**, Worker `393417a8-dedc-4a02-906e-f09e5c443637`.
+Spend **4 credits** (81 → 85), reconciled exactly against the per-outcome ledger total.
+
+**Adaptation on 7.1: six migrations were pending, not four.** The plan's own Phase 5 note already
+recorded the renumbering (`…150000_supadata_budget`, with `…130000_summaries_single_writer` and
+`…140000_metadata_via_fetch_failed` as Phase 4 follow-ups), but the count in this criterion and in the
+Deploy contract was never corrected. Only P4's migration opened a deploy window; the other five are
+additive. Row ticked against all six applied.
+
+Five things worth carrying:
+
+- **The breaker initialized itself on the first real production request** — observable only once per
+  deployment. Seeded-null row → `refresh_required` reserving nothing → `/v1/me` → save `100/81` → 1.2 s
+  spacing → the *second* pass decides, its reservation stamped strictly newer than the reading that
+  authorized it. The production counterpart of 6.8 and of SQL row 5.9.
+- **The stale-reading design was exercised for real.** `read_at` never moved past the first request
+  (900 s TTL), so steps 2–4 decided against a reading already 4 credits stale and were still correct —
+  the outstanding reservations carried the difference. `/v1/me` anchors, reservations track.
+- **Step 4 justified Phase 6's second check point.** A warm transcript with cold metadata made
+  `fetchVideoMetadata` the request's *only* paid call; a breaker sitting only in front of the transcript
+  fetch would have been bypassed entirely, on exactly the traffic Phase 4's cache creates.
+- **7.5's stronger form**: the warm repeat produced zero ledger rows **and** zero budget reservations —
+  D5's "the breaker gates spend, not the request" observed rather than argued.
+- **No reservation was stranded** across a success, a warm no-op, a 206 refusal and a metadata-only
+  run, so the sweep never had to act — the `finally` obligation is the primary mechanism, as designed.
+
+**The test account was topped up to run the pass**: the operator's own production account held 0
+credits, so 8 were granted through `scripts/grant-credits.mjs` pointed at the production project; the
+pass consumed 4, leaving 4. Account identifiers are deliberately omitted from this record — the
+repository is public, and every earlier pass in this slice used synthetic local accounts.
