@@ -430,8 +430,8 @@ None. No schema change, no data migration, no backfill. Null metadata on pre-S-0
 
 #### Automated
 
-- [x] 1.1 Linting passes: `npm run lint`
-- [x] 1.2 Build passes: `npm run build`
+- [x] 1.1 Linting passes: `npm run lint` — 79e1102
+- [x] 1.2 Build passes: `npm run build` — 79e1102
 
 #### Manual
 
