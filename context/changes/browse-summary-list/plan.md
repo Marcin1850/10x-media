@@ -435,10 +435,10 @@ None. No schema change, no data migration, no backfill. Null metadata on pre-S-0
 
 #### Manual
 
-- [ ] 1.3 `GET /api/summaries` returns only the signed-in user's rows, newest first
-- [ ] 1.4 Response contains the two all-null-metadata rows with summary text intact
-- [ ] 1.5 A second signed-in user's response contains none of the first user's rows
-- [ ] 1.6 `GET /api/summaries` signed out returns `401`
+- [x] 1.3 `GET /api/summaries` returns only the signed-in user's rows, newest first — 2026-08-07, local
+- [x] 1.4 Response contains the two all-null-metadata rows with summary text intact — 2026-08-07, local
+- [x] 1.5 A second signed-in user's response contains none of the first user's rows — 2026-08-07, local
+- [x] 1.6 `GET /api/summaries` signed out returns `401` — 2026-08-07, local
 
 ### Phase 2: List UI on the dashboard
 
