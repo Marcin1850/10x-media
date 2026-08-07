@@ -112,7 +112,7 @@ id, character, content, created_at,
 videos ( youtube_id, url, title, thumbnail_url_reported, channel_name, duration_seconds, published_at )
 ```
 
-ordered `created_at.desc`. `videos` arrives as a to-one **object or null** — treat null as an all-null metadata row rather than dropping the summary.
+ordered `created_at.desc`. `videos` arrives as a to-one object. The row is **guaranteed present**: `summaries.video_id`/`user_id` are `NOT NULL` behind the composite FK to `videos` (`supabase/migrations/20260613145120_videos_and_summaries.sql:4-13,34-42`), so an absent embed is a data-integrity fault, not a renderable state — the mapper narrows the embed as required and throws if it is missing. "Null metadata" means a **present** video whose descriptive columns (`title`, `thumbnail_url_reported`, `channel_name`, `duration_seconds`, `published_at`) are null; `youtube_id` and `url` are always there, which is what lets the DTO keep them non-nullable.
 
 #### 3. List endpoint
 
@@ -168,9 +168,19 @@ Render the list on `/dashboard` with thumbnails, metadata, character badge, filt
 
 **File**: `src/lib/format.ts`
 
-**Intent**: Format the two numeric/temporal fields the card shows.
+**Intent**: Format the three numeric/temporal fields the card shows.
 
-**Contract**: `formatDuration(seconds: number | null): string | null` producing `m:ss` under an hour and `h:mm:ss` at or above it (local data spans 51 s to 4523 s). `formatPublishedDate(iso: string | null): string | null` rendering date precision only — the vendor supplies midnight UTC, so a time would be fabricated. Both return `null` for null input so the card decides how absence looks.
+**Contract**:
+
+- `formatDuration(seconds: number | null): string | null` producing `m:ss` under an hour and `h:mm:ss` at or above it (local data spans 51 s to 4523 s).
+- `formatPublishedDate(iso: string | null): string | null` rendering date precision only — the vendor supplies midnight UTC, so a time would be fabricated.
+- `formatCreatedDate(iso: string): string` for the card's creation date. Non-nullable: `summaries.created_at` is `NOT NULL`.
+
+Both date helpers return `YYYY-MM-DD` built from **UTC** parts, with no `Intl` locale involved.
+
+**Why UTC and why locale-free.** This runs under SSR: the card is rendered once on the Worker and again during hydration in the browser. `Intl.DateTimeFormat` with an implicit locale resolves differently on each side and produces a hydration mismatch. UTC also protects `publishedAt` specifically — every stored value is midnight UTC, so reading it in any timezone west of Greenwich shifts the displayed date back a full day.
+
+**Accepted cost**: a creation date is a real instant, not a date-only value, so a summary generated at 01:00 in Warsaw displays the previous day. This is the price of one deterministic render, and it is the smaller error — a date-only field silently off by one is worse than a timestamped one shown in UTC. Revisit if S-06 introduces locale-aware formatting; a client-only `useEffect` swap to local time is the escape hatch, deliberately not taken here.
 
 #### 4. Summary card
 
@@ -178,15 +188,17 @@ Render the list on `/dashboard` with thumbnails, metadata, character badge, filt
 
 **Intent**: Render one summary: thumbnail, title, channel · duration · upload date, character badge, creation date, and a collapsed preview of the content that expands in place.
 
+**Note — creation date is an addition beyond the brief.** `plan-brief.md:30` fixes the card fields as thumbnail, title, channel, duration, upload date and character badge; the creation date is not in that row, nor in FR-006 or the roadmap's S-08 outcome. It is kept deliberately: the flat list accepts the same video appearing once per character, and "generated on" is what distinguishes two otherwise near-identical cards. `created_at` is read regardless — it is the `newest first` sort key.
+
 **Contract**: Props `{ item: SummaryListItem }`. Collapsed by default with local expand state; the expand control is a real `<button>` with `aria-expanded` (the repo lints with `eslint-plugin-jsx-a11y`). Title falls back to the `url`, which is non-null. When channel, duration and upload date are all absent the metadata row is omitted entirely rather than rendering three dashes. Expanded content renders through `SummaryMarkdown`.
 
 #### 5. Summary list island
 
 **File**: `src/components/summaries/SummaryList.tsx`
 
-**Intent**: Render the cards, own the character filter, and hold the list in state so Phase 4 can replace it after a generation.
+**Intent**: Render the cards and own the character filter. **Filter state only** — the summaries themselves are always owned by the caller, so Phase 4's refresh has exactly one owner and this component never has two sources of truth for the same list.
 
-**Contract**: Props `{ initialSummaries: SummaryListItem[] }`, seeded from the server exactly as `initialCredits` is (`dashboard.astro:42`). Filter is a three-way control (all / informational / educational) applied client-side. Two distinct empty states: no summaries at all ("generate your first"), and none matching the active filter (offers to clear it).
+**Contract**: Props `{ summaries: SummaryListItem[] }` — controlled, not seeded. In Phase 2 the value comes straight from the server read in `dashboard.astro` (the same seeding pattern as `initialCredits`, `dashboard.astro:42`); in Phase 3 that prop starts being fed by `DashboardSummaries`, with no change to this component. Local state here is the three-way filter (all / informational / educational), applied client-side. Also takes `listUnavailable: boolean`. Three mutually exclusive non-list states: **unavailable** (the read failed — offer a reload, never claim the corpus is empty), **empty** (no summaries at all — "generate your first"), and **empty under filter** (offers to clear it).
 
 #### 6. Dashboard renders the list
 
@@ -194,7 +206,9 @@ Render the list on `/dashboard` with thumbnails, metadata, character badge, filt
 
 **Intent**: Server-read the summaries alongside the existing credit read and render the list below the generate card. The page widens past `max-w-lg` to hold a list.
 
-**Contract**: Reuses the existing `createClient` + try/catch shape (`dashboard.astro:11-27`): a failed read logs and renders an empty list rather than failing the page, because the list is not an enforcement gate. `GenerateSummaryForm` stays mounted with `initialCredits` unchanged.
+**Contract**: Reuses the existing `createClient` + try/catch shape (`dashboard.astro:11-27`): a failed read logs and still renders the page, because the list is not an enforcement gate. `GenerateSummaryForm` stays mounted with `initialCredits` unchanged.
+
+**A failed read is its own state, not an empty list.** The catch branch passes `listUnavailable: true` alongside `summaries: []`, and `SummaryList` renders a distinct "couldn't load your summaries — reload the page" message. Collapsing a read failure into `[]` would show an existing user the "generate your first summary" copy, i.e. tell someone with 16 saved summaries that they have none — a wrong statement about their data, which is worse than an error. Three mutually exclusive states, then: unavailable, genuinely empty, and empty-under-filter.
 
 ### Success Criteria:
 
@@ -212,6 +226,7 @@ Render the list on `/dashboard` with thumbnails, metadata, character badge, filt
 - Clicking a card expands the full summary; a second click collapses it
 - The character filter narrows the list, and clearing it restores every card
 - A user with no summaries sees the empty state, not an empty page
+- With the read forced to fail (stop the local Supabase stack, reload `/dashboard`), the page renders the "couldn't load" state — not the "generate your first summary" copy
 
 **Implementation Note**: After completing this phase and all automated verification passes, pause here for manual confirmation from the human that the manual testing was successful before proceeding to the next phase.
 
@@ -233,6 +248,11 @@ Move the generation lifecycle out of `GenerateSummaryForm` into a hook owned by 
 
 **Contract**: `useGenerateSummary({ initialCredits })` returning that state plus `generate(allowLong, url, character)` and an input-changed signal that bumps `requestSeq` and clears the confirm quote. `messageForStatus` moves with it unchanged. The three invariants called out in Critical Implementation Details — the idempotency key's exact lifetime, the `requestSeq` bump on both submit and input change, and applying a successful response *before* the staleness check — are preserved verbatim.
 
+Two additions the ref-based state cannot provide, both needed by Phase 4 and cheap to add here:
+
+- **`attempt: { url: string; character: SummaryCharacter } | null` — reactive state, not a ref.** `pendingRequest` stays a ref because its job is the idempotency key's lifetime; a ref cannot re-render the pending card, and it is cleared on any HTTP response *before* the error branch runs (`GenerateSummaryForm.tsx:135-182`), so an error card driven off it would have nothing to name. `attempt` is set on submit and cleared only when the attempt reaches a terminal state the UI has consumed.
+- **`lastSuccess: { seq: number; summaryId: string; url: string; character: SummaryCharacter } | null`.** A monotonic `seq` makes success a *repeatable event* — two generations of the same video in a row are distinguishable, where a boolean or an object identity check is not. `summaryId` is already in the response body (`generate.ts:970-977`) and currently discarded; keeping it lets Phase 4 confirm the re-read actually contains the new row.
+
 #### 2. Form becomes presentational
 
 **File**: `src/components/summaries/GenerateSummaryForm.tsx`
@@ -240,6 +260,10 @@ Move the generation lifecycle out of `GenerateSummaryForm` into a hook owned by 
 **Intent**: Keep the URL/character/allowLong inputs, validation, the credit chip, the confirm prompt and the result block; delegate every request concern to the hook passed in from the parent.
 
 **Contract**: Props change from `{ initialCredits }` to the hook's returned state and callbacks. `extractYoutubeId` validation, `urlError`, and the `submitDisabled` rule stay local — they are input concerns, not request concerns.
+
+**The three quote-relevant inputs become controlled.** `url`, `character` and `allowLong` move to `DashboardSummaries` and arrive as `{ value, onChange }` pairs. `ui/dialog` does not force-mount its content (`src/components/ui/dialog.tsx:37-54`), so Radix unmounts the form on close and any state left local here is destroyed — reopening would show a blank URL and a default character sitting next to a retained confirm quote or a running request, which is precisely the mismatch the confirm prompt must not have. Keeping them in the parent also means the quote and the inputs it was priced from cannot drift apart.
+
+**Clearing policy**: the inputs are cleared by the parent only on a *successful* generation (so the next summary starts from a clean form). An error, a dismissed dialog, or a pending confirmation all retain them, since each is a state the user may want to retry or confirm from.
 
 #### 3. Dashboard island
 
@@ -249,6 +273,8 @@ Move the generation lifecycle out of `GenerateSummaryForm` into a hook owned by 
 
 **Contract**: Props `{ initialSummaries: SummaryListItem[]; initialCredits: number | null }`. Calls `useGenerateSummary` at this level, renders a "New summary" trigger, a `ui/dialog` containing `GenerateSummaryForm`, and `SummaryList`. The dialog is freely dismissable — no `forceMount` needed, because the state that matters now lives in this component, not in the dialog's children.
 
+**This component is the single owner of list state.** It holds `summaries` (seeded from `initialSummaries`) and passes it down to the controlled `SummaryList`; the list keeps only its filter. Phase 3 sets `summaries` once and never mutates it — the refresh machinery arrives in Phase 4, but the ownership is established here so Phase 4 adds no restructuring.
+
 #### 4. Dashboard renders one island
 
 **File**: `src/pages/dashboard.astro`
@@ -256,6 +282,14 @@ Move the generation lifecycle out of `GenerateSummaryForm` into a hook owned by 
 **Intent**: Replace the separate `GenerateSummaryForm` + `SummaryList` mounts with the single `DashboardSummaries` island.
 
 **Contract**: Same two server reads (credits, summaries), both passed as initial props. The standalone `<GenerateSummaryForm client:load>` mount is removed.
+
+#### 5. Fix the endpoint's stale cross-file pointer
+
+**File**: `src/pages/api/summaries/generate.ts`
+
+**Intent**: The 422 doc block explains *why* the server's error string must survive to the user and names its consumer: "`GenerateSummaryForm`'s `messageForStatus`" (`generate.ts:60-62`). This phase moves `messageForStatus` into `useGenerateSummary.ts`, which leaves that pointer aimed at a function no longer in the named file — and it is exactly the comment a future reader consults before changing the 422 body.
+
+**Contract**: Update the reference to name the hook. **Comment only** — no code, no behavior, no signature touched. This does not breach "No change to the generation endpoint": that boundary is about the paid path's logic, and letting the refactor silently invalidate the note protecting it works against the same goal.
 
 ### Success Criteria:
 
@@ -270,8 +304,9 @@ Move the generation lifecycle out of `GenerateSummaryForm` into a hook owned by 
 - A long video still produces the confirmation prompt, and "Generate anyway" charges 2 credits — the quote replays the confirmed inputs, not the live form
 - Editing the URL while a confirm prompt is open discards the quote
 - Submitting with an invalid URL is blocked with the same inline error
-- Closing the dialog mid-generation and reopening it shows the request still running, then its result
+- Closing the dialog mid-generation and reopening it shows the request still running with its submitted URL and character still in the inputs, then its result
 - The credit chip and the "no credits left" copy behave as before
+- **Ambiguous-network-retry fault injection** (procedure in Testing Strategy): a request that commits server-side but whose response never reaches the client, then retried, replays the same summary and charges exactly one credit in total
 
 **Implementation Note**: After completing this phase and all automated verification passes, pause here for manual confirmation from the human that the manual testing was successful before proceeding to the next phase.
 
@@ -297,9 +332,9 @@ Surface the hook's in-flight state as a live card at the top of the list, and re
 
 **File**: `src/components/summaries/SummaryList.tsx`
 
-**Intent**: Render the pending card above the saved cards and replace the list from the server when a generation commits.
+**Intent**: Render the pending card above the saved cards. The list stays controlled — refreshing is the parent's job, not this component's.
 
-**Contract**: Takes the pending descriptor and an `onRefresh` result. The character filter never hides the pending card — a pending generation has a character, but hiding the thing the user just started is the wrong default. A failed re-read leaves the previous list in place and surfaces a "reload to see your new summary" note rather than clearing it.
+**Contract**: Adds props `{ pending: PendingSummary | null; refreshFailed: boolean }` alongside the existing `summaries`; it still owns nothing but its filter. `PendingSummary` is derived by the parent from the hook's `attempt` plus its status (generating / needs-confirmation / failed). The character filter never hides the pending card — a pending generation has a character, but hiding the thing the user just started is the wrong default. When `refreshFailed` is set the previous list stays rendered under a "reload to see your new summary" note rather than being cleared.
 
 #### 3. Re-read on success
 
@@ -307,7 +342,9 @@ Surface the hook's in-flight state as a live card at the top of the list, and re
 
 **Intent**: On a successful generation, fetch `GET /api/summaries` and hand the fresh list to `SummaryList`, then clear the pending entry.
 
-**Contract**: The re-read is fired from the hook's success transition and is best-effort — its failure never discards the paid result already rendered in the dialog. The pending entry clears only once the re-read resolves, so there is no frame where the summary appears in neither place.
+**Contract**: An effect watches `lastSuccess.seq`; each new value fires one `GET /api/summaries`. The re-read is best-effort — its failure sets `refreshFailed` and never discards the paid result already rendered in the dialog. The pending entry clears only once the re-read resolves, so there is no frame where the summary appears in neither place.
+
+**Refresh sequence guard.** The component holds a monotonic refresh counter in a ref; a response whose counter is not the latest is discarded. Without it, two generations in quick succession can land out of order and overwrite the newer list with the older one — the same class of bug `requestSeq` already guards on the generate path. On a `refreshFailed` re-read the pending card is retained (not cleared) so the user still sees what was generated.
 
 ### Success Criteria:
 
@@ -344,6 +381,18 @@ The repo has no automated test suite (a stated MVP limitation), so verification 
 7. Repeat with the dialog closed immediately after submit; confirm the pending card and its replacement.
 8. Repeat with a long video to exercise the confirmation path both with the dialog open and closed.
 9. Repeat with a transcript-less video to exercise the error card.
+
+### Ambiguous-network-retry fault injection (Phase 3, criterion 3.9)
+
+The one paid-path invariant that lint, build and a normal generation cannot catch: the idempotency key must survive a network failure (the request may have been delivered and its reply lost) and must *not* survive an HTTP response. A regression in either direction is invisible until it double-charges. Make the ambiguity deterministic by killing the server after it commits, rather than racing a DevTools toggle:
+
+1. Note the user's credit balance and their `summaries` row count in Studio (`http://localhost:54323`).
+2. Submit a short video from the dialog. Watch the dev-server console.
+3. The moment the persist/settle log line for that generation appears — the work is committed and charged — `Ctrl+C` the dev server. The in-flight `fetch` rejects with a network error, so the client keeps `pendingRequest`.
+4. Restart `npm run dev` and resubmit **the same URL and character** without editing either field (editing bumps `requestSeq` and clears the quote, which is a different path).
+5. Expect: the summary returns from the idempotency ledger's replay branch (`generate.ts:300-307`), the balance is **one** credit lower than in step 1, and `summaries` gained exactly **one** row.
+
+Two credits spent, or a second row, means the key was re-minted. A replay of a *previous, different* video means the key was held too long.
 
 ### Edge cases to exercise explicitly:
 
@@ -407,6 +456,7 @@ None. No schema change, no data migration, no backfill. Null metadata on pre-S-0
 - [ ] 2.7 Cards expand and collapse on click
 - [ ] 2.8 The character filter narrows and clears correctly
 - [ ] 2.9 A user with no summaries sees the empty state
+- [ ] 2.10 A forced read failure renders the "couldn't load" state, not the empty state
 
 ### Phase 3: Lift generation state into a hook and a dialog
 
@@ -421,8 +471,9 @@ None. No schema change, no data migration, no backfill. Null metadata on pre-S-0
 - [ ] 3.4 Long-video confirmation charges 2 credits and replays the confirmed inputs
 - [ ] 3.5 Editing the URL with a confirm prompt open discards the quote
 - [ ] 3.6 Invalid URL is blocked with the same inline error
-- [ ] 3.7 Closing and reopening the dialog mid-generation preserves the running request
+- [ ] 3.7 Closing and reopening the dialog mid-generation preserves the running request and its inputs
 - [ ] 3.8 Credit chip and no-credits copy behave as before
+- [ ] 3.9 Ambiguous-network-retry fault injection replays the summary and charges one credit total
 
 ### Phase 4: In-progress cards in the list
 

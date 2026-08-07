@@ -4,8 +4,17 @@
 - **Plan**: `context/changes/browse-summary-list/plan.md`
 - **Mode**: Deep
 - **Date**: 2026-08-07
-- **Verdict**: REVISE
-- **Findings**: 1 critical, 5 warnings, 1 observation
+- **Verdict**: REVISE → **SOUND** after triage (2026-08-07)
+- **Findings**: 1 critical, 5 warnings, 1 observation — all 7 fixed in `plan.md`
+
+## Triage summary (2026-08-07)
+
+All seven findings were fixed in the plan. Two were adjusted during triage rather than applied as written:
+
+- **F5** — the proposed fix pinned an explicit `Intl` locale. Triage replaced it with locale-free `YYYY-MM-DD` from UTC parts, which removes the SSR/hydration mismatch class outright instead of managing it. Triage also established that the card's creation date traces to no upstream source (PRD FR-006, roadmap S-08 outcome, and the `plan-brief.md:30` card-fields decision all omit it). It was kept as a deliberate addition — it disambiguates the same video summarized under both characters — and `plan.md` now records that explicitly, along with the accepted cost that a late-evening local generation displays the previous UTC day.
+- **F4** — Fix A (manual fault injection) chosen over Fix B (mocked-fetch hook tests); a full procedure is now in the plan's Testing Strategy, using a server kill after the commit log line so the ambiguity is deterministic rather than a raced DevTools toggle.
+
+Two new verification criteria were added (2.10 forced-read-failure state, 3.9 ambiguous-network-retry) and criterion 3.7 was widened to cover input preservation. Progress↔Phase contract re-verified after the edits: 6/10/9/8 = 33 criteria against 33 checkboxes, headings matching, no stray checkboxes outside `## Progress`.
 
 ## Verdicts
 
@@ -33,7 +42,7 @@ The selected review skill's sibling `references/progress-format.md` was absent, 
 - **Location**: Phase 1 — Shared list DTO / List service
 - **Detail**: The DTO requires non-null `youtubeId` and `url`, but the mapping contract also permits `videos: null` and says to render it as all-null metadata. A null embed contains neither value. The database actually guarantees a video through a non-null composite FK; historical "null metadata" means a present video whose descriptive columns are null (`supabase/migrations/20260613145120_videos_and_summaries.sql:4-13,34-42`).
 - **Fix**: Require the embedded video at the mapping boundary and throw a read/data-integrity error if absent. Define null metadata as a present video with nullable descriptive fields.
-- **Decision**: PENDING
+- **Decision**: FIXED
 
 ### F2 — Phase 4 lacks a complete state-ownership contract
 
@@ -47,7 +56,7 @@ The selected review skill's sibling `references/progress-format.md` was absent, 
   - Tradeoff: Expands the Phase 3/4 contracts and makes `SummaryList` controlled.
   - Confidence: HIGH — it follows React's existing lifted-state model.
   - Blind spot: None significant.
-- **Decision**: PENDING
+- **Decision**: FIXED
 
 ### F3 — Closing the dialog resets its visible inputs
 
@@ -61,7 +70,7 @@ The selected review skill's sibling `references/progress-format.md` was absent, 
   - Tradeoff: The form becomes less self-contained.
   - Confidence: HIGH — the current dialog wrapper does not force-mount content.
   - Blind spot: The desired policy for clearing fields after success still needs stating.
-- **Decision**: PENDING
+- **Decision**: FIXED — clearing policy stated: clear on success only.
 
 ### F4 — The ambiguous-network-retry invariant is not verified
 
@@ -80,7 +89,7 @@ The selected review skill's sibling `references/progress-format.md` was absent, 
   - Tradeoff: Introduces the repository's first test runner.
   - Confidence: HIGH — these transitions are well suited to mocked responses.
   - Blind spot: Does not prove integration with the real idempotency ledger.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A
 
 ### F5 — Date rendering is under-specified
 
@@ -94,7 +103,7 @@ The selected review skill's sibling `references/progress-format.md` was absent, 
   - Tradeoff: Locks a locale until localization is introduced.
   - Confidence: HIGH — no existing repository formatting convention was found.
   - Blind spot: The preferred display locale is not documented.
-- **Decision**: PENDING
+- **Decision**: FIXED (adjusted) — both helpers specified as locale-free `YYYY-MM-DD` from UTC parts rather than a pinned `Intl` locale, which removes the hydration-mismatch class entirely instead of managing it. Triage also established that the creation date appears in no upstream source (PRD FR-006, roadmap S-08, `plan-brief.md:30` card-fields row); it is kept, and the plan now records it as a deliberate addition beyond the brief.
 
 ### F6 — Read failures masquerade as an empty corpus
 
@@ -104,7 +113,7 @@ The selected review skill's sibling `references/progress-format.md` was absent, 
 - **Location**: Phase 2 — Dashboard renders the list
 - **Detail**: A database failure becomes `[]`, which then renders "generate your first summary." That incorrectly tells an existing user their summaries do not exist.
 - **Fix**: Carry a `listUnavailable` state and render a reload/error message distinct from both empty states.
-- **Decision**: PENDING
+- **Decision**: FIXED
 
 ### F7 — Endpoint documentation becomes stale after the refactor
 
@@ -114,4 +123,4 @@ The selected review skill's sibling `references/progress-format.md` was absent, 
 - **Location**: Phase 3 blast radius
 - **Detail**: The generation endpoint explicitly references `GenerateSummaryForm.messageForStatus` (`src/pages/api/summaries/generate.ts:60-62`), but the plan moves that function without listing the endpoint comment as affected.
 - **Fix**: Update the cross-file comment in `generate.ts` during Phase 3.
-- **Decision**: PENDING
+- **Decision**: FIXED
