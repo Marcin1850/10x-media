@@ -35,7 +35,7 @@
 - **Location**: `src/lib/services/summary-list.ts:57`
 - **Detail**: The query returns every matching summary, including full content, with no pagination. Runtime and payload therefore grow linearly, and a future PostgREST row cap could truncate results without exposing continuation. The implementation plan explicitly accepts this at the current small, credit-capped MVP scale and lists pagination under “What We're NOT Doing,” so this is not Phase 1 drift or a blocker.
 - **Fix**: Add stable cursor pagination on `(created_at, id)` before corpus size or the credit-refill policy expands.
-- **Decision**: PENDING
+- **Decision**: SKIPPED — plan defers pagination to post-MVP by design ("What We're NOT Doing"); revisit before corpus size or credit-refill policy expands.
 
 ## Review Summary
 
