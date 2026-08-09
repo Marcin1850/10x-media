@@ -473,13 +473,24 @@ None. No schema change, no data migration, no backfill. Null metadata on pre-S-0
 
 #### Manual
 
-- [ ] 3.3 Short-video generation from the dialog succeeds with correct credits
-- [ ] 3.4 Long-video confirmation charges 2 credits and replays the confirmed inputs
-- [ ] 3.5 Editing the URL with a confirm prompt open discards the quote
-- [ ] 3.6 Invalid URL is blocked with the same inline error
-- [ ] 3.7 Closing and reopening the dialog mid-generation preserves the running request and its inputs
-- [ ] 3.8 Credit chip and no-credits copy behave as before
-- [ ] 3.9 Ambiguous-network-retry fault injection replays the summary and charges one credit total
+- [x] 3.3 Short-video generation from the dialog succeeds with correct credits — 2026-08-09, local
+- [x] 3.4 Long-video confirmation charges 2 credits and replays the confirmed inputs — 2026-08-09, local
+- [x] 3.5 Editing the URL with a confirm prompt open discards the quote — 2026-08-09, local
+- [x] 3.6 Invalid URL is blocked with the same inline error — 2026-08-09, local
+- [x] 3.7 Closing and reopening the dialog mid-generation preserves the running request and its inputs — 2026-08-09, local
+- [x] 3.8 Credit chip and no-credits copy behave as before — 2026-08-09, local
+- [x] 3.9 Ambiguous-network-retry fault injection replays the summary and charges one credit total — 2026-08-09, local
+
+> **3.9 procedure note.** The Testing Strategy step "Ctrl+C the dev server the moment the persist/settle
+> log line appears" is not executable: `generate.ts` logs nothing on the success path (every `console.*`
+> in it sits in an error branch), and the gap between `persist_summary` returning and the response
+> hitting the socket is microseconds wide, so a kill timed off a DB poll always loses the race. Verified
+> instead with an equivalent, deterministic harness that touches no application code: a local proxy on
+> the dev port forwarded one armed `POST /api/summaries/generate`, drained the upstream reply **in full**
+> (so the work was certainly committed and charged), then destroyed the downstream socket without
+> writing a byte — reproducing "delivered, reply lost" exactly. Observed: balance 3 → 2 and `summaries`
+> 18 → 19 on the dropped attempt, then **unchanged** at 2 / 19 after resubmitting the same inputs, with
+> the summary returned from the replay branch. One credit, one row.
 
 ### Phase 4: In-progress cards in the list
 
