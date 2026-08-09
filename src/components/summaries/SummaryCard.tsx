@@ -10,12 +10,17 @@ interface Props {
   item: SummaryListItem;
 }
 
-const CHARACTER_LABEL: Record<ChannelCharacter, string> = {
+/**
+ * Exported so the pending card badges a generation the same way the saved card badges the summary it
+ * turns into — one definition, so the two can't drift into labelling the same character differently
+ * either side of a refresh.
+ */
+export const CHARACTER_LABEL: Record<ChannelCharacter, string> = {
   informational: "Informational",
   educational: "Educational",
 };
 
-const CHARACTER_BADGE: Record<ChannelCharacter, string> = {
+export const CHARACTER_BADGE: Record<ChannelCharacter, string> = {
   informational: "border-blue-400/40 bg-blue-500/15 text-blue-100",
   educational: "border-purple-400/40 bg-purple-500/15 text-purple-100",
 };
