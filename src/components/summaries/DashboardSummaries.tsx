@@ -44,8 +44,15 @@ export function DashboardSummaries({ initialSummaries, initialCredits, listUnava
     // `allowLong` in particular must not survive: it is per-video consent to a 2-credit charge, and
     // leaving it set would let the NEXT long video be charged double with no confirmation prompt at
     // all. `character` is a preference rather than consent, so it stays.
-    onSuccess: () => {
-      setUrl("");
+    //
+    // A paid success is applied even when it is stale (see `useGenerateSummary`), so the URL is
+    // cleared only if the field still holds the URL that was summarized — otherwise the success of
+    // an earlier request would erase a newer URL the user has already typed. The comparison must be
+    // a functional update: this callback is captured at submit time, so its closure sees the
+    // submitted URL, not the live one. `allowLong` is cleared either way — losing a toggle is a
+    // re-click, keeping one is a silent double charge.
+    onSuccess: (success) => {
+      setUrl((current) => (current === success.url ? "" : current));
       setAllowLong(false);
     },
   });

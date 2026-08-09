@@ -265,6 +265,12 @@ Two additions the ref-based state cannot provide, both needed by Phase 4 and che
 
 **Clearing policy**: the inputs are cleared by the parent only on a *successful* generation (so the next summary starts from a clean form). An error, a dismissed dialog, or a pending confirmation all retain them, since each is a state the user may want to retry or confirm from.
 
+Not every input is cleared, and clearing the URL is conditional:
+
+- **`url`** resets only if the field still holds the URL that was just summarized. A paid success is applied even when it is stale, so an unconditional reset would erase a newer URL the user typed while the request was in flight.
+- **`allowLong`** always resets: it is per-video consent to a 2-credit charge, and a retained toggle would let the *next* long video be charged double with no prompt. Dropping a toggle the user has to re-click is the safe direction.
+- **`character`** persists. It is a preference rather than per-video consent, and a user summarizing several videos from one channel would otherwise re-pick it every time.
+
 #### 3. Dashboard island
 
 **File**: `src/components/summaries/DashboardSummaries.tsx`

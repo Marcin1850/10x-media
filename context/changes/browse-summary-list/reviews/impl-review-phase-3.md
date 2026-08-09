@@ -7,6 +7,7 @@
 - **Verdict**: NEEDS ATTENTION
 - **Findings**: 0 critical, 2 warnings, 2 observations
 - **Manual gate**: Pending by design; Progress items 3.3–3.9 remain unchecked
+- **Triage**: Complete — 2026-08-09. All four findings fixed (F1–F3 in code, F4 in `plan.md`). `npm run lint` and `npm run build` re-run after the fixes: both PASS.
 
 ## Verdicts
 
@@ -39,7 +40,7 @@
   - Tradeoff: Requires coordinating the controlled fields with an attempt/revision identity rather than using unconditional setters.
   - Confidence: HIGH — the hook explicitly accepts stale successes and the inputs are visibly editable during loading.
   - Blind spot: The stale-success edit path has not yet been manually exercised.
-- **Decision**: PENDING
+- **Decision**: FIXED — `onSuccess` now clears the URL through a functional update that only resets it when the field still holds the successful attempt's URL; `allowLong` stays unconditionally cleared as the safe direction.
 
 ### F2 — A discarded stale response leaves an orphan attempt
 
@@ -49,7 +50,7 @@
 - **Location**: `src/components/hooks/useGenerateSummary.ts:243`
 - **Detail**: When an input change makes a non-success HTTP response stale, the hook clears `loading` and returns but leaves `attempt` populated with no `error` or `confirm`. Phase 4 is contracted to derive a pending card from `attempt` plus generating/confirmation/failure status, so this creates an attempt with no representable status and can leave the next phase with a stuck or silently omitted entry.
 - **Fix**: Clear `attempt` in the stale non-success branch because the input change deliberately abandoned that advisory response.
-- **Decision**: PENDING
+- **Decision**: FIXED — added an `attemptSeq` ref recording which request owns the current `attempt`, and retract it in both stale branches (non-success HTTP and network error) only when the abandoning request still owns it. An unguarded clear, as originally written, would have erased a newer submit's attempt when a stale response landed after it.
 
 ### F3 — `lastSuccess.summaryId` weakens the planned contract
 
@@ -59,7 +60,7 @@
 - **Location**: `src/components/hooks/useGenerateSummary.ts:47`
 - **Detail**: Phase 3 specifies `lastSuccess.summaryId: string` so Phase 4 can confirm that the refreshed list contains the committed row. The implementation exposes `string | null` and silently converts a missing or malformed successful response field to `null`. Both normal and replay success responses currently include `summaryId`, so the weaker type masks a broken endpoint contract rather than modeling a supported response.
 - **Fix**: Keep `summaryId` non-null in `LastSuccess` and handle a malformed successful payload explicitly while preserving the already-paid result and balance update.
-- **Decision**: PENDING
+- **Decision**: FIXED — `LastSuccess.summaryId` is now `string`. A successful payload without one still applies the paid result and the refreshed balance, then returns without raising the success event.
 
 ### F4 — Character persistence is undocumented plan drift
 
@@ -69,7 +70,7 @@
 - **Location**: `src/components/summaries/DashboardSummaries.tsx:47`
 - **Detail**: The plan says the controlled inputs are cleared after a successful generation so the next summary starts clean. The implementation clears URL and allow-long but deliberately retains `character` as a preference. This is a reasonable UX choice, but it differs from the reviewed clearing contract.
 - **Fix**: Amend the Phase 3 clearing policy to state that URL and per-video long-video consent reset on success while the character preference persists.
-- **Decision**: PENDING
+- **Decision**: FIXED — `plan.md` Phase 3 clearing policy now spells out the per-input behaviour: conditional URL reset (per F1), unconditional `allowLong` reset, persistent `character`.
 
 ## Review Summary
 

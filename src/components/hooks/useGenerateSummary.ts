@@ -42,11 +42,13 @@ export interface GenerateAttempt {
  * The monotonic `seq` is what makes it repeatable: two generations of the same video in a row are
  * distinguishable, where a boolean or an object-identity check is not. `summaryId` comes straight
  * from the response body and lets a consumer confirm that a re-read of the list actually contains
- * the new row; it is `null` only if the server ever answered without one.
+ * the new row — so it is required: a success event that cannot name its row is not one a consumer
+ * can act on. A successful response without an id is a broken endpoint contract, and the hook
+ * declines to raise the event rather than modelling it as a supported shape.
  */
 export interface LastSuccess {
   seq: number;
-  summaryId: string | null;
+  summaryId: string;
   url: string;
   character: ChannelCharacter;
 }
@@ -157,6 +159,10 @@ export function useGenerateSummary({
   // thing: successes, not attempts — so consumers can react to "a new summary landed" once per
   // landing, including two landings for the same video in a row.
   const successSeq = useRef(0);
+  // The `requestSeq` of the request that set the current `attempt`. A request that abandons its own
+  // outcome must retract its attempt, but only its own: a stale response can arrive after a NEWER
+  // submit has already installed its attempt, and clearing unconditionally would erase that one.
+  const attemptSeq = useRef(0);
   // The server-side idempotency key for the attempt currently being retried, with the inputs it was
   // minted for. Held ONLY across a network error — the one failure where the request may have been
   // delivered and its reply lost, so a resubmit would otherwise charge and summarize a second time.
@@ -170,6 +176,7 @@ export function useGenerateSummary({
     setLoading(true);
     setError(null);
     setAttempt({ url: submittedUrl, character: submittedCharacter });
+    attemptSeq.current = seq;
 
     // Reuse the key only when retrying the same inputs after an ambiguous failure; otherwise this is a
     // new operation and gets a new key. `crypto.randomUUID` needs a secure context, which localhost
@@ -194,8 +201,11 @@ export function useGenerateSummary({
     } catch {
       // The ONLY path that keeps the key: the request may have been delivered and charged, so the
       // resubmit this error invites must be recognisable as the same operation.
-      // Only surface the error if this is still the current request; a superseded one just clears loading.
+      // Only surface the error if this is still the current request; a superseded one just clears
+      // loading and retracts its own attempt — with no error to show, an attempt left behind names a
+      // request that has no status at all.
       if (seq === requestSeq.current) setError("Network error — please try again.");
+      else if (attemptSeq.current === seq) setAttempt(null);
       setLoading(false);
       return;
     }
@@ -225,14 +235,18 @@ export function useGenerateSummary({
       setResult({ summary: payload.summary ?? "", cost: payload.cost ?? 1, url: submittedUrl });
       setConfirm(null);
       if (typeof payload.creditsRemaining === "number") setCredits(payload.creditsRemaining);
+      setLoading(false);
+      // The paid result and the new balance are applied above regardless. The success *event* needs
+      // an id to be actionable, so a success answered without one — a contract the endpoint never
+      // breaks today — raises no event rather than one no consumer can confirm the list against.
+      if (typeof payload.summaryId !== "string") return;
       const success: LastSuccess = {
         seq: (successSeq.current += 1),
-        summaryId: typeof payload.summaryId === "string" ? payload.summaryId : null,
+        summaryId: payload.summaryId,
         url: submittedUrl,
         character: submittedCharacter,
       };
       setLastSuccess(success);
-      setLoading(false);
       onSuccess?.(success);
       return;
     }
@@ -241,6 +255,10 @@ export function useGenerateSummary({
     // the inputs it was computed for are no longer current, it can't be applied to what the user now
     // sees — drop it, including any late 409.
     if (seq !== requestSeq.current) {
+      // Drop the attempt with it: nothing will describe this request any more, so an attempt left
+      // standing has no error, no confirmation and no result to be rendered from. Guarded so a stale
+      // response arriving after a newer submit retracts only its own attempt, not the live one.
+      if (attemptSeq.current === seq) setAttempt(null);
       setLoading(false);
       return;
     }
