@@ -449,14 +449,14 @@ None. No schema change, no data migration, no backfill. Null metadata on pre-S-0
 
 #### Manual
 
-- [ ] 2.3 `/dashboard` lists summaries newest first with the generate form still working
-- [ ] 2.4 A video generated for both characters appears as two badge-distinguished cards
-- [ ] 2.5 Null-metadata rows render a placeholder and no dangling metadata row
-- [ ] 2.6 A `vi_webp` thumbnail loads or visibly falls back — no broken-image icon
-- [ ] 2.7 Cards expand and collapse on click
-- [ ] 2.8 The character filter narrows and clears correctly
-- [ ] 2.9 A user with no summaries sees the empty state
-- [ ] 2.10 A forced read failure renders the "couldn't load" state, not the empty state
+- [x] 2.3 `/dashboard` lists summaries newest first with the generate form still working — 2026-08-09, local
+- [x] 2.4 A video generated for both characters appears as two badge-distinguished cards — 2026-08-09, local
+- [x] 2.5 Null-metadata rows render a placeholder and no dangling metadata row — 2026-08-09, local
+- [x] 2.6 A `vi_webp` thumbnail loads or visibly falls back — no broken-image icon — 2026-08-09, local
+- [x] 2.7 Cards expand and collapse on click — 2026-08-09, local
+- [x] 2.8 The character filter narrows and clears correctly — 2026-08-09, local
+- [x] 2.9 A user with no summaries sees the empty state — 2026-08-09, local
+- [x] 2.10 A forced read failure renders the "couldn't load" state, not the empty state — 2026-08-09, local
 
 ### Phase 3: Lift generation state into a hook and a dialog
 
