@@ -501,9 +501,25 @@ None. No schema change, no data migration, no backfill. Null metadata on pre-S-0
 
 #### Manual
 
-- [ ] 4.3 Closing the dialog mid-generation shows a pending card naming the video
-- [ ] 4.4 On success the pending card is replaced by a card identical to the post-reload card
-- [ ] 4.5 A failed generation turns the pending card into an error card with the server's message
-- [ ] 4.6 A needs-confirmation card reopens the dialog with the prompt intact
-- [ ] 4.7 The character filter does not hide the pending card
-- [ ] 4.8 Reloading mid-generation drops the pending card without double-charging
+- [x] 4.3 Closing the dialog mid-generation shows a pending card naming the video — 2026-08-09, local
+- [x] 4.4 On success the pending card is replaced by a card identical to the post-reload card — 2026-08-09, local
+- [x] 4.5 A failed generation turns the pending card into an error card with the server's message — 2026-08-09, local
+- [x] 4.6 A needs-confirmation card reopens the dialog with the prompt intact — 2026-08-09, local
+- [x] 4.7 The character filter does not hide the pending card — 2026-08-09, local
+- [x] 4.8 Reloading mid-generation drops the pending card without double-charging — 2026-08-09, local
+
+> **Phase 4 manual run.** Exercised against the local stack with cached transcripts, so the run cost no
+> Supadata calls and its outcomes were deterministic: `dFY97xFO_mY` (51 s, cached `ok`) for the success
+> path, `jfKfPfyJRdk` (cached `unavailable`) for the failure card, `TVA738-ERqg` (~69,989 chars) for the
+> long-video 409, and `aircAruvnKk` for the mid-generation reload. Ledger across the whole run: balance
+> 5 → 2, `summaries` 20 → 22, and every `credit_reservations` row `settled` — none left `reserved`.
+>
+> 4.6 stops at the reopened prompt and does not confirm: the criterion is that the priced quote survives
+> the dialog being dismissed and reopened, and confirming would spend 2 credits to re-verify Phase 3's
+> 3.4, which already passed.
+>
+> Worth recording because the copy invites the opposite reading: the caption-less video in 4.5 **charged
+> a credit** (4 → 3). That is the S-07 D14 policy — `generate.ts:529` calls
+> `refuseAndCharge(…, "unavailable")` — and the ledger row confirms it (`settled`,
+> `refusal_reason: unavailable`). Phase 4 touches no paid path; the error card is reporting the charge
+> faithfully, not causing it.
