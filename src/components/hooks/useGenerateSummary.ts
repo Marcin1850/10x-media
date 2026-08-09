@@ -32,6 +32,15 @@ export interface SuccessState {
  * so a card driven off it would have nothing to name at exactly the moment it must name something.
  */
 export interface GenerateAttempt {
+  /**
+   * Immutable identity of this attempt — the `requestSeq` of the request that installed it.
+   *
+   * Exists so a consumer can retire *the attempt it consumed* rather than whatever attempt happens
+   * to be current when its own async work finally resolves. A post-success list re-read is exactly
+   * that case: a newer generation can start while the re-read is in flight, and clearing blindly
+   * would erase the card belonging to work the user just paid for.
+   */
+  id: number;
   url: string;
   character: ChannelCharacter;
 }
@@ -48,6 +57,11 @@ export interface GenerateAttempt {
  */
 export interface LastSuccess {
   seq: number;
+  /**
+   * The `GenerateAttempt.id` this success belongs to. Pair it with `clearAttempt` so the card that
+   * is retired is the one this success actually replaces.
+   */
+  attemptId: number;
   summaryId: string;
   url: string;
   character: ChannelCharacter;
@@ -67,8 +81,13 @@ export interface UseGenerateSummary {
   inputsChanged: (options?: { keepConfirm?: boolean }) => void;
   /** Drop the previous outcome so a new submit starts clean. Not called on the confirm replay. */
   clearOutcome: () => void;
-  /** The UI has consumed this attempt's terminal state and no longer needs to name it. */
-  clearAttempt: () => void;
+  /**
+   * The UI has consumed this attempt's terminal state and no longer needs to name it. Pass the
+   * `GenerateAttempt.id` that was consumed to clear only that attempt; a newer one is left standing.
+   * Called with no argument it clears whatever is current — for the user dismissing the card they
+   * can see, which is by definition the live one.
+   */
+  clearAttempt: (attemptId?: number) => void;
 }
 
 /**
@@ -175,7 +194,7 @@ export function useGenerateSummary({
     const seq = (requestSeq.current += 1);
     setLoading(true);
     setError(null);
-    setAttempt({ url: submittedUrl, character: submittedCharacter });
+    setAttempt({ id: seq, url: submittedUrl, character: submittedCharacter });
     attemptSeq.current = seq;
 
     // Reuse the key only when retrying the same inputs after an ambiguous failure; otherwise this is a
@@ -242,6 +261,7 @@ export function useGenerateSummary({
       if (typeof payload.summaryId !== "string") return;
       const success: LastSuccess = {
         seq: (successSeq.current += 1),
+        attemptId: seq,
         summaryId: payload.summaryId,
         url: submittedUrl,
         character: submittedCharacter,
@@ -314,8 +334,13 @@ export function useGenerateSummary({
       setResult(null);
       setConfirm(null);
     },
-    clearAttempt: () => {
-      setAttempt(null);
+    clearAttempt: (attemptId) => {
+      // Functional update on purpose: the caller that has an id to check reaches this from inside
+      // async work whose closure was captured before a newer attempt could have been installed, so
+      // the comparison has to run against the live attempt, not the one that render saw.
+      setAttempt((current) =>
+        current === null || (attemptId !== undefined && current.id !== attemptId) ? current : null,
+      );
     },
   };
 }

@@ -21,9 +21,25 @@ interface Props {
    */
   pending: PendingSummary | null;
   /** The post-generation re-read failed: the summary is saved, this list just doesn't have it yet. */
-  refreshFailed: boolean;
+  unlisted: UnlistedSummary | null;
   onPendingConfirm: () => void;
   onPendingDismiss: () => void;
+}
+
+/**
+ * A summary that is saved and paid for but is not in the list on screen, because the re-read that
+ * should have produced its card never returned it.
+ *
+ * An identity rather than a boolean on purpose. A boolean cannot tell "the row I am waiting for
+ * appeared" from "some later row appeared", so a subsequent generation's successful re-read would
+ * clear the flag while the earlier summary was still missing — and by then its pending card has been
+ * replaced by the newer attempt, leaving the summary in neither place. The `url` is carried so the
+ * note can name what it is talking about: the card on screen may well belong to a different video by
+ * the time anyone reads it.
+ */
+export interface UnlistedSummary {
+  summaryId: string;
+  url: string;
 }
 
 type Filter = "all" | ChannelCharacter;
@@ -50,7 +66,7 @@ export function SummaryList({
   summaries,
   listUnavailable,
   pending,
-  refreshFailed,
+  unlisted,
   onPendingConfirm,
   onPendingDismiss,
 }: Props) {
@@ -69,16 +85,28 @@ export function SummaryList({
   // The re-read after a generation is best-effort, so its failure never discards the list that is
   // already rendered — it annotates it. The summary itself is saved and paid for; only this view of
   // it is stale, which is exactly what the copy has to say.
-  const refreshNote = refreshFailed ? (
-    <div className="flex items-start gap-2 rounded-xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-      <CircleAlert className="mt-0.5 size-4 shrink-0" />
-      <span>Your summary was saved, but we couldn&apos;t refresh this list. Reload the page to see it.</span>
-    </div>
-  ) : null;
+  //
+  // Naming the video is not decoration. A generation started after the failed re-read replaces the
+  // pending card, and an unqualified "your summary was saved" then reads as a claim about the video
+  // currently on screen — which is still generating.
+  const refreshNote =
+    unlisted === null ? null : (
+      <div className="flex items-start gap-2 rounded-xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+        <CircleAlert className="mt-0.5 size-4 shrink-0" />
+        <span>
+          We saved your summary of <span className="font-medium break-all">{unlisted.url}</span>, but couldn&apos;t
+          refresh this list. Reload the page to see it.
+        </span>
+      </div>
+    );
 
   if (listUnavailable) {
     return (
       <div className="space-y-3">
+        {/* The note belongs here too. A failed initial read and a failed post-generation re-read are
+            different facts, and dropping the second one in this branch is what left a just-paid
+            summary explained by nothing but a generic "we couldn't load your summaries". */}
+        {refreshNote}
         {pendingCard}
         <div className="flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-900/20 px-4 py-3 text-sm text-red-200">
           <CircleAlert className="mt-0.5 size-4 shrink-0" />
