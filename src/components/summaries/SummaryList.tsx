@@ -55,7 +55,9 @@ export function SummaryList({ summaries, listUnavailable }: Props) {
       <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-8 text-center">
         <Sparkles className="mx-auto size-5 text-blue-100/40" aria-hidden="true" />
         <p className="mt-2 text-sm text-blue-100/70">You haven&apos;t generated any summaries yet.</p>
-        <p className="text-xs text-blue-100/40">Paste a YouTube URL above to generate your first one.</p>
+        {/* The generate form moved into a dialog in Phase 3, so "above" is no longer where it is —
+            point at the control that actually opens it. */}
+        <p className="text-xs text-blue-100/40">Use &ldquo;New summary&rdquo; to generate your first one.</p>
       </div>
     );
   }

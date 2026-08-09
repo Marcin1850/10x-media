@@ -3,8 +3,7 @@ import Layout from "@/layouts/Layout.astro";
 import { createClient } from "@/lib/supabase";
 import { getBalance } from "@/lib/services/credits";
 import { listSummaries } from "@/lib/services/summary-list";
-import GenerateSummaryForm from "@/components/summaries/GenerateSummaryForm";
-import { SummaryList } from "@/components/summaries/SummaryList";
+import { DashboardSummaries } from "@/components/summaries/DashboardSummaries";
 import type { SummaryListItem } from "@/types";
 
 const { user } = Astro.locals;
@@ -58,9 +57,6 @@ if (user) {
         <p class="text-blue-100/80">
           Welcome, <span class="font-semibold text-white">{user?.email}</span>
         </p>
-        <div class="mt-6 border-t border-white/10 pt-6">
-          <GenerateSummaryForm client:load initialCredits={credits} />
-        </div>
         <a
           href="/account"
           class="mt-6 inline-block rounded-lg border border-white/20 bg-white/10 px-4 py-2 text-sm transition-colors hover:bg-white/20"
@@ -78,8 +74,12 @@ if (user) {
       </div>
 
       <section class="rounded-2xl border border-white/10 bg-white/10 p-6 text-white backdrop-blur-xl">
-        <h2 class="mb-4 text-lg font-semibold text-white">Your summaries</h2>
-        <SummaryList client:load summaries={summaries} listUnavailable={listUnavailable} />
+        <DashboardSummaries
+          client:load
+          initialSummaries={summaries}
+          initialCredits={credits}
+          listUnavailable={listUnavailable}
+        />
       </section>
     </div>
   </div>
