@@ -54,17 +54,18 @@ export function SummaryCard({ item }: Props) {
 
   return (
     <article className="rounded-xl border border-white/10 bg-white/5 transition-colors hover:bg-white/[0.07]">
-      <button
-        type="button"
-        aria-expanded={expanded}
-        aria-controls={contentId}
-        onClick={() => {
-          setExpanded((open) => !open);
-        }}
-        className="flex w-full items-start gap-4 rounded-xl p-4 text-left"
-      >
+      {/* `relative` anchors the expand button's stretched `::after`, which is what makes the whole
+          header row clickable without nesting the heading and paragraphs inside a `<button>`. */}
+      <div className="relative flex items-start gap-4 p-4">
         <div className="w-32 shrink-0 sm:w-40">
-          <VideoThumbnail youtubeId={item.youtubeId} reportedUrl={item.thumbnailUrlReported} title={item.title} />
+          {/* Keyed by the thumbnail source: `stage` is a one-shot forward-only guard seeded on mount,
+              so a card whose source changes under a list refresh has to remount to retry it. */}
+          <VideoThumbnail
+            key={`${item.youtubeId}:${item.thumbnailUrlReported ?? ""}`}
+            youtubeId={item.youtubeId}
+            reportedUrl={item.thumbnailUrlReported}
+            title={item.title}
+          />
         </div>
 
         <div className="min-w-0 flex-1 space-y-1">
@@ -88,11 +89,19 @@ export function SummaryCard({ item }: Props) {
           {expanded ? null : <p className="line-clamp-2 text-sm text-blue-50/70">{previewText(item.content)}</p>}
         </div>
 
-        <ChevronDown
-          className={cn("mt-1 size-4 shrink-0 text-blue-100/50 transition-transform", expanded && "rotate-180")}
-          aria-hidden="true"
-        />
-      </button>
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={contentId}
+          aria-label={`${expanded ? "Collapse" : "Expand"} summary of ${item.title ?? item.url}`}
+          onClick={() => {
+            setExpanded((open) => !open);
+          }}
+          className="mt-1 shrink-0 rounded-md text-blue-100/50 outline-none after:absolute after:inset-0 after:rounded-xl after:content-[''] focus-visible:after:ring-2 focus-visible:after:ring-blue-400/60"
+        >
+          <ChevronDown className={cn("size-4 transition-transform", expanded && "rotate-180")} aria-hidden="true" />
+        </button>
+      </div>
 
       {expanded ? (
         <div id={contentId} className="space-y-2 border-t border-white/10 px-4 py-4">

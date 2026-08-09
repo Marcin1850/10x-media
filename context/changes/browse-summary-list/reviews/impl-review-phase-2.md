@@ -39,7 +39,7 @@
   - Tradeoff: Requires a small card-layout adjustment and a manual keyboard/screen-reader check.
   - Confidence: HIGH — the invalid descendants are directly visible in the component and existing repository buttons contain text/icons rather than block document structure.
   - Blind spot: The preferred interaction target (whole card versus a focused control) has not yet been chosen or manually verified.
-- **Decision**: PENDING
+- **Decision**: FIXED — `SummaryCard` now renders the thumbnail, heading, badge, metadata and preview as ordinary document markup inside a `relative` header row. The expand control is a small `<button>` containing only the chevron, labelled `Expand/Collapse summary of <title>` via `aria-label`, retaining `aria-expanded`/`aria-controls`. Whole-card click (plan item 2.7) is preserved by a stretched `after:absolute after:inset-0` pseudo-element anchored to the header row — the button itself is not `relative`, so the hit area covers the collapsed card while the expanded Markdown body stays outside it and remains selectable. Keyboard focus is shown as a ring on the stretched pseudo-element. `npm run lint` and `npm run build` pass; the keyboard/screen-reader check folds into pending manual item 2.7.
 
 ### F2 — Thumbnail fallback state survives a changed source
 
@@ -49,7 +49,7 @@
 - **Location**: `src/components/summaries/VideoThumbnail.tsx:34`
 - **Detail**: `stage` is initialized from `reportedUrl` only on mount. If the same summary card receives refreshed `youtubeId` or `reportedUrl` props later, a previous `derived` or `placeholder` state remains active and the new reported URL is never tried. Phase 2's server-seeded list does not update in place, but Phase 4 explicitly plans a controlled list refresh, so this can make a refreshed card differ from a page reload.
 - **Fix**: Key `VideoThumbnail` by the thumbnail source identity at the `SummaryCard` call site so a changed `youtubeId` or `reportedUrl` remounts the fallback state.
-- **Decision**: PENDING
+- **Decision**: FIXED — `SummaryCard` passes `key={`${item.youtubeId}:${item.thumbnailUrlReported ?? ""}`}` to `VideoThumbnail`, so a changed source remounts the component and the forward-only `stage` guard is re-seeded. `VideoThumbnail` itself is unchanged. `npm run lint` and `npm run build` pass.
 
 ## Review Summary
 
