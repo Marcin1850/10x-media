@@ -52,7 +52,9 @@ HTML/ZIP export) and ordinary implementation work. This inverts the step order t
    plan has access to `claude.ai/design`. No tooling blocker. (Earlier note said the skill was
    missing from the session's skill list — that was a listing artifact, not an access problem.)
 
-**1. Wireframe + IA — before any design system.** Separate Claude Design project. Cover `/`,
+**1. Wireframe + IA — before any design system.** → full brief: [`wireframe-brief.md`](./wireframe-brief.md)
+   (screen inventory, the nine dashboard states, the prompt, the five IA questions, exit criteria).
+   Separate Claude Design project — a **regular** one, not the design system. Cover `/`,
    `/auth/*`, `/dashboard`, `/account`, navigation, and loading / empty / error states.
    Greyscale on purpose — keep layout decisions separate from brand decisions.
 
@@ -110,6 +112,31 @@ components. The canvas is for decisions, not for producing final markup.
   `src/components/ui/` holds exactly three files: `button.tsx`, `dialog.tsx`, `LibBadge.astro`.
 - **The real work is elsewhere:** `src/components/summaries/` (7 components) and
   `src/components/auth/` (6 components).
+
+#### Three findings that are the actual case for this slice (2026-08-10)
+
+**1. Two disconnected visual systems coexist, and the tokenized one is dead code.**
+The shadcn tokens in `global.css` are referenced by exactly three files: `src/components/ui/button.tsx`,
+`src/components/ui/dialog.tsx`, and `global.css` itself. **No application code uses them.** Every page
+and feature component hardcodes utilities instead — `bg-white/10`, `border-white/10`,
+`text-blue-100/80`, `text-purple-300`, `backdrop-blur-xl`, gradient text via
+`from-blue-200 to-purple-200 bg-clip-text text-transparent`.
+
+Consequence: the two shadcn components render from a **neutral greyscale** palette while sitting on a
+**purple/blue glassmorphic** surface. They are visually foreign inside their own app. Any token work in
+step 4 that stops at `global.css` changes almost nothing on screen — the restyle is a find-and-replace
+across feature components, not a palette swap.
+
+**2. `bg-cosmic` is a hardcoded gradient outside any token system.**
+Defined as `@utility bg-cosmic` in `global.css` with literal hex stops
+(`linear-gradient(to bottom, #0a0e1a, #0f1529, #0a0e1a)`). It sets the page ground on `/dashboard` and
+`/account`. Not a variable, not themeable, not reachable from the design system.
+
+**3. There is no shared navigation.** `Topbar.astro` is imported by exactly one file —
+`Welcome.astro`, i.e. the landing page. `/dashboard` invents its own account links inside the header
+card; `/account` has a lone "← Back to dashboard". Three surfaces, three ad-hoc navigations. This is
+precisely the cross-surface incoherence S-06 exists to fix, and it is an **IA** problem — it must be
+settled in the wireframe (step 1), not discovered during the restyle.
 - **Wireframe must start from the current state, not the roadmap's description.** S-06's Risk note
   describes `/dashboard` as one `max-w-lg` card with an inline generate form. Stale — S-02 widened
   it into a full-width list and moved generation into a dismissable dialog owned by a parent island.
