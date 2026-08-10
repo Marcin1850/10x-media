@@ -70,6 +70,35 @@ export interface VideoMetadata {
   publishedAt: string | null;
 }
 
+/**
+ * One row of the summary list (S-02) — flat, UI-facing, camelCase. Joins a `summaries` row to its
+ * `videos` row so the card has everything it renders in one object.
+ *
+ * Shared rather than local for the same reason `VideoMetadata` is: it crosses three modules — the
+ * list service produces it, `GET /api/summaries` serialises it, the card renders it — and three
+ * structural copies would drift apart silently.
+ *
+ * Every video-derived field is nullable EXCEPT `youtubeId` and `url`: those two are `NOT NULL`
+ * columns, and pre-S-08 rows carry nulls in all the descriptive ones (they were never backfilled).
+ * Telemetry (`cost_usd`, `model`, `generation_ms`) is deliberately absent — provider spend is not the
+ * credit the user paid — and so is `transcript_lang`, which is the transcript's language rather than
+ * the video's and would be false exactly when auto-translated tracks exist (S-08 decision).
+ */
+export interface SummaryListItem {
+  id: string;
+  character: ChannelCharacter;
+  content: string;
+  createdAt: string;
+  youtubeId: string;
+  url: string;
+  title: string | null;
+  /** What Supadata last reported — may be null or 404. See `Video.thumbnail_url_reported`. */
+  thumbnailUrlReported: string | null;
+  channelName: string | null;
+  durationSeconds: number | null;
+  publishedAt: string | null;
+}
+
 export interface Summary {
   id: string;
   user_id: string;

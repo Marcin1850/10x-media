@@ -57,9 +57,10 @@ export const prerender = false;
  *                 transcript, and the transient `failed`/`timeout` fetch outcomes. Different causes,
  *                 none of them "there are no captions", and some of which DO succeed on a retry.
  *
- * The status is 422 in every case; only the body differs. `GenerateSummaryForm`'s `messageForStatus`
- * prefers the server's string for 422 precisely so this distinction survives the trip to the user —
- * it used to hardcode one message and drop both of these.
+ * The status is 422 in every case; only the body differs. `useGenerateSummary`'s `messageForStatus`
+ * (`src/components/hooks/useGenerateSummary.ts`) prefers the server's string for 422 precisely so
+ * this distinction survives the trip to the user — it used to hardcode one message and drop both of
+ * these.
  */
 const TRANSCRIPT_NO_CAPTIONS_ERROR =
   "This video has no captions, so there is nothing to summarize. We can only summarize videos that have a caption track — try another video.";
