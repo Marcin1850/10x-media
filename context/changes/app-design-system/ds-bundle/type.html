@@ -1,0 +1,76 @@
+<!-- @dsCard group="Type" -->
+<!doctype html>
+<meta charset="utf-8">
+<title>Type — 10xMedia</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#101013;--card:#17181C;--fg:#EDEDEF;--muted:#9A9AA3;--border:#26272E;--attention:#E0A24A}
+  body{margin:0;background:var(--bg);color:var(--fg);font:400 15px/1.6 "IBM Plex Sans",ui-sans-serif,system-ui,sans-serif}
+  .wrap{padding:24px;max-width:840px}
+  h1{font:600 15px/1.2 "Space Grotesk",ui-sans-serif,system-ui,sans-serif;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:12px;margin:0 0 22px}
+  .pair{display:flex;gap:14px;flex-wrap:wrap;margin:0 0 22px}
+  .face{flex:1 1 240px;border:1px solid var(--border);border-radius:8px;padding:13px 15px;background:var(--card)}
+  .face .role{font:600 10.5px/1 "Space Grotesk",sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .face .nm{font:500 17px/1.3 "Space Grotesk",sans-serif;margin:7px 0 3px}
+  .face .why{font-size:12.5px;line-height:1.5;color:var(--muted)}
+  .dia{font-size:26px;letter-spacing:.02em;margin:9px 0 0;word-spacing:.12em}
+  .scale{border:1px solid var(--border);border-radius:8px;overflow:hidden;margin:0 0 22px}
+  .row{display:flex;align-items:baseline;gap:14px;padding:9px 15px;border-bottom:1px solid var(--border)}
+  .row:last-child{border-bottom:0}
+  .row .tag{flex:0 0 96px;font:11px ui-monospace,Menlo,monospace;color:var(--muted)}
+  .read{border:1px solid var(--border);border-left:3px solid var(--attention);border-radius:8px;background:var(--card);padding:17px 19px}
+  .read h2{font:600 12px/1 "Space Grotesk",sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 11px}
+  .body-spec{font:400 16.5px/28px "IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;max-width:62ch}
+  .body-spec h3{font:600 18px/1.35 "IBM Plex Sans",sans-serif;margin:0 0 8px}
+  .rule{margin:13px 0 0;font-size:12px;color:var(--muted);line-height:1.55}
+  code{font:11.5px ui-monospace,Menlo,monospace;color:#D8D8DD}
+</style>
+<div class="wrap">
+  <h1>Type</h1>
+  <p class="sub">Space Grotesk for UI, IBM Plex Sans for content. Both OFL — bundle them; no CDN at runtime.</p>
+
+  <div class="pair">
+    <div class="face">
+      <div class="role">UI</div>
+      <div class="nm" style="font-family:'Space Grotesk',sans-serif">Space Grotesk</div>
+      <div class="why">Labels, navigation, buttons, badges, table headers. Never used for summary bodies.</div>
+      <div class="dia" style="font-family:'Space Grotesk',sans-serif">ąćęłńóśźż ĄĆĘŁŃÓŚŹŻ</div>
+    </div>
+    <div class="face">
+      <div class="role">Content</div>
+      <div class="nm">IBM Plex Sans</div>
+      <div class="why">Summary bodies. Sans, not serif: high x-height and open letterforms, and its Polish
+      glyphs are drawn rather than composited from accents.</div>
+      <div class="dia">ąćęłńóśźż ĄĆĘŁŃÓŚŹŻ</div>
+    </div>
+  </div>
+
+  <div class="scale">
+    <div class="row"><span class="tag">display / 30</span><span style="font:700 30px/1.15 'Space Grotesk',sans-serif">Landing hero</span></div>
+    <div class="row"><span class="tag">h1 / 20</span><span style="font:700 20px/1.25 'Space Grotesk',sans-serif">Twoje podsumowania</span></div>
+    <div class="row"><span class="tag">h2 / 17</span><span style="font:600 17px/1.3 'Space Grotesk',sans-serif">Strefa niebezpieczna</span></div>
+    <div class="row"><span class="tag">title / 14</span><span style="font:600 14px/1.4 'IBM Plex Sans',sans-serif">Tytuł filmu z YouTube</span></div>
+    <div class="row"><span class="tag">body / 16.5</span><span style="font:400 16.5px/28px 'IBM Plex Sans',sans-serif">Treść podsumowania</span></div>
+    <div class="row"><span class="tag">meta / 11</span><span style="font:400 11px/1.4 'Space Grotesk',sans-serif;color:#9A9AA3">Nazwa kanału · 24:11 · 12 mar</span></div>
+  </div>
+
+  <div class="read">
+    <h2>Summary body — the reading spec</h2>
+    <div class="body-spec">
+      <h3>Koncepcja Prime Agent i RLM</h3>
+      <p style="margin:0">Kluczowa idea: zamiast wielu narzędzi, model ma dostęp tylko do jednego narzędzia —
+      żywej sesji Python (kernel IPython), podobnej do Jupyter Notebook. Każda akcja jest po prostu kodem,
+      który model pisze i wykonuje. Model widzi w kontekście tylko finalny wynik, nie sam proces wykonania
+      kodu — dzięki temu kontekst pozostaje „czysty” i mniejszy. Źródłem idei jest Recursive Language Model;
+      ograniczeniem to, że agenci komunikują się wyłącznie z rodzicem, rodzeństwem i dziećmi.</p>
+    </div>
+    <p class="rule"><code>16.5px / 28px</code> · measure <code>62ch</code> · weight <code>400</code>,
+    <b>never 300 on dark</b> — thin weights smear on a dark ground. A sans carries a longer measure than a
+    serif would, which is why 62ch is safe here.</p>
+    <p class="rule">This is the product’s core reading surface: a summary is long prose someone reads
+    <em>instead of</em> watching the video. Measure and leading matter more here than anywhere else in the app.</p>
+  </div>
+</div>

@@ -1,0 +1,58 @@
+/* 10xMedia design tokens — direction 3b "Konsola", corrected in turn 4.
+ *
+ * Dark is the product's look. Light is complete but UNVERIFIED and not shipped:
+ * see the AA note in colors.html before exposing it.
+ *
+ * --attention / --attention-foreground are OUTSIDE the shadcn contract. They carry
+ * exactly one meaning: the app is waiting for your decision about spending credits
+ * (the long-video 409 cost gate). Nothing else may use them.
+ *
+ * When porting into src/styles/global.css, --attention also needs an @theme inline
+ * entry (--color-attention, --color-attention-foreground) or Tailwind emits no
+ * bg-attention / text-attention utilities.
+ */
+
+:root {                      /* light */
+  --radius: 0.25rem;
+  --background: #F4F4F5;   --foreground: #131316;
+  --card: #FFFFFF;         --card-foreground: #131316;
+  --popover: #FFFFFF;      --popover-foreground: #131316;
+  --primary: #2E5FD0;      --primary-foreground: #FFFFFF;
+  --secondary: #E7E7EA;    --secondary-foreground: #35353D;
+  --muted: #ECECEF;        --muted-foreground: #61616B;
+  --accent: #ECECEF;       --accent-foreground: #131316;
+  --destructive: #C62A2F;  --destructive-foreground: #FFFFFF;
+  --border: #E4E4E7;       --input: #D6D6DB;   --ring: #2E5FD0;
+  /* outside the shadcn contract — the 409 cost gate only */
+  --attention: #9A6512;    --attention-foreground: #FFFFFF;
+  --sidebar: #EFEFF1;              --sidebar-foreground: #131316;
+  --sidebar-primary: #2E5FD0;      --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #E7E7EA;       --sidebar-accent-foreground: #35353D;
+  --sidebar-border: #E4E4E7;       --sidebar-ring: #2E5FD0;
+  --chart-1: #2E5FD0; --chart-2: #9A6512; --chart-3: #3F7F6B;
+  --chart-4: #7A4FBF; --chart-5: #61616B;
+}
+
+.dark {                      /* dark — default */
+  --background: #101013;   --foreground: #EDEDEF;
+  --card: #17181C;         --card-foreground: #EDEDEF;
+  --popover: #1C1D22;      --popover-foreground: #EDEDEF;
+  --primary: #4C7DF0;      --primary-foreground: #0B1020;
+  --secondary: #22232A;    --secondary-foreground: #D8D8DD;
+  --muted: #22232A;        --muted-foreground: #9A9AA3;
+  --accent: #22232A;       --accent-foreground: #EDEDEF;
+  --destructive: #E5484D;  --destructive-foreground: #1A0A0B;
+  --border: #26272E;       --input: #2E2F37;   --ring: #4C7DF0;
+  /* outside the shadcn contract — the 409 cost gate only */
+  --attention: #E0A24A;    --attention-foreground: #1A1305;
+  --sidebar: #141518;              --sidebar-foreground: #EDEDEF;
+  --sidebar-primary: #4C7DF0;      --sidebar-primary-foreground: #0B1020;
+  --sidebar-accent: #22232A;       --sidebar-accent-foreground: #D8D8DD;
+  --sidebar-border: #26272E;       --sidebar-ring: #4C7DF0;
+  --chart-1: #4C7DF0; --chart-2: #E0A24A; --chart-3: #4FBF9B;
+  --chart-4: #A98BF5; --chart-5: #9A9AA3;
+}
+
+/* Gate text on the 12% attention tint. Dark uses a lightened variant; light has no
+   darkened counterpart yet and lands at 4.25:1, below AA — fix before shipping light. */
+.attention-text-on-tint { color: #EBC489; }   /* dark: 8.75:1 */

@@ -75,7 +75,21 @@ HTML/ZIP export) and ordinary implementation work. This inverts the step order t
    `projectId: c4baaf64-3ad0-4887-a790-70ae042ea9ee`. Type verified via `get_project` as
    `PROJECT_TYPE_DESIGN_SYSTEM` before anything was written to it — that type is **immutable at
    creation**, so a project made as a regular one could never have become a design system.
-   `canEdit: true`. Still **empty**; `Published` not yet enabled.
+   `canEdit: true`. **Populated 2026-08-11** with the six-file bundle in [`ds-bundle/`](./ds-bundle/)
+   — source of truth is the local folder, so it can be rebuilt and re-pushed. `Published` **not yet
+   enabled** (no tool method for it; toggle it in the Claude Design UI).
+
+   | File | Card group | Carries |
+   | --- | --- | --- |
+   | `colors.html` | Colors | Both themes; `--attention` marked as outside the shadcn contract; the light-theme AA warning |
+   | `type.html` | Type | Font pairing with rationale, diacritics, scale, reading spec on real Polish prose |
+   | `states.html` | States | Seven slots + hover surface, each with its non-color channel |
+   | `badges.html` | Components | Both badges in color **and** greyscale, as proof rather than claim |
+   | `cost-gate.html` | Components | The 409 gate, the `--accent` collision history, the missing-metadata caveat |
+   | `tokens.css` | *(not a card)* | The canonical CSS to copy, with the `@theme inline` note |
+
+   Specimens deliberately carry *reasons*, not just values — a design system read in six months should
+   stop someone from re-making the decisions this slice already made.
 
    The wireframe/visual-direction work lives in a separate *regular* project,
    `10xMedia app screens` (`6f4d8fe2-d9bd-48db-ae24-190383dea2c8`) — turns 1-2 structure,

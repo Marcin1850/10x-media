@@ -1,0 +1,76 @@
+<!-- @dsCard group="Colors" -->
+<!doctype html>
+<meta charset="utf-8">
+<title>Colors — 10xMedia</title>
+<style>
+  body{margin:0;font:14px/1.5 "IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;background:#101013;color:#EDEDEF}
+  .wrap{padding:24px}
+  h1{font:600 15px/1.2 "Space Grotesk",ui-sans-serif,system-ui,sans-serif;margin:0 0 4px}
+  .sub{color:#9A9AA3;font-size:12px;margin:0 0 20px}
+  .themes{display:flex;gap:20px;flex-wrap:wrap}
+  .theme{flex:1 1 340px;min-width:0;border:1px solid #26272E;border-radius:8px;overflow:hidden}
+  .theme h2{font:600 12px/1 "Space Grotesk",sans-serif;margin:0;padding:10px 12px;border-bottom:1px solid #26272E;text-transform:uppercase;letter-spacing:.06em}
+  .dark-h{background:#17181C;color:#EDEDEF}
+  .light-h{background:#FFFFFF;color:#131316}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;padding:12px}
+  .sw{border-radius:5px;overflow:hidden;border:1px solid rgba(128,128,128,.28)}
+  .chip{height:38px}
+  .meta{padding:5px 7px;font:11px/1.35 ui-monospace,Menlo,monospace}
+  .d .meta{background:#17181C;color:#9A9AA3}
+  .l .meta{background:#FFFFFF;color:#61616B}
+  .name{display:block;color:inherit}
+  .note{margin:18px 0 0;padding:11px 13px;border:1px solid #26272E;border-left:3px solid #E0A24A;border-radius:5px;background:#17181C;font-size:12.5px;line-height:1.55}
+  .note b{color:#E0A24A}
+  .warn{border-left-color:#E5484D}
+  .warn b{color:#E5484D}
+  code{font:11.5px ui-monospace,Menlo,monospace;color:#D8D8DD}
+</style>
+<div class="wrap">
+  <h1>Colors</h1>
+  <p class="sub">Direction 3b “Konsola”, corrected turn 4. Dark is the product’s look.</p>
+
+  <div class="themes">
+    <div class="theme d">
+      <h2 class="dark-h">Dark — default</h2>
+      <div class="grid">
+        <div class="sw"><div class="chip" style="background:#101013"></div><div class="meta"><span class="name">background</span>#101013</div></div>
+        <div class="sw"><div class="chip" style="background:#17181C"></div><div class="meta"><span class="name">card</span>#17181C</div></div>
+        <div class="sw"><div class="chip" style="background:#1C1D22"></div><div class="meta"><span class="name">popover</span>#1C1D22</div></div>
+        <div class="sw"><div class="chip" style="background:#EDEDEF"></div><div class="meta"><span class="name">foreground</span>#EDEDEF</div></div>
+        <div class="sw"><div class="chip" style="background:#4C7DF0"></div><div class="meta"><span class="name">primary</span>#4C7DF0</div></div>
+        <div class="sw"><div class="chip" style="background:#22232A"></div><div class="meta"><span class="name">secondary / muted / accent</span>#22232A</div></div>
+        <div class="sw"><div class="chip" style="background:#9A9AA3"></div><div class="meta"><span class="name">muted-foreground</span>#9A9AA3</div></div>
+        <div class="sw"><div class="chip" style="background:#E5484D"></div><div class="meta"><span class="name">destructive</span>#E5484D</div></div>
+        <div class="sw"><div class="chip" style="background:#E0A24A"></div><div class="meta"><span class="name">attention ★</span>#E0A24A</div></div>
+        <div class="sw"><div class="chip" style="background:#26272E"></div><div class="meta"><span class="name">border</span>#26272E</div></div>
+      </div>
+    </div>
+
+    <div class="theme l">
+      <h2 class="light-h">Light — complete, not shipped</h2>
+      <div class="grid">
+        <div class="sw"><div class="chip" style="background:#F4F4F5"></div><div class="meta"><span class="name">background</span>#F4F4F5</div></div>
+        <div class="sw"><div class="chip" style="background:#FFFFFF"></div><div class="meta"><span class="name">card / popover</span>#FFFFFF</div></div>
+        <div class="sw"><div class="chip" style="background:#131316"></div><div class="meta"><span class="name">foreground</span>#131316</div></div>
+        <div class="sw"><div class="chip" style="background:#2E5FD0"></div><div class="meta"><span class="name">primary</span>#2E5FD0</div></div>
+        <div class="sw"><div class="chip" style="background:#ECECEF"></div><div class="meta"><span class="name">muted / accent</span>#ECECEF</div></div>
+        <div class="sw"><div class="chip" style="background:#E7E7EA"></div><div class="meta"><span class="name">secondary</span>#E7E7EA</div></div>
+        <div class="sw"><div class="chip" style="background:#61616B"></div><div class="meta"><span class="name">muted-foreground</span>#61616B</div></div>
+        <div class="sw"><div class="chip" style="background:#C62A2F"></div><div class="meta"><span class="name">destructive</span>#C62A2F</div></div>
+        <div class="sw"><div class="chip" style="background:#9A6512"></div><div class="meta"><span class="name">attention ★</span>#9A6512</div></div>
+        <div class="sw"><div class="chip" style="background:#E4E4E7"></div><div class="meta"><span class="name">border</span>#E4E4E7</div></div>
+      </div>
+    </div>
+  </div>
+
+  <p class="note">★ <b>attention is outside the shadcn contract.</b> It means one thing only: the app is
+  waiting for your decision about spending credits — the long-video cost gate. Amber appears there and
+  nowhere else. Do not reuse it for badges, highlights or emphasis.<br>
+  <code>--accent</code> is deliberately identical to <code>--muted</code>, which is what stock shadcn does.
+  It is a hover surface, not a state.</p>
+
+  <p class="note warn"><b>Light is unverified.</b> Every state specimen was drawn on dark. One known
+  failure already: <code>--attention</code> as text on the 12% attention tint is 6.46:1 on dark but
+  <b>4.25:1 on light</b> — below AA. Dark escapes it with a lightened text variant that light has no
+  counterpart for. Fix before any theme toggle ships.</p>
+</div>

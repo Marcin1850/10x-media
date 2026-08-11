@@ -1,0 +1,59 @@
+<!-- @dsCard group="Components" -->
+<!doctype html>
+<meta charset="utf-8">
+<title>Cost gate — 10xMedia</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#101013;--card:#17181C;--fg:#EDEDEF;--muted-fg:#9A9AA3;--border:#26272E;--attention:#E0A24A}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 "IBM Plex Sans",ui-sans-serif,system-ui,sans-serif}
+  .wrap{padding:24px;max-width:720px}
+  h1{font:600 15px/1.2 "Space Grotesk",sans-serif;margin:0 0 4px}
+  .sub{color:var(--muted-fg);font-size:12px;margin:0 0 20px;max-width:70ch}
+  .gate{display:flex;gap:13px;padding:13px;border:2px solid var(--attention);border-radius:7px;
+        background:rgba(224,162,74,.12)}
+  .thumb{width:110px;height:64px;flex:none;border-radius:4px;border:1px solid var(--border);
+         background:repeating-linear-gradient(45deg,#1E1F25 0 6px,#26272E 6px 12px)}
+  .col{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+  .title{font:600 14px/1.35 "IBM Plex Sans",sans-serif}
+  .meta{font:11px/1.4 "Space Grotesk",sans-serif;color:var(--muted-fg)}
+  .msg{font:500 13px/1.45 "IBM Plex Sans",sans-serif;color:#EBC489}
+  .acts{display:flex;gap:7px;margin-top:2px}
+  .btn{font:500 12px "Space Grotesk",sans-serif;border-radius:4px;padding:6px 12px;border:1px solid var(--border);color:var(--fg)}
+  .btn.go{background:var(--attention);color:#1A1305;border-color:var(--attention);font-weight:700}
+  .note{margin:18px 0 0;padding:11px 13px;border:1px solid var(--border);border-left:3px solid var(--attention);
+        border-radius:5px;background:var(--card);font-size:12.5px;line-height:1.6}
+  .note b{color:var(--attention)}
+  .ratios{margin:13px 0 0;font:11.5px/1.7 ui-monospace,Menlo,monospace;color:var(--muted-fg)}
+  code{font:11.5px ui-monospace,Menlo,monospace;color:#D8D8DD}
+</style>
+<div class="wrap">
+  <h1>Cost gate — the only amber in the app</h1>
+  <p class="sub">The long-video confirmation. Nothing has failed and nothing has been charged; the app is
+  asking whether to spend two credits instead of one.</p>
+
+  <div class="gate">
+    <div class="thumb"></div>
+    <div class="col">
+      <div class="title">Tytuł filmu z YouTube</div>
+      <div class="meta"><strong style="color:var(--fg)">Nazwa kanału</strong> · 1:52:07</div>
+      <div class="msg">Wstrzymane: długi film — 2 kredyty. Zostanie 10.</div>
+      <div class="acts"><span class="btn">Anuluj</span><span class="btn go">Za 2</span></div>
+    </div>
+  </div>
+
+  <p class="note"><b>This is the whole reason <code>--attention</code> exists.</b> It was originally bound to
+  <code>--accent</code>, which shadcn already uses as the hover surface for ghost and outline buttons — so
+  every ordinary mouse-over would have flashed the colour reserved for spending money. Splitting the token
+  fixed it without touching <code>button.tsx</code> or <code>dialog.tsx</code>.</p>
+
+  <p class="note"><b>Rendering it needs data the endpoint does not return yet.</b> The 409 body is currently
+  <code>{ requiresConfirmation, cost, transcriptLength }</code> — no title, channel or duration. Metadata is
+  fetched earlier in the same request, so those fields can be added to the response; <b>add fields, do not move
+  the call</b> — its placement is load-bearing for rate spacing, early exits and <code>allowLong</code> resubmits.</p>
+
+  <p class="ratios">gate text #EBC489 on 12% tint … 8.75:1 ✓<br>
+  action --attention-foreground on --attention … 8.28:1 ✓<br>
+  border 2px --attention — the non-colour channel, carried in every state</p>
+</div>
