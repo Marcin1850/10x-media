@@ -50,13 +50,15 @@ page. `/dashboard` invents account links inside its header card; `/account` has 
 
 ## Desired End State
 
-Every surface renders from the 3b tokens, in Polish, under one topbar, with `/summaries` as the
-list route and generation as an inline capture bar. `npm run lint:tokens` passes, proving no hardcoded
+Every surface renders from the 3b tokens under one topbar, with **all client-owned UI copy in Polish**,
+`/summaries` as the list route and generation as an inline capture bar. Server-owned strings from
+`src/pages/api/**` stay English and still surface inside those screens — a deliberate, documented
+boundary, not an oversight; see §Migration Notes for the follow-up that closes it. `npm run lint:tokens` passes, proving no hardcoded
 palette utility survives outside `global.css`. The cost gate, the pending card, the four list states and
 the seven semantic slots all render as the design system specifies them — the cost gate in its cold
 form, which is the form it will almost always take.
 
-Verified by: `npm run lint`, `npm run build`, `npm run lint:tokens`, and a manual pass over all nine
+Verified by: `npm run lint`, `npm run build`, `npm run lint:tokens`, and a manual pass over all eleven
 screens/states listed in §Testing Strategy.
 
 ### Key Discoveries
@@ -73,10 +75,13 @@ screens/states listed in §Testing Strategy.
   is what emits utilities; without `--color-attention` Tailwind produces no `bg-attention`.
 - **The thumbnail is free.** `VideoThumbnail.tsx:17` derives `https://i.ytimg.com/vi/<id>/hqdefault.jpg`
   from the video id with no API call — so the cold cost gate still has an image.
-- **Only one failure path takes a credit.** Verified across every exit: the chargeable 422s
-  (`refusalResponse`, `generate.ts:235-237`) charge; the transient 422 (`generate.ts:659`) does not; 413
-  and 402 precede the debit; 502 and both 500s refund (`generate.ts:943`). This makes the `charged`
-  signal a two-site change.
+- **Only one family of failure paths takes a credit** — but *attempting* to charge is not the same as
+  charging. Verified across every exit: the chargeable 422s route through `refuseAndCharge`; the
+  transient 422 (`generate.ts:659`) does not; 413 and 402 precede the debit; 502 and both 500s refund
+  (`generate.ts:943`). Within the chargeable family the charge can still not land —
+  `chargeFailedTranscript` resolves `charged` / `replay` / `insufficient` / `notCharged`
+  (`credits.ts:204-208`) and never throws — so `charged` must be **read from that outcome**, not
+  inferred from the exit taken.
 - **Astro 6 made the Fonts API stable** — the `experimental.fonts` flag was removed in v6. `subsets:
   ["latin", "latin-ext"]` is what carries the Polish diacritics the whole type decision rests on.
 - **`CHARACTER_LABEL` (`SummaryCard.tsx:18`) is exported deliberately** so the pending card and the
@@ -97,8 +102,8 @@ screens/states listed in §Testing Strategy.
   cookie read in middleware to avoid a flash. Its own slice.
 - **Not adopting an i18n library or locale routing.** One locale, one copy module, no runtime switching.
 - **Not converting the palette to `oklch`.** See §Critical Implementation Details.
-- **Not adding "Wyślij ponownie"** (resend confirmation email) from wireframe card `2b` — no such
-  feature exists; it would be a new capability, not a restyle.
+- **Not adding the "resend confirmation email" action** wireframe card `2b` shows — no such feature
+  exists; it would be a new capability, not a restyle.
 - **Not building a self-serve top-up.** The affordance renders a not-supported notice (decision #2).
 - **Not adding speculative shadcn primitives** beyond what the five screens use.
 
@@ -141,6 +146,15 @@ Polish, the server's string usually wins — so the generation error surface wil
 practice. That is the accepted consequence of the copy boundary, not a bug to work around by inverting
 the preference.
 
+**`--attention` is gate-only, and "warning" is not a colour.** `ds-bundle/tokens.css:6-9` and
+`visual-direction-outcome.md` define amber as one thing: *waiting for your decision about spending
+credits*. Every other cautionary state in this app — the config banner's `warning`, the list's refresh
+note, `saved-refresh-failed` — is information, not a request for money, and takes the **neutral warning
+treatment** instead: `--card` ground, 1px solid `--border`, `--foreground` text, with an icon and the
+copy carrying the severity. That is the same three-channel discipline the character badges use, and it
+is what makes phase 6's "amber appears nowhere else" criterion passable rather than self-contradictory.
+The neutral treatment needs its own contrast check on the dark ground before phase 3 closes.
+
 **`getBalance` must not be allowed to fail the page.** `dashboard.astro:29-34` catches and renders `—`
 because the display balance is never the enforcement gate (that lives in the endpoint, where
 `getBalance` must keep throwing). Moving the read into middleware must preserve the catch, mapping
@@ -168,9 +182,13 @@ and self-hosted from the output, satisfying the no-CDN-at-runtime constraint on 
 `astro/config` alongside `defineConfig`). Two entries: `Space Grotesk` with
 `cssVariable: "--font-space-grotesk"` and weights `[400, 500, 600, 700]`; `IBM Plex Sans` with
 `cssVariable: "--font-ibm-plex-sans"` and weights `[400, 500, 600]`. Both take
-`subsets: ["latin", "latin-ext"]` — `latin-ext` is what carries `ąćęłńóśźż` — and
-`fallbacks: ["ui-sans-serif", "system-ui", "sans-serif"]`. Weights are taken from the scale in
-`ds-bundle/type.html`; do not add weights the scale does not use.
+`subsets: ["latin", "latin-ext"]` — `latin-ext` is what carries `ąćęłńóśźż` — plus
+`styles: ["normal"]` and `fallbacks: ["ui-sans-serif", "system-ui", "sans-serif"]`. Weights are taken
+from the scale in `ds-bundle/type.html`; do not add weights the scale does not use.
+
+**`styles` is not optional housekeeping.** Astro defaults to `["normal", "italic"]`
+(`assets/fonts/config.js:22`), so omitting it silently doubles the generated face count to 14 across the
+two families — italics this type scale never uses.
 
 #### 2. Token block
 
@@ -196,8 +214,22 @@ block. Set `body` to `font-sans` alongside its existing `bg-background text-fore
 **Intent**: Turn the dark theme on, declare the document's language, and preload the two faces.
 
 **Contract**: `<html lang="en">` → `<html lang="pl" class="dark">`. Import `Font` from `astro:assets`
-and render `<Font cssVariable="--font-space-grotesk" preload />` and
-`<Font cssVariable="--font-ibm-plex-sans" preload />` in `<head>`.
+and render both families in `<head>` — **with filtered preloads, not a blanket `preload`**:
+
+```astro
+<Font cssVariable="--font-space-grotesk" preload={[{ weight: 600, subset: "latin" }, { weight: 600, subset: "latin-ext" }]} />
+<Font cssVariable="--font-ibm-plex-sans"  preload={[{ weight: 400, subset: "latin" }, { weight: 400, subset: "latin-ext" }]} />
+```
+
+`preload` accepts a filter array of `{ weight?, style?, subset? }`
+(`assets/fonts/core/filter-preloads.js:8-21`); bare `preload` means `true`, which emits a `<link
+rel="preload">` for **every** face returned — seven weights across two subsets, i.e. up to 14 even with
+italics excluded. The four above are the only faces above the fold: the display face at 600 for the
+topbar logo and page heading, the body face at 400 for prose. Every other weight still loads normally,
+just not eagerly. **`latin-ext` is preloaded alongside `latin` on purpose** — the body copy is Polish, so
+the diacritic subset is critical, not a long tail. Remaining weights are deliberately unpreloaded; if a
+render shows a visible swap on one of them, add that specific face to the filter rather than reverting
+to `true`.
 
 #### 4. Retire the deleted utility
 
@@ -214,12 +246,14 @@ the flat ground; no replacement class is needed.
 
 - Build succeeds and emits both font families: `npm run build`
 - Linting passes: `npm run lint`
-- No `bg-cosmic` reference remains: `grep -rn "bg-cosmic" src/` returns nothing
+- No `bg-cosmic` reference remains: `git grep -n "bg-cosmic" -- src` returns nothing
 
 #### Manual Verification:
 
 - Both faces load from the app's own origin — no request to `fonts.googleapis.com` or
   `fonts.gstatic.com` in the network panel
+- `<head>` carries **exactly four** `<link rel="preload" as="font">` tags, not one per generated face
+  (count them in the rendered source; a blanket `preload` shows up here as a dozen or more)
 - Polish diacritics render in the loaded faces, not a fallback: `ąćęłńóśźż ĄĆĘŁŃÓŚŹŻ`
 - Every page sits on the flat `#101013` ground; the gradient is gone
 - A probe element with `class="bg-attention"` produces amber, proving the `@theme inline` entry works
@@ -251,6 +285,14 @@ not another 18-file sweep — and so this slice's new Polish copy is reviewable 
 structure and the `common` / `nav` entries only; each surface phase adds its own namespace. No runtime
 locale selection, no detection, no dependency.
 
+**Documentation convention — this plan names copy by key, never by literal.** Below, UI strings are
+referred to as `copy.<namespace>.<key>`, described in English, with the Polish wording living in `pl.ts`
+and nowhere else. Two reasons: the whole point of the module is that a second locale is a new file rather
+than a sweep, and a plan that hardcodes `pl` strings into its prose becomes wrong the moment `en.ts`
+exists — while also making the document unreadable to anyone who does not read Polish. Where the exact
+wording *is* the decision (the landing tagline, the charge line), state the decision in English and name
+the key that carries it.
+
 #### 2. Reporting seam
 
 **File**: `src/lib/services/reporting.ts`, `src/lib/services/supadata-budget.ts`
@@ -281,8 +323,8 @@ verified imported by nothing. Do not add primitives no screen uses.
 
 - Type checking and linting pass: `npm run lint`
 - Build succeeds: `npm run build`
-- `BUDGET_EVENT` string is unchanged: `grep -n "\[supadata-budget\]" src/lib/services/`
-- `LibBadge` is gone and referenced nowhere: `grep -rn "LibBadge" src/` returns nothing
+- `BUDGET_EVENT` string is unchanged: `git grep -n "\[supadata-budget\]" -- src/lib/services`
+- `LibBadge` is gone and referenced nowhere: `git grep -n "LibBadge" -- src` returns nothing
 
 #### Manual Verification:
 
@@ -324,23 +366,35 @@ becomes `["/summaries", "/account"]`.
 **Intent**: Build the single navigation shell from wireframe answer #1 and render it from the layout so
 every surface inherits it.
 
-**Contract**: `Topbar.astro` rewritten from tokens: left is always the logo plus a "Podsumowania" link;
-the right side branches on `Astro.locals.user` — signed-out shows sign in / sign up, signed-in shows the
+**Contract**: `Topbar.astro` rewritten from tokens. The left side carries the logo always, plus the
+summaries link (`copy.nav.summaries`) **on every route except `/`** — read from `Astro.url.pathname`, since once the topbar
+renders from the layout the landing page can no longer control its own navigation (phase 8 requires the
+landing shell to be logo-only, and that holds **signed in as well as signed out**: the signed-in landing
+CTA is the route into the app, so the link would be a second, competing one). "The same topbar" in the
+criteria below means one shared component and one shell — not an identical link set on every route. The
+right side branches on `Astro.locals.user` — signed-out shows sign in / sign up, signed-in shows the
 credit figure and the `AccountMenu` island. `AccountMenu.tsx` is a React island wrapping the shadcn
-`dropdown-menu` with three items: Konto, Doładuj, Wyloguj — sign-out keeps posting to
-`/api/auth/signout`. Account is reached **only** from this menu, never from main navigation (annotated
+`dropdown-menu` with three items — account, top-up and sign-out (`copy.nav.account`, `copy.nav.topUp`,
+`copy.nav.signOut`); sign-out keeps posting to `/api/auth/signout`. Account is reached **only** from this menu, never from main navigation (annotated
 as deliberate in the wireframe so it does not compete with Summaries). The credit display renders the
 "Unknown" slot — `--muted` with shimmer, never a number — when `locals.credits` is `null`. `Layout.astro`
 renders `<Topbar />` above `<slot />`; `Welcome.astro` drops its own import.
 
 #### 3. Top-up notice
 
-**File**: `src/components/AccountMenu.tsx`
+**Files**: `src/components/account/TopUpAction.tsx` (new), `src/components/AccountMenu.tsx`
 
-**Intent**: Keep the affordance decision #2 preserved while telling the truth about it.
+**Intent**: Keep the affordance decision #2 preserved while telling the truth about it — and define the
+behaviour **once**, because phase 7 needs the identical interaction on the account page's credit row.
 
-**Contract**: "Doładuj" opens a plain not-supported notice and calls
-`reportUnsupportedFeature("top-up")` from the phase 2 seam. No pricing, no plans, no card.
+**Contract**: `TopUpAction.tsx` is the single owner of the top-up affordance: a small React component
+taking a `variant` (`"menu-item"` | `"row-button"`) for its trigger presentation only. Clicking reveals a
+plain not-supported notice — no pricing, no plans, no card — rendered into a container with
+`role="status"` and `aria-live="polite"` so it is announced without stealing focus, and dismissable. The
+click calls `reportUnsupportedFeature("top-up")` from the phase 2 seam: **one** stable event key
+(`"top-up"`, the same literal from both surfaces), severity `warn`, and no user identifiers in the
+payload. `AccountMenu.tsx` renders it as the top-up menu item (`copy.nav.topUp`); phase 7 hydrates the
+same component on `account.astro`. Emitting once per click, not once per render.
 
 #### 4. Route rename
 
@@ -363,25 +417,30 @@ discovered later.
 sit jarringly on the dark ground.
 
 **Contract**: Replace the scoped `<style>` block's literal hex with token references. `error` maps to the
-recoverable-error slot (`--destructive` border and text over a 10% fill), `warning` to `--attention`,
-`info` to `--muted`.
+recoverable-error slot (`--destructive` border and text over a 10% fill); `warning` maps to the **neutral
+warning treatment** — `--card` ground, 1px solid `--border`, `--foreground` text, with a warning icon and
+the copy itself carrying the severity; `info` to `--muted`. `warning` must **not** use `--attention` —
+see §Critical Implementation Details.
 
 ### Success Criteria:
 
 #### Automated Verification:
 
 - Linting and build pass: `npm run lint && npm run build`
-- No `/dashboard` reference survives: `grep -rn "/dashboard" src/` returns nothing
-- `PROTECTED_ROUTES` contains `/summaries`: `grep -n "PROTECTED_ROUTES" -A 1 src/middleware.ts`
+- No `/dashboard` reference survives: `git grep -n "/dashboard" -- src` returns nothing
+- `PROTECTED_ROUTES` contains `/summaries`: `git grep -n -A 1 "PROTECTED_ROUTES" -- src/middleware.ts`
 
 #### Manual Verification:
 
-- The same topbar renders on `/`, `/auth/signin`, `/summaries` and `/account`
+- The same topbar component and shell render on `/`, `/auth/signin`, `/summaries` and `/account`;
+  the summaries link appears on all of them **except `/`**, signed in and signed out alike
 - Signed out, the right side shows sign in / sign up; signed in, it shows credits plus the avatar menu
 - The avatar menu opens on click, closes on Escape, and is arrow-key navigable
-- "Doładuj" shows the not-supported notice and emits one warning to the console
+- The top-up menu item shows the not-supported notice and emits one warning to the console
 - Visiting `/dashboard` 404s; `/summaries` loads and still redirects to sign-in when signed out
 - With Supabase reachable but the balance row missing, the topbar shimmers rather than showing `0`
+- The banner's `warning` variant renders the neutral treatment, not amber, and its text passes AA on the
+  dark ground — this is the contrast check the neutral treatment has not yet had
 
 **Implementation Note**: The last bullet is the "Unknown" slot and is easy to get wrong. Confirm it
 before Phase 4.
@@ -440,7 +499,8 @@ password field to the generator — verify the attribute survives and still work
 
 - Linting and build pass: `npm run lint && npm run build`
 - No palette utility remains in the auth tree:
-  `grep -rnE "(bg|text|border)-(white|blue|purple|red)-?" src/components/auth src/pages/auth` returns nothing
+  `git grep -nE "(bg|text|border)-(white|blue|purple|red)-?" -- src/components/auth src/pages/auth`
+  returns nothing
 
 #### Manual Verification:
 
@@ -484,8 +544,9 @@ local `getBalance` call in favour of `Astro.locals.credits`, keeping the summary
 **Intent**: Tokenize the three mutually exclusive non-list states plus the refresh note, without
 collapsing any of them into each other.
 
-**Contract**: `unavailable` and the refresh note render the recoverable-error and attention slots
-respectively; empty and empty-under-filter render on `--card`. Filter chips bind active state to
+**Contract**: `unavailable` renders the recoverable-error slot; the refresh note renders the **neutral
+warning treatment** (`--card` ground, 1px `--border`, icon plus copy as its non-colour channels) — it is
+not a request to spend credits, so it takes no amber; empty and empty-under-filter render on `--card`. Filter chips bind active state to
 `--secondary` with `--foreground`, inactive to `--muted-foreground` — the same neutral treatment the
 badges use, since a filter is not a state. Copy moves to `copy.summaries`; `FILTERS` labels reuse
 `CHARACTER_LABEL` rather than defining a second map.
@@ -501,8 +562,9 @@ the three-channel treatment the design system proves in greyscale.
 is replaced: both variants sit on `--secondary`; Informational is a hollow ring marker at weight 500 in
 `--muted-foreground`; Educational is a filled square marker at weight 700 in `--foreground`. **Neither
 gets `--attention`** — descriptive metadata must not carry the urgency of a request for money.
-`CHARACTER_LABEL` is translated in place (`Informacyjny` / `Edukacyjny`); it stays the single exported
-definition. Meta line and expand affordance move to `--muted-foreground` and `--ring`.
+`CHARACTER_LABEL`'s two values (informational / educational) are sourced from
+`copy.summaries.character`; it stays the single exported definition, so the pending card, the saved card
+and the filter chips cannot drift apart. Meta line and expand affordance move to `--muted-foreground` and `--ring`.
 
 #### 4. Reading surface
 
@@ -531,12 +593,16 @@ the derived `hqdefault` URL and the `key` remounting behaviour are unchanged.
 
 - Linting and build pass: `npm run lint && npm run build`
 - `CHARACTER_LABEL` still has exactly one definition:
-  `grep -rn "CHARACTER_LABEL" src/` shows one declaration and its imports
+  `git grep -n "CHARACTER_LABEL" -- src` shows one declaration and its imports
 
 #### Manual Verification:
 
 - All four list states render correctly and remain mutually exclusive: populated, genuinely empty,
-  empty-under-filter, and read-failed (force by breaking the Supabase URL)
+  empty-under-filter, and read-failed. **Force read-failed by making the summary-list query itself throw**
+  (temporarily `throw` in the list service call inside `summaries.astro`, or point that one query at a
+  non-existent table) — **not** by breaking `SUPABASE_URL`. That kills auth and client creation
+  (`src/lib/supabase.ts:5-9`), so middleware bounces you to sign-in and the protected page never renders
+  the state you are trying to see. Revert the injection afterwards.
 - The read-failed state never claims the list is empty
 - A summary body reads at the specified measure and leading; Polish diacritics are correct
 - Both character badges are distinguishable **with the page in greyscale** (browser devtools filter)
@@ -597,7 +663,10 @@ almost always take.
 **Contract**: The `needs-confirmation` state renders the attention slot: 2px `--attention` border, 12%
 `--attention` fill, `--attention-text` for the message, and an action button of `--attention-foreground`
 on `--attention`. It shows the derived thumbnail (free, from the video id), the URL, the cost and the
-resulting balance — "Wstrzymane: długi film — 2 kredyty. Zostanie N." **No title, channel or duration**:
+resulting balance. The gate line (`copy.generate.gate.held`) states four things and only those: that the
+run is **held**, that the reason is a **long video**, the **price in credits**, and the **balance that
+would remain** — both numbers interpolated, never baked into the string. **No title, channel or
+duration**:
 the 409 body is not extended. The `PendingSummary` interface gains nothing; the balance comes from the
 hook's `credits`, which the card's owner already holds.
 
@@ -610,8 +679,9 @@ hook's `credits`, which the card's owner already holds.
 **Contract**: `generating` renders the in-flight slot — `--muted` under a shimmer with a **1px dashed**
 `--border`, the non-colour channel that distinguishes it from ghost hover, which now shares `--accent`'s
 colour. `failed` renders the recoverable-error slot. `saved` and `saved-refresh-failed` stay distinct —
-one is a running re-read, the other has given up — with `saved-refresh-failed` on the attention slot,
-matching the list's refresh note because it is the same fact. **The two ARIA regions are unchanged**: the
+one is a running re-read, the other has given up — with `saved-refresh-failed` on the **neutral warning
+treatment**, matching the list's refresh note because it is the same fact. Neither takes amber: a stalled
+re-read asks for no spending decision. **The two ARIA regions are unchanged**: the
 persistent polite region and the separate `role="alert"` both exist for documented reasons
 (`PendingSummaryCard.tsx:79-86`). Copy moves to `copy.generate`.
 
@@ -630,7 +700,7 @@ persistent polite region and the separate `role="alert"` both exist for document
 
 - Linting and build pass: `npm run lint && npm run build`
 - No `Dialog` import remains in the summaries tree:
-  `grep -rn "ui/dialog" src/components/summaries/` returns nothing
+  `git grep -n "ui/dialog" -- src/components/summaries` returns nothing
 
 #### Manual Verification:
 
@@ -665,9 +735,11 @@ The account page and its delete dialog, rebuilt on tokens with the destructive s
 **Intent**: Rebuild from wireframe card `2c`, with navigation delegated to the topbar.
 
 **Contract**: `bg-cosmic` wrapper and glassmorphic cards give way to the at-rest slot. The identity block
-shows the email; a credit row shows the balance from `Astro.locals.credits` with the same "Doładuj"
-not-supported affordance and the same `reportUnsupportedFeature` call. The danger zone is a distinct
-card bound to `--destructive`. Copy from `copy.account`.
+shows the email; a credit row shows the balance from `Astro.locals.credits` alongside
+`<TopUpAction variant="row-button" client:load />` — **the phase 3 component, imported, not
+reimplemented**. This page adds no inline `<script>`; the interaction, the notice and the
+`reportUnsupportedFeature("top-up")` call all live in that island, so the two surfaces cannot drift. The
+danger zone is a distinct card bound to `--destructive`. Copy from `copy.account`.
 
 #### 2. Delete dialog
 
@@ -688,7 +760,9 @@ server's `error` field is still preferred when present, and stays English.
 #### Automated Verification:
 
 - Linting and build pass: `npm run lint && npm run build`
-- No palette utility remains: `grep -rnE "(bg|text|border)-(white|blue|purple|red|slate)-?" src/pages/account.astro src/components/account/` returns nothing
+- No palette utility remains:
+  `git grep -nE "(bg|text|border)-(white|blue|purple|red|slate)-?" -- src/pages/account.astro src/components/account`
+  returns nothing
 
 #### Manual Verification:
 
@@ -696,7 +770,8 @@ server's `error` field is still preferred when present, and stays English.
 - The delete dialog opens; the confirm button stays disabled until the email matches exactly
 - While a deletion is in flight the dialog cannot be dismissed by Escape, overlay click or close button
 - A successful deletion lands on `/?deleted=1`
-- "Doładuj" on the credit row shows the notice and emits one warning
+- The top-up action on the credit row shows the notice and emits one warning — the same `"top-up"` event
+  key the topbar menu emits, from the same component
 
 **Implementation Note**: Test the delete flow against a **synthetic local account only**. Per
 `lessons.md`, never commit identifiers from a real-environment run.
@@ -722,10 +797,12 @@ with the content.
 low-chroma ground, and the decorative layers are the opposite of that. The gradient-clip hero heading
 becomes `--font-display` on `--foreground`. Three feature cards render the at-rest slot with icons on
 `--muted-foreground`. The signed-in CTA points at `/summaries`. Landing navigation carries **only the
-logo** on the left — "Cennik" and "Jak to działa" are cut (decision #3 of the conflicts), so the shell
-must still look deliberate when that side is empty. The tagline is **"Pierwsze podsumowania gratis"** —
-the "· bez karty" half is dropped, since "no card" implies a card is expected later. Copy from
-`copy.landing`.
+logo** on the left — the pricing and how-it-works nav items are cut (decision #3 of the conflicts), and
+the summaries link is suppressed by the route check phase 3 built into `Topbar.astro`, not by anything in
+this file. The shell must still look deliberate when that side is empty. The tagline
+(`copy.landing.tagline`) promises **only that the first summaries are free**; the original wording also
+carried a "no card required" half, which is **dropped** — mentioning a card implies a card is expected
+later, and no billing exists. Copy from `copy.landing`.
 
 #### 2. Deletion toast
 
@@ -741,7 +818,8 @@ with a `--border` outline rather than hardcoded emerald. Copy from `copy.landing
 #### Automated Verification:
 
 - Linting and build pass: `npm run lint && npm run build`
-- No decorative blur layers remain: `grep -rn "blur-\[" src/components/Welcome.astro` returns nothing
+- No decorative blur layers remain: `git grep -n "blur-\[" -- src/components/Welcome.astro` returns
+  nothing
 
 #### Manual Verification:
 
@@ -769,25 +847,42 @@ phase, not as a restyle.
 caption-less case, and must never carry a blanket "no credit was taken" line. The client cannot derive
 this from the status: three causes answer 422 and only some of them charge.
 
-**Contract**: Add `charged: boolean` to the 422 bodies. `refusalResponse` (`generate.ts:235-237`) —
-which every chargeable refusal routes through — emits `charged: true`; the one exempt 422
-(`generate.ts:659`) emits `charged: false`. **These are the only two sites.** Verified across every
-other exit: 413 and 402 precede the debit, and 502 plus both 500s refund
+**Contract**: Add `charged: boolean` to the 422 bodies, **derived from the ledger outcome, never
+hardcoded**. `refusalResponse` (`generate.ts:235-237`) gains a `charged: boolean` parameter; it does not
+decide the value, it reports one. The three call sites supply it:
+
+- `refuseAndCharge` (`generate.ts:264-279`) currently fires `chargeFailedTranscript` and **discards its
+  result**. It must now read it and map `ChargeFailedTranscriptResult` (`credits.ts:204-208`):
+  `charged` → `true`; `replay` → `true` (the credit was taken by the original attempt, not by this
+  retry); `insufficient` → `false`; `notCharged` → `false`. The `requestId === null` branch skips the
+  charge entirely and therefore reports `false`. Only the *value* changes here — the existing comment's
+  rule that a billing failure never alters the 422 the user is owed stays exactly as written.
+- The known-refusal replay at `generate.ts:331` answers for a request key already closed by a refusal
+  **charge**, so it reports `true`.
+- The one exempt 422 (`generate.ts:659`) reports `false`.
+
+Verified across every other exit: 413 and 402 precede the debit, and 502 plus both 500s refund
 (`generate.ts:943`, and the reservation-already-resolved branch at `generate.ts:951`). No other response
 shape changes; the strings stay English.
 
 #### 2. Branching failure copy
 
 **Files**: `src/components/hooks/useGenerateSummary.ts`,
-`src/components/summaries/PendingSummaryCard.tsx`
+`src/components/summaries/SummariesSurface.tsx`, `src/components/summaries/PendingSummaryCard.tsx`
 
 **Intent**: Surface the signal so the card states the charge outcome truthfully.
 
-**Contract**: The hook parses `charged` from the error body and exposes it on the failure state;
-`PendingSummary` gains `charged: boolean | null`, where `null` means the endpoint said nothing. The
-failed card renders "Kredyt został pobrany" only on `true` and a no-charge line only on `false` —
-**on `null` it says nothing about money at all**. A wrong statement about the user's money is worse than
-silence.
+**Contract**: The hook parses `charged` from the error body and exposes it on the failure state as
+`boolean | null` — `null` when the field is absent **or not a boolean**, so a malformed body degrades to
+silence rather than to `false`. It is cleared alongside `error` by the existing `attemptId`-bound
+clearing, so a stale charge line can never outlive its attempt. `SummariesSurface` forwards it onto the
+`pending` object it derives (`DashboardSummaries.tsx:174-198`), next to `error`. `PendingSummary` gains
+`charged: boolean | null`. The failed card renders the charged line (`copy.generate.charged`) only on
+`true` and the no-charge line (`copy.generate.notCharged`) only on `false` — **on `null` it says nothing about money at all**. A wrong statement about the
+user's money is worse than silence.
+
+The `true` copy must be true of a replay as well as a first attempt: word it as *the operation was
+charged*, not *this retry charged you*.
 
 #### 3. Token guard
 
@@ -817,12 +912,16 @@ palette is *supposed* to live. Wire `"lint:tokens"` into `package.json` scripts 
 #### Manual Verification:
 
 - A caption-less video reports the failure **and** states that a credit was charged
+- Resubmitting that same video under the same `requestId` (the replay path) still reports the failure as
+  charged, worded as *the operation was charged* rather than as a second debit
 - A transient transcript failure reports the failure and states no credit was charged
-- A failure from an endpoint that sent no `charged` field says nothing about money
-- Full pass over all nine screens/states in §Testing Strategy with no visual regressions
+- A failure from an endpoint that sent no `charged` field — or that sent a non-boolean — says nothing
+  about money
+- Full pass over all eleven screens/states in §Testing Strategy with no visual regressions
 
 **Implementation Note**: This phase changes the paid generation path. Review it with the care the S-09
-phases got: confirm the two 422 sites are the only ones touched and that no other response shape moved.
+phases got: confirm that only the three 422 sites named above are touched, that each one's `charged`
+value comes from the ledger outcome rather than a literal, and that no other response shape moved.
 
 ---
 
@@ -839,22 +938,32 @@ There is no automated test suite; this is the manual matrix.
 4. **Summaries, empty** — "generate your first", not an error
 5. **Summaries, populated** — cards, badges (checked in greyscale), filters, expand/collapse, reading
    surface at 16.5/28 and 62ch
-6. **Summaries, read failed** — break the Supabase URL; must never claim the list is empty
+6. **Summaries, read failed** — inject a fault into the summary-list query only (never `SUPABASE_URL`,
+   which breaks auth before the page renders); must never claim the list is empty
 7. **Generation, short video** — pending → saved → real card
 8. **Generation, long video** — cold cost gate in amber with thumbnail and resulting balance; confirm;
    then repeat with pre-authorisation ticked
 9. **Generation failures** — caption-less (charged), transient (not charged), zero credits (disabled
    slot, no layout shift), unknown balance (shimmer, submission still allowed)
 10. **Account** — credit row, top-up notice, delete dialog locked shut while in flight, deletion toast
-11. **Cross-cutting** — amber appears only on the cost gate; ghost/outline hover is neutral; the topbar
-    is identical on every surface; both faces load from the app's own origin
+11. **Cross-cutting** — amber appears only on the cost gate and general warnings render neutral;
+    ghost/outline hover is neutral; the topbar is the same shell on every surface, carrying the
+    summaries link everywhere but `/`; both faces load from the app's own origin
 
 ## Performance Considerations
 
-The middleware credit read adds one RLS-scoped query per **page** request; API routes are excluded
-explicitly. This replaces the per-page read `dashboard.astro` already performed, so on `/summaries` it is
-net zero and on `/account` and `/` it is one new read. Font subsetting to `latin` + `latin-ext` with only
-the used weights keeps the payload minimal, and both faces are preloaded from the app's own origin.
+The middleware credit read adds one RLS-scoped query per **page** request **for a signed-in user**; API
+routes are excluded explicitly, and signed-out requests do not perform it at all (the condition requires
+a resolved user). This replaces the per-page read `dashboard.astro` already performed, so on `/summaries`
+it is net zero. It is one new read on `/account`, on `/`, and — since the exclusion covers only `/api/` —
+on the three `/auth/*` pages whenever a signed-in user lands on them. That last case is a rare,
+already-anomalous path (a signed-in user visiting sign-in), so it is accepted rather than special-cased:
+narrowing the condition to an allow-list of paths would put a second, drift-prone route table next to
+`PROTECTED_ROUTES`. Font payload is bounded in three steps, not one: `subsets` limits the character coverage to
+`latin` + `latin-ext`, `styles: ["normal"]` drops the italic half Astro would otherwise generate by
+default, and the **filtered** `preload` arrays eagerly fetch only the four above-the-fold faces rather
+than every face returned. All faces are served from the app's own origin; the unpreloaded weights load
+on demand.
 
 ## Migration Notes
 
@@ -898,9 +1007,10 @@ anything here.
 #### Manual
 
 - [ ] 1.4 Both faces load from the app's own origin
-- [ ] 1.5 Polish diacritics render in the loaded faces
-- [ ] 1.6 Every page sits on the flat ground
-- [ ] 1.7 `bg-attention` produces amber
+- [ ] 1.5 Exactly four font preload links in `<head>`
+- [ ] 1.6 Polish diacritics render in the loaded faces
+- [ ] 1.7 Every page sits on the flat ground
+- [ ] 1.8 `bg-attention` produces amber
 
 ### Phase 2: Shared infrastructure
 
@@ -925,12 +1035,13 @@ anything here.
 
 #### Manual
 
-- [ ] 3.4 Same topbar on all four surfaces
+- [ ] 3.4 Same topbar shell on all four surfaces; summaries link on all but `/`
 - [ ] 3.5 Right side branches correctly on identity
 - [ ] 3.6 Avatar menu: click, Escape, arrow keys
 - [ ] 3.7 Top-up notice shows and emits one warning
 - [ ] 3.8 `/dashboard` 404s; `/summaries` loads and still protects
 - [ ] 3.9 Missing balance shimmers rather than showing `0`
+- [ ] 3.10 Banner `warning` renders neutral, not amber, and passes AA on the dark ground
 
 ### Phase 4: Auth surfaces
 
@@ -1020,6 +1131,7 @@ anything here.
 #### Manual
 
 - [ ] 9.5 Caption-less video reports the failure and the charge
-- [ ] 9.6 Transient failure reports no charge
-- [ ] 9.7 Missing `charged` field says nothing about money
-- [ ] 9.8 Full pass over the manual matrix with no visual regressions
+- [ ] 9.6 Replay of the same `requestId` reports charged, worded as not a second debit
+- [ ] 9.7 Transient failure reports no charge
+- [ ] 9.8 Missing or non-boolean `charged` field says nothing about money
+- [ ] 9.9 Full pass over the manual matrix with no visual regressions

@@ -27,8 +27,10 @@ pages hardcode `text-white`. There is no test suite.
 
 ## Desired End State
 
-Every surface renders from the 3b tokens, in Polish, under one topbar, with `/summaries` as the list
-route and generation as an inline capture bar instead of a dialog. `npm run lint:tokens` passes, proving
+Every surface renders from the 3b tokens under one topbar, with all **client-owned UI copy** in Polish,
+`/summaries` as the list route and generation as an inline capture bar instead of a dialog. Server-owned
+strings from `src/pages/api/**` stay English and still appear inside those screens — the accepted
+boundary recorded under Open Risks. `npm run lint:tokens` passes, proving
 mechanically that no hardcoded palette utility survives outside `global.css`. Amber appears if and only
 if the app is waiting for a decision about spending credits.
 
@@ -37,13 +39,15 @@ if the app is waiting for a decision about spending credits.
 | Decision | Choice | Why | Source |
 | --- | --- | --- | --- |
 | Shell & routes | One topbar everywhere; `/summaries`; inline generation | Ends the three-navigations problem | Wireframe |
+| Topbar link set | One shared component, **route-aware**: no summaries link on `/` | Landing is logo-only, and once the topbar renders from the layout the page can't control its own nav | Plan |
 | Palette & type | 3b "Konsola", dark-only via `class="dark"` | Light is complete but unverified | Visual direction |
 | `--attention` split from `--accent` | Separate token pair | Otherwise every ghost-button hover fires the spend-money colour | Visual direction |
+| General warnings | **Neutral card treatment, never amber** — icon + copy carry the severity | `--attention` means only "decide about spending credits"; banner warnings, the list refresh note and `saved-refresh-failed` are information, not a request for money | Plan |
 | **409 cost gate** | **Design for cold — no endpoint change** | **Metadata isn't available at gate time (see risks); the gate is cold in the normal case** | **Plan** |
-| Fonts | Astro 6 Fonts API, google provider, `latin` + `latin-ext` | Stable in v6, self-hosts at build, no binaries in git | Plan |
+| Fonts | Astro 6 Fonts API, google provider, `latin` + `latin-ext`, `styles: ["normal"]`, **filtered** preloads (4 faces) | Stable in v6, self-hosts at build, no binaries in git; defaults would emit italics and preload every face | Plan |
 | Primitives | `input checkbox dropdown-menu badge label` only | Covers the five screens; hand-rolling a dropdown would regress a11y | Plan |
-| Copy boundary | UI fully Polish; `src/pages/api/**` stays English | Server translation deferred to a follow-up change | Plan |
-| Copy structure | Single-locale module `src/lib/copy/` | A second language becomes a new file, not another 18-file sweep | Plan |
+| Copy boundary | Client-owned UI copy Polish; `src/pages/api/**` stays English | Server translation deferred to a follow-up change | Plan |
+| Copy structure | Single-locale module `src/lib/copy/`; plan and brief name copy **by key, never by literal** | A second language becomes a new file, not another 18-file sweep — and docs stay valid once `en.ts` exists | Plan |
 | Reporting seam | Extract `reporting.ts`; refactor `reportBudgetThreshold` onto it | One seam, so wiring Sentry later reaches both event families | Plan |
 | Sweep proof | `npm run lint:tokens` grep guard in CI | With no test suite, the only mechanical proof the sweep is complete | Plan |
 | Capture bar placement | `/summaries` only | A generation must never start where its pending card can't be seen | Plan |
@@ -52,13 +56,14 @@ if the app is waiting for a decision about spending credits.
 ## Scope
 
 **In scope:** tokens + `@theme inline`; Astro font pipeline; `class="dark"` + `lang="pl"`; copy module;
-reporting seam; five shadcn primitives; global topbar + avatar menu; credits on `locals`;
-`/dashboard` → `/summaries`; all 13 feature components and 5 Astro files; dialog → capture bar; cold cost
-gate; `autocomplete` a11y fix; `charged` signal on the two 422 sites; token guard + CI.
+reporting seam; five shadcn primitives; global topbar + avatar menu; one shared `TopUpAction` component
+behind both top-up affordances; credits on `locals`; `/dashboard` → `/summaries`; all 13 feature
+components and 5 Astro files; dialog → capture bar; cold cost gate; `autocomplete` a11y fix; `charged`
+signal on the three 422 sites, derived from the ledger outcome; token guard + CI.
 
 **Out of scope:** extending the 409 body; translating API responses; shipping or fixing the light theme;
-a theme toggle; an i18n library or locale routing; converting the palette to `oklch`; "Wyślij ponownie";
-self-serve top-up; speculative primitives.
+a theme toggle; an i18n library or locale routing; converting the palette to `oklch`; the "resend
+confirmation email" action from wireframe card `2b`; self-serve top-up; speculative primitives.
 
 ## Architecture / Approach
 
@@ -71,7 +76,7 @@ final phase so it gets S-09-grade review rather than being buried in a restyle d
 
 | Phase | What it delivers | Key risk |
 | --- | --- | --- |
-| 1. Token & type foundation | 3b palette, fonts, dark + `lang="pl"` | Fonts not actually self-hosted, or `latin-ext` missing → broken diacritics |
+| 1. Token & type foundation | 3b palette, fonts, dark + `lang="pl"` | Fonts not actually self-hosted, or `latin-ext` missing → broken diacritics; a blanket `preload` shipping every face |
 | 2. Shared infrastructure | Copy module, reporting seam, primitives | Refactors budget code live in production |
 | 3. App shell | Topbar everywhere, credits on `locals`, route rename | A missed link site; balance failure rendering `0` instead of "unknown" |
 | 4. Auth surfaces | 3 pages + 6 components in Polish | `autocomplete` breaking when the show/hide toggle swaps `type` |
@@ -79,7 +84,7 @@ final phase so it gets S-09-grade review rather than being buried in a restyle d
 | 6. Summaries — capture bar | Dialog dissolved, in-flight states, cold cost gate | Weakening the generation lifecycle the dialog was designed around |
 | 7. Account surface | Account page + delete dialog | Breaking the dialog's locked-shut-while-deleting guard |
 | 8. Landing surface | Hero, three steps, toast, orbs deleted | Empty left nav looking broken rather than deliberate |
-| 9. Failure copy + guard | `charged` signal, token guard in CI | Touching the paid path |
+| 9. Failure copy + guard | `charged` signal, token guard in CI | Touching the paid path; reporting a debit that never landed |
 
 **Prerequisites:** steps 1–3 closed (they are); local Supabase running; a synthetic local account for the
 delete-flow test; Supadata + OpenRouter credit for the generation-path tests.
@@ -98,6 +103,10 @@ delete-flow test; Supadata + OpenRouter credit for the generation-path tests.
 - **The bilingual failure path is accepted, not solved.** UI is Polish, API responses stay English, and
   `messageForStatus` deliberately prefers the server's string — so generation errors will usually read
   English inside a Polish interface. Deliberate; needs a follow-up change.
+- **Attempting a charge is not the same as charging.** The chargeable 422s route through
+  `refuseAndCharge`, but `chargeFailedTranscript` resolves `charged` / `replay` / `insufficient` /
+  `notCharged` and never throws — so `charged` must be read from that outcome, never inferred from which
+  exit was taken. A hardcoded `true` would tell users their money moved when it didn't.
 - **Phase 6 dissolves the dialog `useGenerateSummary` was architected around.** Inline is strictly safer
   (no unmount mid-flight), but every lifetime guarantee must survive the move intact.
 - **The light theme has never been rendered**, and carries one known AA failure. Not reachable while
@@ -106,7 +115,7 @@ delete-flow test; Supadata + OpenRouter credit for the generation-path tests.
 
 ## Success Criteria (Summary)
 
-- Every screen and state renders from the tokens, in Polish, under one topbar — and `npm run lint:tokens`
-  proves no hardcoded palette utility survived
+- Every screen and state renders from the tokens under one topbar, with all client-owned UI copy in
+  Polish — and `npm run lint:tokens` proves no hardcoded palette utility survived
 - Amber appears on the cost gate and nowhere else; ghost and outline hovers are neutral
 - A failed generation states the charge outcome truthfully — including saying nothing when it can't know

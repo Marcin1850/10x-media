@@ -4,22 +4,27 @@
 - **Plan**: `context/changes/app-design-system/plan.md`
 - **Mode**: Deep
 - **Date**: 2026-08-11
-- **Verdict**: REVISE
-- **Findings**: 2 critical, 4 warnings, 2 observations
+- **Verdict**: REVISE → **SOUND** (all 8 findings fixed in the plan, 2026-08-11)
+- **Findings**: 2 critical, 4 warnings, 2 observations — 8 fixed, 0 outstanding
 
 ## Verdicts
 
-| Dimension | Verdict |
-| --- | --- |
-| End-State Alignment | FAIL |
-| Lean Execution | PASS |
-| Architectural Fitness | WARNING |
-| Blind Spots | WARNING |
-| Plan Completeness | WARNING |
+Left column is the verdict at review time; right column is after triage applied the fixes.
+
+| Dimension | Verdict | After fixes |
+| --- | --- | --- |
+| End-State Alignment | FAIL | PASS |
+| Lean Execution | PASS | PASS |
+| Architectural Fitness | WARNING | PASS |
+| Blind Spots | WARNING | PASS |
+| Plan Completeness | WARNING | PASS |
 
 ## Grounding
 
-19/19 existing targets ✓, 11/11 sampled symbols ✓, brief↔plan mismatch ✗.
+19/19 existing targets ✓, 11/11 sampled symbols ✓, brief↔plan mismatch ✗ — **resolved during triage**:
+the brief was re-synced against the revised plan (charged-signal scope, neutral warning treatment,
+route-aware topbar, `TopUpAction`, font `styles`/preloads, copy-boundary wording), and both documents
+now name copy by key rather than by Polish literal.
 
 The mechanical Progress contract passes: there is exactly one bottom `## Progress` section, all nine
 phase names match, phase criteria have corresponding progress rows, and there are no checkboxes in the
@@ -54,7 +59,11 @@ contract from `.claude/skills/10x-plan/references/progress-format.md` was used a
   - `src/pages/api/summaries/generate.ts:235-278`
   - `src/lib/services/credits.ts:193-208,263-292`
   - `src/components/summaries/DashboardSummaries.tsx:174-198`
-- **Decision**: PENDING
+- **Decision**: FIXED — applied the recommended fix. `refusalResponse` now takes `charged` as a
+  parameter derived from `ChargeFailedTranscriptResult` at three named call sites; the hook parses it as
+  `boolean | null` (non-boolean degrades to `null`), `SummariesSurface` forwards it onto `pending`, and
+  the replay wording is specified. Key Discoveries' "two-site change" claim corrected; criteria 9.5–9.9
+  updated.
 
 ### F2 — The plan intentionally uses gate-only amber outside the gate
 
@@ -82,7 +91,10 @@ contract from `.claude/skills/10x-plan/references/progress-format.md` was used a
   - `context/changes/app-design-system/ds-bundle/tokens.css:6-9`
   - `context/changes/app-design-system/visual-direction-outcome.md:75-83`
   - `context/changes/app-design-system/plan.md:365-367,487-491,610-616,641-642`
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A. `--attention` stays gate-only. A "neutral warning treatment" is defined
+  once in §Critical Implementation Details and referenced from Phase 3 (Banner `warning`), Phase 5
+  (refresh note) and Phase 6 (`saved-refresh-failed`). New criterion 3.10 carries the outstanding
+  contrast check for that treatment.
 
 ### F3 — The topbar has two incompatible navigation contracts
 
@@ -103,7 +115,10 @@ contract from `.claude/skills/10x-plan/references/progress-format.md` was used a
   - `context/changes/app-design-system/plan.md:327-334,721-728`
   - `src/layouts/Layout.astro:6-38`
   - `src/components/Welcome.astro:2,30`
-- **Decision**: PENDING
+- **Decision**: FIXED — applied the recommended fix. `Topbar.astro` reads `Astro.url.pathname` and
+  suppresses the summaries link on `/`, signed in and signed out alike (the blind spot is now answered
+  explicitly). Phase 8's contract, criterion 3.4 and the cross-cutting matrix row were restated so
+  "same topbar" means one shared shell rather than an identical link set.
 
 ### F4 — Account top-up interaction has no implementation contract
 
@@ -124,7 +139,11 @@ contract from `.claude/skills/10x-plan/references/progress-format.md` was used a
 - **Evidence**:
   - `context/changes/app-design-system/plan.md:661-670`
   - `src/pages/account.astro:32`
-- **Decision**: PENDING
+- **Decision**: FIXED — applied the recommended fix. Phase 3 §3 now creates
+  `src/components/account/TopUpAction.tsx` as the single owner (notice under `role="status"` /
+  `aria-live="polite"`, one stable `"top-up"` key, `warn` severity, no identifiers in the payload, one
+  emit per click). Phase 7 imports and hydrates it instead of adding an inline script; criterion 7.7
+  now asserts both surfaces emit the same key from the same component.
 
 ### F5 — Font configuration can preload up to 28 files
 
@@ -146,7 +165,11 @@ contract from `.claude/skills/10x-plan/references/progress-format.md` was used a
   - `context/changes/app-design-system/plan.md:167-173,198-200,854-857`
   - `node_modules/astro/components/Font.astro:13-27`
   - `node_modules/astro/dist/assets/fonts/core/filter-preloads.js:1-8`
-- **Decision**: PENDING
+- **Decision**: FIXED — applied the recommended fix. Both families take `styles: ["normal"]`, and
+  `Layout.astro` now passes explicit `preload` filter arrays (display 600, body 400, each × `latin` +
+  `latin-ext`) instead of bare `preload`. Both APIs re-verified against the installed Astro 6
+  (`assets/fonts/config.js:22`, `filter-preloads.js:8-21`). §Performance Considerations rewritten to
+  name all three bounding steps; new criterion 1.5 counts the preload links.
 
 ### F6 — Several verification instructions cannot validate their claims
 
@@ -164,7 +187,10 @@ contract from `.claude/skills/10x-plan/references/progress-format.md` was used a
   - `context/changes/app-design-system/plan.md:59-60,215-217,282-285,538-539,829-850`
   - `src/middleware.ts:6-20`
   - `src/lib/supabase.ts:5-9`
-- **Decision**: PENDING
+- **Decision**: FIXED — all three corrections applied. Eight `grep -rn` invocations became `git grep`
+  (portable under PowerShell); the read-failed criterion and matrix step 6 now specify list-query fault
+  injection and explicitly warn against breaking `SUPABASE_URL`, with the reason; both "nine
+  screens/states" references became "eleven".
 
 ### F7 — Middleware performance accounting omits signed-in auth pages
 
@@ -179,7 +205,9 @@ contract from `.claude/skills/10x-plan/references/progress-format.md` was used a
 - **Evidence**:
   - `context/changes/app-design-system/plan.md:313-317,854-857`
   - `src/middleware.ts:6-24`
-- **Decision**: PENDING
+- **Decision**: FIXED — §Performance Considerations now states the read is per signed-in page request,
+  names `/auth/*` as a third surface that gains one, and records why that case is accepted rather than
+  special-cased (a second route table beside `PROTECTED_ROUTES` would drift).
 
 ### F8 — "Every surface is in Polish" overpromises the accepted boundary
 
@@ -193,4 +221,6 @@ contract from `.claude/skills/10x-plan/references/progress-format.md` was used a
 - **Evidence**:
   - `context/changes/app-design-system/plan.md:51-60,91-92,137-142,861-866`
   - `context/changes/app-design-system/plan-brief.md` — Desired End State and Open Risks
-- **Decision**: PENDING
+- **Decision**: FIXED — both documents now promise "all client-owned UI copy in Polish" and name the
+  English server-string boundary inline, pointing at the existing §Migration Notes / Open Risks
+  follow-up rather than restating it.
