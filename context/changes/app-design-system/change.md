@@ -71,9 +71,15 @@ HTML/ZIP export) and ordinary implementation work. This inverts the step order t
    vocabulary, the seven semantic slots, three decisions, app-specific constraints, exit criteria).
    Step 1's result is recorded in [`wireframe-outcome.md`](./wireframe-outcome.md).
 
-**3. Design system project.** API pitfall: `PROJECT_TYPE_DESIGN_SYSTEM` is **immutable at creation** —
-   a project created as a regular one can never become a design system. Create it correctly via
-   `create_project`, confirm with `get_project`, then enable `Published`.
+**3. Design system project — CREATED 2026-08-11.** `10xMedia Design System`,
+   `projectId: c4baaf64-3ad0-4887-a790-70ae042ea9ee`. Type verified via `get_project` as
+   `PROJECT_TYPE_DESIGN_SYSTEM` before anything was written to it — that type is **immutable at
+   creation**, so a project made as a regular one could never have become a design system.
+   `canEdit: true`. Still **empty**; `Published` not yet enabled.
+
+   The wireframe/visual-direction work lives in a separate *regular* project,
+   `10xMedia app screens` (`6f4d8fe2-d9bd-48db-ae24-190383dea2c8`) — turns 1-2 structure,
+   3-4 visual direction. That one is a scratchpad and is deliberately not the design system.
 
 **4. Descent into code — this is the part `/10x-plan` covers.** Dependency-forced order:
    tokens in `src/styles/global.css` → primitives in `src/components/ui/` → surfaces
