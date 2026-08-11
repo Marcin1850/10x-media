@@ -1,9 +1,9 @@
 ---
 change_id: app-design-system
 title: App design system
-status: new
+status: planned
 created: 2026-08-10
-updated: 2026-08-10
+updated: 2026-08-11
 archived_at: null
 ---
 
@@ -142,20 +142,100 @@ HTML/ZIP export) and ordinary implementation work. This inverts the step order t
    - `--attention` needs an `@theme inline` entry or Tailwind emits no `bg-attention` utilities.
    - `bg-cosmic` is deleted along with its two usages.
    - `class="dark"` and `lang="pl"` on `<html>` in `Layout.astro`.
-   - All copy to Polish, **including 15+ user-facing strings in API error responses**.
+   - All UI copy to Polish. ~~**including 15+ user-facing strings in API error responses**.~~
+     **Narrowed 2026-08-11:** `src/pages/api/**` stays **English** — translating it is deferred to a
+     follow-up change. UI copy goes through a single-locale module (`src/lib/copy/`) so a second
+     language is a new file, not another 18-file sweep.
    - `/dashboard` → `/summaries`, incl. `PROTECTED_ROUTES` and four link sites.
-   - The 409 body gains title/channel/duration — **add fields, do not move the metadata call**.
-   - Space Grotesk + IBM Plex Sans as WOFF2 in the repo; no CDN at runtime.
+   - ~~The 409 body gains title/channel/duration — **add fields, do not move the metadata call**.~~
+     **Reversed 2026-08-11 — see the correction below.** The 409 body is left unchanged.
+   - Space Grotesk + IBM Plex Sans, self-hosted; no CDN at runtime.
+     **Delivery decided 2026-08-11:** Astro 6's Fonts API (`google` provider, `subsets: ["latin",
+     "latin-ext"]`), not hand-committed WOFF2 — the `experimental.fonts` flag was removed in v6, so it
+     is stable, and it self-hosts from the build output. Consequence for step 5: the built font files
+     sit at hashed paths rather than stable repo paths, so they are a weaker candidate for populating
+     the manifest's empty `brandFonts` than the committed-WOFF2 route would have been.
 
-   Decisions 2, 4 and 6 put this slice inside `generate.ts`, so the roadmap's "no behaviour changes to
-   generation, credits or CRUD" scope note for S-06 is **superseded** — review it like an S-09 phase,
+   ~~Decisions 2, 4 and 6 put this slice inside `generate.ts`~~, so the roadmap's "no behaviour changes
+   to generation, credits or CRUD" scope note for S-06 is **superseded** — review it like an S-09 phase,
    not like a restyle.
+
+   **Narrowed 2026-08-11.** The conclusion stands, the reasons shrank. Decision 6 is reversed and
+   decision 4's API half is deferred, so **decision 1 is the only one left inside `generate.ts`**: the
+   failure card must be able to say *"this one was charged"*, which the client cannot derive from the
+   status because three causes answer 422 and only some of them charge. It needs `charged: boolean` at
+   exactly **two sites** — `refusalResponse` (`generate.ts:235-237`), which every chargeable refusal
+   routes through, and the one exempt 422 (`generate.ts:659`). Verified across every other exit: 413 and
+   402 precede the debit, and 502 plus both 500s refund (`generate.ts:943`, and the
+   reservation-already-resolved branch at `generate.ts:951`). Decision 2's log warning lands in a new
+   `src/lib/services/reporting.ts`, not in the endpoint.
 
 **5. Push back via `DesignSync`** — only once components exist in code, incrementally.
    Design System pane cards come from a first-line `<!-- @dsCard group="…" -->` marker in each
    preview HTML; `register_assets` is legacy and not needed.
 
 Steps 1–3 happen outside the repo. `/10x-plan` should start at step 4.
+
+### ⚠️ Correction — a design-time assumption about the 409 was wrong (found 2026-08-11)
+
+Recorded because it invalidates one settled decision and part of a design system specimen, and because
+the mistake is instructive: **it is the class of error that canvas work produces by construction.**
+
+**The false claim.** `wireframe-outcome.md` §6 and `ds-bundle/cost-gate.html` both assert that video
+metadata "is fetched earlier in the same request", before the 409 returns — so title, channel and
+duration could simply be added to the response body. Decision 6 rests entirely on that sentence.
+
+**What the code does.** `generate.ts:493` is `getCachedMetadata`, a **free database read** of the shared
+30-day cache — this is what was mistaken for the fetch. The real `fetchVideoMetadata` is at
+`generate.ts:859`, **114 lines after the 409 returns at `generate.ts:745`**, and after both the credit
+debit and the paid LLM call.
+
+**And the cache does not rescue it.** `saveCachedMetadata` runs only on a **completed** generation
+(`metadata-cache.ts:15-17` — no negative caching, by design). A user who reaches the gate and cancels
+never warms the cache, so retrying the same video is still cold. The cache is warm only if somebody
+fully generated that video within 30 days — in which case gating it again means a repeat generation.
+**In practice the cost gate is almost always cold.**
+
+**Consequence.** Decision 6 is reversed: the 409 body is unchanged, and the gate is designed for the
+cold case — derived thumbnail (free, from the video id), URL, cost, resulting balance. Same answer for
+the pending card. Everything else in the specimen stands: the 2px border, the 12% tint, and the
+`--attention` semantics were never affected.
+
+**Why it happened, and the general lesson.** The canvas has no way to check a claim about request
+ordering — it renders whatever data the designer says exists. `change.md` already anticipated the shape
+of this problem in the 2026-08-10 decision note below ("canvas output is HTML/React, not Astro — a
+translation step always exists"), but framed it as a *markup* translation problem. It is wider than
+that: **a canvas can also invent facts about the backend, and those look identical to real ones until
+someone opens the file.** The corrective is cheap — any claim a specimen makes about what the server
+returns must be checked against the code before it becomes a decision, not after.
+
+Corrections are annotated in place in all three documents rather than deleted, so the reasoning that led
+to the original decision stays readable.
+
+**`ds-bundle/cost-gate.html` has been edited locally and is now ahead of the copy pushed to Claude
+Design.** Re-push it in step 5.
+
+### Planning outcome — step 4 decisions (2026-08-11)
+
+`plan.md` + `plan-brief.md` written; `status: planned`. Nine phases. Decisions taken during planning
+that are not in any step 1-3 artifact:
+
+| Decision | Choice | Why |
+| --- | --- | --- |
+| 409 cost gate | Design for cold; no endpoint change | See the correction above |
+| Fonts | Astro 6 Fonts API, `google` provider, `latin` + `latin-ext` | Stable in v6, self-hosts at build, no binaries in git |
+| Primitives | `input checkbox dropdown-menu badge label` only | Covers the five screens; a hand-rolled dropdown would regress a11y |
+| Copy boundary | UI fully Polish; `src/pages/api/**` English | Server translation deferred; more UI languages assumed later |
+| Copy structure | Single-locale module `src/lib/copy/` | A second language becomes a new file, not another sweep |
+| Reporting seam | Extract `src/lib/services/reporting.ts`; refactor `reportBudgetThreshold` onto it | One seam, so a receiver later reaches both event families |
+| Sweep proof | `npm run lint:tokens` grep guard, wired into CI | No test suite exists; the only mechanical proof the sweep is complete |
+| Capture bar placement | `/summaries` only | `1c` says "every signed-in surface", but `PendingSummaryCard` is client-session-only — a generation must never start where its card cannot be seen |
+| Hex vs `oklch` | Keep hex | All 16 contrast ratios were computed on those exact values |
+
+**Known accepted gap:** UI is Polish, API responses are English, and `messageForStatus` deliberately
+prefers the server's string — so generation errors will usually read English inside a Polish interface.
+`wireframe-outcome.md` §4 called this "the worst possible place" for a language split. Accepted
+deliberately; needs a follow-up change.
 
 ### Decision — design the new structure on the canvas, not in the app (2026-08-10)
 

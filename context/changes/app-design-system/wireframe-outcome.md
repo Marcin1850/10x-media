@@ -115,6 +115,36 @@ Metadata *is* fetched earlier in the same request (before the 409 returns), so a
 
 Constraint for the plan: `generate.ts:552-556` documents the metadata call's *placement* as load-bearing for three separate reasons (1 req/s rate spacing, early exits not burning a credit, no double-pay on an `allowLong` resubmit), and explicitly warns that relocating it is not a free tidy-up. **Add fields to the response; do not move the call.** The pending card's metadata is the same question and should be answered the same way.
 
+> ### ⚠️ Correction (2026-08-11, during `/10x-plan`) — the premise above was wrong, and this decision is reversed
+>
+> **The paragraph beginning "Metadata *is* fetched earlier in the same request" is false.** It was an
+> assumption made while designing on the canvas, never checked against the code, and both the decision
+> and the constraint below it rest on it. Read the two paragraphs above as a record of what was believed
+> at design time, not as instructions.
+>
+> What the code actually does:
+>
+> | Line | What happens |
+> | --- | --- |
+> | `generate.ts:493` | `getCachedMetadata` — a **free database read** of the shared 30-day cache. This is what was mistaken for the fetch. |
+> | `generate.ts:745` | **the 409 returns here** |
+> | `generate.ts:773` | credit debit |
+> | ~`generate.ts:800` | the paid LLM call |
+> | `generate.ts:859` | `fetchVideoMetadata` — the **real** Supadata call, 114 lines *after* the 409 |
+>
+> So at the gate only *cached* metadata can exist. And `saveCachedMetadata` runs only on a **completed**
+> generation (`metadata-cache.ts:15-17` — no negative caching), so a user who reaches the gate and
+> cancels never warms the cache; retrying the same video later is still cold. **The cache is warm only if
+> somebody fully generated that video within 30 days**, in which case gating it again means a repeat
+> generation. In practice the cost gate is almost always cold.
+>
+> **Reversed decision:** the 409 body is **not** extended. The gate is designed for the cold case —
+> derived thumbnail (free, from the video id), URL, cost and resulting balance. The same answer applies
+> to the pending card. `generate.ts` keeps its metadata call exactly where it is, so the constraint above
+> is honoured by not making the change at all.
+>
+> Settled with the user during planning; see `plan.md` §What We're NOT Doing and §Key Discoveries.
+
 ### Minor
 
 - **"Wyślij ponownie"** (resend confirmation email) on card `2b` — no such feature exists; `grep -rn "resend" src/` returns nothing. Not raised with the user; treat it as cut unless it is deliberately added, in which case it is a new capability rather than a restyle.
