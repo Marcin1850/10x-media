@@ -66,8 +66,10 @@ HTML/ZIP export) and ordinary implementation work. This inverts the step order t
    shows what is a React island vs. static Astro. That distinction decides what can be rearranged
    without touching behaviour.
 
-**2. Visual direction** — only once the wireframe is accepted. Color, typography, spacing scale,
-   radius, brand. Iterate via chat + inline canvas comments.
+**2. Visual direction** — only once the wireframe is accepted. → full brief:
+   [`visual-direction-brief.md`](./visual-direction-brief.md) (fill the existing shadcn token
+   vocabulary, the seven semantic slots, three decisions, app-specific constraints, exit criteria).
+   Step 1's result is recorded in [`wireframe-outcome.md`](./wireframe-outcome.md).
 
 **3. Design system project.** API pitfall: `PROJECT_TYPE_DESIGN_SYSTEM` is **immutable at creation** —
    a project created as a regular one can never become a design system. Create it correctly via
