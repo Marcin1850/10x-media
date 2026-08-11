@@ -1,7 +1,7 @@
 ---
 change_id: app-design-system
 title: App design system
-status: planned
+status: plan_reviewed
 created: 2026-08-10
 updated: 2026-08-11
 archived_at: null
