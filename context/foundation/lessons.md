@@ -2,12 +2,12 @@
 
 > Append-only register of recurring rules and patterns. Re-read at start by /10x-frame, /10x-research, /10x-plan, /10x-plan-review, /10x-implement, /10x-impl-review.
 
-## Linear MCP: create_issue_label używa teamId (UUID), nie team
+## Linear MCP: create_issue_label takes teamId (UUID), not team
 
-- **Context**: Wywołania Linear MCP wskazujące zespół. Pole nie jest jednolite — `create_issue_label` jest wyjątkiem: wymaga `teamId` (UUID). Większość pozostałych (`save_issue`, `list_issue_statuses`, `save_document`) przyjmuje `team` (nazwa/ID), `save_project` używa `addTeams`/`setTeams`.
-- **Problem**: Niespójne pole zespołu — `create_issue_label` odrzuciło klucz `team` (błąd walidacji), bo oczekuje `teamId`/UUID. 7 zbatchowanych wywołań padło naraz, zanim nazwa pola została poprawiona.
-- **Rule**: Sprawdź schemat pola zespołu zanim założysz jego nazwę — w Linear MCP nie jest jednolite (`create_issue_label` → `teamId`/UUID; większość innych → `team`/nazwa lub ID). Przy tworzeniu wielu obiektów zweryfikuj jedno wywołanie, potem batchuj resztę.
-- **Applies to**: implement, impl-review (fazy odwołujące się do issue trackera)
+- **Context**: Linear MCP calls that name a team. The field is not uniform — `create_issue_label` is the exception: it requires `teamId` (UUID). Most of the others (`save_issue`, `list_issue_statuses`, `save_document`) accept `team` (name/ID), and `save_project` uses `addTeams`/`setTeams`.
+- **Problem**: Inconsistent team field — `create_issue_label` rejected the `team` key (validation error), because it expects `teamId`/UUID. 7 batched calls failed at once before the field name was corrected.
+- **Rule**: Check the team field's schema before assuming its name — in Linear MCP it is not uniform (`create_issue_label` → `teamId`/UUID; most others → `team`/name or ID). When creating several objects, verify one call first, then batch the rest.
+- **Applies to**: implement, impl-review (phases that reference the issue tracker)
 
 ## Update Linear status + comment at each lifecycle step
 
@@ -51,18 +51,18 @@
 - **Rule**: Always create a new branch when /10x-new skill is used
 - **Applies to**: new
 
-## Nigdy nie kasuj danych z lokalnej bazy bez zgody — najpierw nieniszcząca alternatywa
+## Never wipe data from the local database without consent — reach for a non-destructive alternative first
 
-- **Context**: Każda komenda kasująca lub nadpisująca dane w lokalnym środowisku dev (`supabase db reset`, `drop`, `truncate`, nadpisanie pliku) — niezależnie od tego, czy jest częścią planu, czy doraźnym sprawdzeniem stanu.
-- **Problem**: Lokalne dane (użytkownicy, `videos`, `summaries`) to zasób testowy zbudowany realnym kosztem — odtworzenie podsumowań kosztuje kredyty Supadata i OpenRouter oraz czas. Dodatkowo destrukcyjna komenda przerwana w połowie zostawia bazę niespójną (tu: schemat cofnięty do pierwszej migracji), więc naprawa wymaga kolejnego pełnego resetu.
-- **Rule**: Nigdy nie uruchamiaj destrukcyjnej komendy na lokalnej bazie bez wyraźnej zgody. Najpierw sięgnij po nieniszczącą alternatywę (`supabase migration up`, zapytanie do `pg_catalog`); jeśli krok naprawdę wymaga czystej bazy, poproś o zgodę i wyjaśnij, co zostanie utracone.
+- **Context**: Any command that deletes or overwrites data in the local dev environment (`supabase db reset`, `drop`, `truncate`, overwriting a file) — whether it is part of the plan or an ad-hoc state check.
+- **Problem**: The local data (users, `videos`, `summaries`) is a test asset built at real cost — regenerating the summaries costs Supadata and OpenRouter credits as well as time. On top of that, a destructive command interrupted halfway leaves the database inconsistent (here: the schema rolled back to the first migration), so repairing it requires another full reset.
+- **Rule**: Never run a destructive command against the local database without explicit consent. Reach for a non-destructive alternative first (`supabase migration up`, a query against `pg_catalog`); if the step genuinely requires a clean database, ask for consent and explain what will be lost.
 - **Applies to**: implement, impl-review
 
-## Nigdy nie commituj identyfikatorów kont z przebiegu na prawdziwym środowisku
+## Never commit account identifiers from a real-environment pass
 
-- **Context**: Każdy record weryfikacyjny, nota w `change.md`/`plan.md`, komentarz w Linear lub treść commita powstająca po przebiegu na **prawdziwym** środowisku (produkcja, współdzielony staging) — w odróżnieniu od lokalnego.
-- **Problem**: Konwencja „w recordach używamy kont syntetycznych" (`verify-s09@local.test`) istniała od S-07, ale nigdy nie została zapisana — działała sama, bo wszystkie przebiegi były lokalne. Pierwszy przebieg produkcyjny (S-09 P7) nie miał syntetycznego odpowiednika, więc prawdziwy adres e-mail i UUID użytkownika trafiły do trzech plików i zostały zacommitowane. Repo jest **publiczne**. Złapane pytaniem użytkownika jeden krok przed pushem; wymagało przepisania dwóch commitów, co unieważniło już wpisany SHA i zmusiło do powtórzenia write-backu.
-- **Rule**: Zanim zacommitujesz cokolwiek z przebiegu na prawdziwym środowisku, usuń identyfikatory kont — e-mail, `user_id`, tokeny, klucze. Opisuj **rolę**, nie osobę („konto operatora"). Zakładaj, że repo jest publiczne. Moment, w którym lokalna konwencja „konta syntetyczne" przestaje mieć zastosowanie, to moment, w którym zasadę trzeba zastosować **świadomie** — a nie moment, w którym ona wygasa.
+- **Context**: Any verification record, note in `change.md`/`plan.md`, Linear comment, or commit message produced after a pass against a **real** environment (production, shared staging) — as opposed to a local one.
+- **Problem**: The convention "we use synthetic accounts in records" (`verify-s09@local.test`) had existed since S-07 but was never written down — it held on its own, because every pass was local. The first production pass (S-09 P7) had no synthetic equivalent, so a real email address and user UUID landed in three files and were committed. The repo is **public**. Caught by a user's question one step before the push; it required rewriting two commits, which invalidated an already-recorded SHA and forced the write-back to be redone.
+- **Rule**: Before committing anything from a real-environment pass, strip account identifiers — email, `user_id`, tokens, keys. Describe the **role**, not the person ("the operator's account"). Assume the repo is public. The moment the local "synthetic accounts" convention stops applying is the moment the rule has to be applied **deliberately** — not the moment it expires.
 - **Applies to**: implement, impl-review, archive
 
 ## Sync plan-brief and other derived docs in the same pass as the plan edit
