@@ -64,3 +64,10 @@
 - **Problem**: Konwencja „w recordach używamy kont syntetycznych" (`verify-s09@local.test`) istniała od S-07, ale nigdy nie została zapisana — działała sama, bo wszystkie przebiegi były lokalne. Pierwszy przebieg produkcyjny (S-09 P7) nie miał syntetycznego odpowiednika, więc prawdziwy adres e-mail i UUID użytkownika trafiły do trzech plików i zostały zacommitowane. Repo jest **publiczne**. Złapane pytaniem użytkownika jeden krok przed pushem; wymagało przepisania dwóch commitów, co unieważniło już wpisany SHA i zmusiło do powtórzenia write-backu.
 - **Rule**: Zanim zacommitujesz cokolwiek z przebiegu na prawdziwym środowisku, usuń identyfikatory kont — e-mail, `user_id`, tokeny, klucze. Opisuj **rolę**, nie osobę („konto operatora"). Zakładaj, że repo jest publiczne. Moment, w którym lokalna konwencja „konta syntetyczne" przestaje mieć zastosowanie, to moment, w którym zasadę trzeba zastosować **świadomie** — a nie moment, w którym ona wygasa.
 - **Applies to**: implement, impl-review, archive
+
+## Sync plan-brief and other derived docs in the same pass as the plan edit
+
+- **Context**: Any derived document in `context/changes/<change-id>/` — `plan-brief.md`, `change.md`, `reviews/` — whenever `plan.md` changes: `/10x-plan-review` triage, mid-implementation corrections, manual fixes.
+- **Problem**: The drift is silent and durable. In `app-design-system` step 4, triage fixed 8 findings in `plan.md` while the brief drifted on seven separate points — its scope line still scoped the `charged` signal to "the two 422 sites" after triage had established three, plus a stale decisions table and phase-risk cells. Nothing in the triage loop would have caught it; it surfaced only because the user asked. The brief is the short doc read first, so a stale one hands the implementer the pre-review design.
+- **Rule**: Whenever a fix changes `plan.md`, propagate it to `plan-brief.md` — and to any other derived doc in the change folder — in the same pass. Never leave the brief for later.
+- **Applies to**: plan, plan-review, implement, impl-review
