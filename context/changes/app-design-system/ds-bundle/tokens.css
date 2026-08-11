@@ -14,6 +14,15 @@
 
 :root {                      /* light */
   --radius: 0.25rem;
+
+  /* Type. Space Grotesk for UI chrome, IBM Plex Sans for content — a summary is long
+     Polish prose read instead of watching the video, so the content face is chosen for
+     x-height and drawn diacritics, not for character. Both OFL: bundle them, no CDN
+     at runtime (this app is served from Cloudflare Workers). */
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, Menlo, Consolas, monospace;
+
   --background: #F4F4F5;   --foreground: #131316;
   --card: #FFFFFF;         --card-foreground: #131316;
   --popover: #FFFFFF;      --popover-foreground: #131316;
