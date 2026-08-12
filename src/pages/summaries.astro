@@ -30,7 +30,7 @@ if (user) {
       // Display-only: this balance is never the enforcement gate (that lives in the generation
       // endpoint, where getBalance must keep throwing), so a DB blip must not fail the page.
       // eslint-disable-next-line no-console
-      console.error("dashboard: credit balance read failed", err);
+      console.error("summaries: credit balance read failed", err);
     }
 
     try {
@@ -41,7 +41,7 @@ if (user) {
       // The list is not an enforcement gate either — a failed read logs and still renders the page,
       // as its own distinct state rather than as an empty corpus.
       // eslint-disable-next-line no-console
-      console.error("dashboard: summary list read failed", err);
+      console.error("summaries: summary list read failed", err);
     }
   }
 }

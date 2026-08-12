@@ -2,6 +2,7 @@
 import "../styles/global.css";
 import { Font } from "astro:assets";
 import Banner from "@/components/Banner.astro";
+import Topbar from "@/components/Topbar.astro";
 import { missingConfigs } from "@/lib/config-status";
 
 interface Props {
@@ -60,6 +61,7 @@ const { title = "10xMedia" } = Astro.props;
         </Banner>
       ))
     }
+    <Topbar />
     <slot />
   </body>
 </html>

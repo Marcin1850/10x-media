@@ -1,37 +1,53 @@
 ---
-const { user } = Astro.locals;
+import { AccountMenu } from "@/components/AccountMenu";
+import { copy } from "@/lib/copy";
+
+const { user, credits } = Astro.locals;
+
+// The summaries link renders on every route except the landing page — landing keeps a logo-only
+// left side (phase 8), signed in as well as signed out, because its own CTA is already the route
+// into the app and a second, competing link would fight it.
+const isLanding = Astro.url.pathname === "/";
 ---
 
-<div
-  class="mb-4 flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white/80"
->
-  {
-    user ? (
-      <>
-        <span class="text-blue-100/70">{user.email}</span>
-        <div class="flex items-center gap-3">
-          <a href="/dashboard" class="text-purple-300 transition-colors hover:text-purple-100 hover:underline">
-            Dashboard
+<header class="border-border bg-background border-b">
+  <div class="mx-auto flex h-14 max-w-5xl items-center justify-between px-4 sm:px-6">
+    <div class="flex items-center gap-6">
+      <a href="/" class="font-display text-foreground text-lg font-semibold tracking-tight"> 10xMedia </a>
+      {
+        !isLanding && (
+          <a href="/summaries" class="text-muted-foreground hover:text-foreground text-sm transition-colors">
+            {copy.nav.summaries}
           </a>
-          <form method="POST" action="/api/auth/signout">
-            <button type="submit" class="text-purple-300 transition-colors hover:text-purple-100 hover:underline">
-              Sign out
-            </button>
-          </form>
-        </div>
-      </>
-    ) : (
-      <>
-        <span class="text-blue-100/70">Not signed in</span>
-        <div class="flex gap-3">
-          <a href="/auth/signin" class="text-purple-300 transition-colors hover:text-purple-100 hover:underline">
-            Sign in
-          </a>
-          <a href="/auth/signup" class="text-purple-300 transition-colors hover:text-purple-100 hover:underline">
-            Sign up
-          </a>
-        </div>
-      </>
-    )
-  }
-</div>
+        )
+      }
+    </div>
+
+    <div class="flex items-center gap-4">
+      {
+        user ? (
+          <>
+            <div class="text-muted-foreground flex items-center gap-2 text-sm">
+              <span>{copy.nav.credits}</span>
+              {credits === null ? (
+                <span class="bg-muted h-4 w-8 animate-pulse rounded" aria-hidden="true" />
+              ) : (
+                <span class="text-foreground font-medium">{credits}</span>
+              )}
+            </div>
+            <AccountMenu client:load />
+          </>
+        ) : (
+          <div class="flex items-center gap-4 text-sm">
+            <a href="/auth/signin" class="text-muted-foreground hover:text-foreground transition-colors">
+              {copy.nav.signIn}
+            </a>
+            <a href="/auth/signup" class="text-foreground underline-offset-4 hover:underline">
+              {copy.nav.signUp}
+            </a>
+          </div>
+        )
+      }
+    </div>
+  </div>
+</header>

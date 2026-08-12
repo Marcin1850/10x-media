@@ -1016,10 +1016,10 @@ anything here.
 
 #### Automated
 
-- [x] 2.1 Type checking and linting pass
-- [x] 2.2 Build succeeds
-- [x] 2.3 `BUDGET_EVENT` string unchanged
-- [x] 2.4 `LibBadge` gone and referenced nowhere
+- [x] 2.1 Type checking and linting pass — a4ae502
+- [x] 2.2 Build succeeds — a4ae502
+- [x] 2.3 `BUDGET_EVENT` string unchanged — a4ae502
+- [x] 2.4 `LibBadge` gone and referenced nowhere — a4ae502
 
 #### Manual
 
@@ -1029,9 +1029,9 @@ anything here.
 
 #### Automated
 
-- [ ] 3.1 Linting and build pass
-- [ ] 3.2 No `/dashboard` reference survives
-- [ ] 3.3 `PROTECTED_ROUTES` contains `/summaries`
+- [x] 3.1 Linting and build pass
+- [x] 3.2 No `/dashboard` reference survives
+- [x] 3.3 `PROTECTED_ROUTES` contains `/summaries`
 
 #### Manual
 

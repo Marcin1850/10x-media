@@ -1,6 +1,4 @@
 ---
-import Topbar from "@/components/Topbar.astro";
-
 const { user } = Astro.locals;
 ---
 
@@ -27,8 +25,6 @@ const { user } = Astro.locals;
   </div>
 
   <div class="relative z-10 p-4 sm:p-8">
-    <Topbar />
-
     <!-- Hero section -->
     <div class="mx-auto flex max-w-4xl flex-col items-center justify-center px-4 py-24 text-center sm:py-32 lg:py-40">
       <h1
@@ -44,7 +40,7 @@ const { user } = Astro.locals;
         {
           user ? (
             <a
-              href="/dashboard"
+              href="/summaries"
               class="inline-flex items-center justify-center rounded-lg bg-purple-600 px-6 py-3 text-base font-medium text-white transition-colors hover:bg-purple-500"
             >
               Go to Dashboard

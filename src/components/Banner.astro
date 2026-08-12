@@ -1,4 +1,6 @@
 ---
+import { AlertTriangleIcon } from "lucide-react";
+
 type Variant = "info" | "warning" | "error";
 
 interface Props {
@@ -9,11 +11,16 @@ const { variant = "info" } = Astro.props;
 ---
 
 <div class:list={["banner", `banner--${variant}`]} role={variant === "error" ? "alert" : "status"}>
+  {variant === "warning" && <AlertTriangleIcon aria-hidden="true" class="banner__icon" width="16" height="16" />}
   <slot />
 </div>
 
 <style>
   .banner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
     padding: 0.75rem 1rem;
     font-size: 0.875rem;
     text-align: center;
@@ -24,19 +31,26 @@ const { variant = "info" } = Astro.props;
     text-decoration: underline;
     font-weight: 600;
   }
+  .banner :global(.banner__icon) {
+    flex-shrink: 0;
+  }
+  /* info: --muted */
   .banner--info {
-    background: #dbeafe;
-    color: #1e3a8a;
-    border-color: #3b82f6;
+    background: var(--muted);
+    color: var(--muted-foreground);
+    border-color: var(--border);
   }
+  /* Neutral warning treatment — not --attention, which is reserved for the 409 cost gate alone
+     (see global.css). Severity is carried by the icon and the copy, not by color. */
   .banner--warning {
-    background: #fef3c7;
-    color: #78350f;
-    border-color: #f59e0b;
+    background: var(--card);
+    color: var(--foreground);
+    border-color: var(--border);
   }
+  /* Recoverable-error slot: --destructive 2px border + text over a 10% fill. */
   .banner--error {
-    background: #fee2e2;
-    color: #7f1d1d;
-    border-color: #dc2626;
+    background: color-mix(in srgb, var(--destructive) 10%, transparent);
+    color: var(--destructive);
+    border: 2px solid var(--destructive);
   }
 </style>
