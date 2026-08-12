@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { copy } from "@/lib/copy";
 import type { ChannelCharacter } from "@/types";
 
 /**
@@ -100,35 +101,35 @@ function messageForStatus(status: number, serverError?: string): string {
       // Three distinct causes answer 429 (generation lease, idempotent in-progress replay, transcript
       // rate cap), each with its own server message. Prefer the server's so a cooldown doesn't
       // misreport as lock contention; the fallback covers a non-JSON 429.
-      return serverError ?? "A summary is already being generated. Wait for it to finish before starting another.";
+      return serverError ?? copy.errors.alreadyGenerating;
     case 413:
-      return "This video is too long to summarize.";
+      return copy.errors.tooLong;
     case 422:
       // Three distinct causes answer 422 (no caption track, a vendor success carrying no words, and
       // a transient fetch failure), each with its own server message. Prefer the server's so a video
       // that will NEVER be summarizable doesn't misreport as a retryable hiccup; the fallback covers
       // a non-JSON 422.
-      return serverError ?? "No transcript is available for this video.";
+      return serverError ?? copy.errors.noTranscript;
     case 502:
-      return "The transcript or summarization service failed. Please try again.";
+      return copy.errors.serviceFailed;
     case 503:
       // Two very different causes answer 503, and collapsing them into the configuration one is what
       // this used to do: a missing service-role or provider key (genuinely a configuration problem the
       // user cannot affect) and a tripped budget breaker (a temporary capacity problem that resolves
       // on its own). Prefer the server's string so "try again in a while" is not reported as "this is
       // broken"; the fallback covers a non-JSON 503.
-      return serverError ?? "Summary generation isn't configured.";
+      return serverError ?? copy.errors.notConfigured;
     case 500:
       // Several distinct server-side 500s exist (pre-save infrastructure failures vs. a persistence
       // failure), each with its own message. Prefer the server's so a lock/balance/reserve failure
       // doesn't misreport as a save failure; the generic fallback covers a non-JSON framework 500.
-      return serverError ?? "Something went wrong. Please try again.";
+      return serverError ?? copy.errors.generic;
     case 401:
-      return "Your session expired — sign in again.";
+      return copy.errors.sessionExpired;
     case 400:
-      return serverError ?? "Please check the video URL and try again.";
+      return serverError ?? copy.errors.checkUrl;
     default:
-      return serverError ?? "Something went wrong. Please try again.";
+      return serverError ?? copy.errors.generic;
   }
 }
 
@@ -223,7 +224,7 @@ export function useGenerateSummary({
       // Only surface the error if this is still the current request; a superseded one just clears
       // loading and retracts its own attempt — with no error to show, an attempt left behind names a
       // request that has no status at all.
-      if (seq === requestSeq.current) setError("Network error — please try again.");
+      if (seq === requestSeq.current) setError(copy.errors.network);
       else if (attemptSeq.current === seq) setAttempt(null);
       setLoading(false);
       return;
@@ -296,7 +297,7 @@ export function useGenerateSummary({
     }
 
     if (response.status === 402) {
-      setError(payload.error ?? "You don't have enough summary credits.");
+      setError(payload.error ?? copy.errors.noCredits);
       // A 402 can arrive with a fresh authoritative balance in the message; if the server also sent a
       // number, prefer it. The endpoint currently embeds the balance in `error`, so nothing to sync here.
       setConfirm(null);

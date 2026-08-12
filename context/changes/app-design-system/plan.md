@@ -1062,8 +1062,8 @@ anything here.
 
 #### Automated
 
-- [x] 5.1 Linting and build pass
-- [x] 5.2 `CHARACTER_LABEL` still has exactly one definition
+- [x] 5.1 Linting and build pass — 28ff930
+- [x] 5.2 `CHARACTER_LABEL` still has exactly one definition — 28ff930
 
 #### Manual
 
@@ -1077,8 +1077,8 @@ anything here.
 
 #### Automated
 
-- [ ] 6.1 Linting and build pass
-- [ ] 6.2 No `Dialog` import remains in the summaries tree
+- [x] 6.1 Linting and build pass
+- [x] 6.2 No `Dialog` import remains in the summaries tree
 
 #### Manual
 

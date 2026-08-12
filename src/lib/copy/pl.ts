@@ -84,6 +84,7 @@ export const pl = {
   summaries: {
     page: {
       title: "Podsumowania",
+      heading: "Twoje podsumowania",
     },
     character: {
       informational: "Informacyjny",
@@ -109,8 +110,49 @@ export const pl = {
       summaryOf: (title: string) => `podsumowanie: ${title}`,
     },
   },
-  generate: {},
+  generate: {
+    urlLabel: "Adres URL z YouTube",
+    urlPlaceholder: "https://www.youtube.com/watch?v=...",
+    urlInvalid: "Podaj prawidłowy adres URL filmu z YouTube.",
+    characterLabel: "Charakter kanału",
+    characters: {
+      informational: { label: "Informacyjny", hint: "Kluczowe fakty i dane" },
+      educational: { label: "Edukacyjny", hint: "Tematy i umiejętności do nauki" },
+    },
+    allowLong: "Zezwól na długie filmy (może kosztować 2 kredyty)",
+    submit: "Generuj podsumowanie",
+    submitPending: "Generowanie…",
+    confirmSubmit: (cost: number) => `Generuj mimo to (${cost} kr.)`,
+    noCredits: "Nie masz już kredytów na podsumowania. Generowanie jest wyłączone.",
+    balanceUnavailable:
+      "Twoje saldo kredytów jest teraz niedostępne. Nadal możesz generować — poinformujemy Cię, jeśli kredytów zabraknie.",
+    gate: {
+      held: (cost: number, resultingBalance: number | null) =>
+        `Generowanie wstrzymane — to długi film. Koszt: ${cost} kr. Saldo po potwierdzeniu: ${
+          resultingBalance ?? "—"
+        } kr.`,
+      reviewAction: "Przejdź do paska generowania, aby potwierdzić",
+      tooExpensive: (cost: number, credits: number) => `Za mało kredytów — potrzebujesz ${cost}, masz ${credits}.`,
+    },
+    status: {
+      generating: "Generowanie podsumowania…",
+      saved: "Podsumowanie zapisane — dodawanie do listy…",
+      savedRefreshFailed: "Podsumowanie zapisane. Odśwież stronę, aby zobaczyć je na liście.",
+    },
+    dismissFailed: "Odrzuć to nieudane generowanie",
+  },
   account: {},
   landing: {},
-  errors: {},
+  errors: {
+    generic: "Coś poszło nie tak. Spróbuj ponownie.",
+    network: "Błąd sieci — spróbuj ponownie.",
+    alreadyGenerating: "Podsumowanie jest już generowane. Poczekaj, aż się zakończy, zanim rozpoczniesz kolejne.",
+    tooLong: "Ten film jest zbyt długi, aby go podsumować.",
+    noTranscript: "Brak dostępnego transkryptu dla tego filmu.",
+    serviceFailed: "Usługa transkryptu lub podsumowań zawiodła. Spróbuj ponownie.",
+    notConfigured: "Generowanie podsumowań nie jest skonfigurowane.",
+    sessionExpired: "Twoja sesja wygasła — zaloguj się ponownie.",
+    checkUrl: "Sprawdź adres URL filmu i spróbuj ponownie.",
+    noCredits: "Nie masz wystarczającej liczby kredytów.",
+  },
 };

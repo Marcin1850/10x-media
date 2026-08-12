@@ -4,6 +4,7 @@ import { SummaryCard, CHARACTER_LABEL } from "@/components/summaries/SummaryCard
 import { PendingSummaryCard, type PendingSummary } from "@/components/summaries/PendingSummaryCard";
 import { cn } from "@/lib/utils";
 import { copy } from "@/lib/copy";
+import type { ConfirmState } from "@/components/hooks/useGenerateSummary";
 import type { ChannelCharacter, SummaryListItem } from "@/types";
 
 interface Props {
@@ -21,6 +22,11 @@ interface Props {
    * component only places it. Refreshing is the caller's job too — the list stays controlled.
    */
   pending: PendingSummary | null;
+  /** The active long-video quote, forwarded to the pending card's cost gate. Not folded into
+   *  `pending` itself — see `PendingSummaryCard`'s `Props` for why. */
+  confirm: ConfirmState | null;
+  /** The live balance, forwarded to the pending card's cost gate. */
+  credits: number | null;
   /** The post-generation re-read failed: the summary is saved, this list just doesn't have it yet. */
   unlisted: UnlistedSummary | null;
   onPendingConfirm: () => void;
@@ -67,6 +73,8 @@ export function SummaryList({
   summaries,
   listUnavailable,
   pending,
+  confirm,
+  credits,
   unlisted,
   onPendingConfirm,
   onPendingDismiss,
@@ -80,7 +88,13 @@ export function SummaryList({
   // default; the filter is for browsing what is saved.
   const pendingCard =
     pending === null ? null : (
-      <PendingSummaryCard pending={pending} onConfirm={onPendingConfirm} onDismiss={onPendingDismiss} />
+      <PendingSummaryCard
+        pending={pending}
+        confirm={confirm}
+        credits={credits}
+        onConfirm={onPendingConfirm}
+        onDismiss={onPendingDismiss}
+      />
     );
 
   // The re-read after a generation is best-effort, so its failure never discards the list that is

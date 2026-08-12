@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 import { CircleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,8 @@ interface FormFieldProps {
   icon: ReactNode;
   endContent?: ReactNode;
   autoComplete?: string;
+  /** Forwarded to the underlying input, e.g. so a caller can move focus to it programmatically. */
+  inputRef?: Ref<HTMLInputElement>;
 }
 
 export function FormField({
@@ -32,6 +34,7 @@ export function FormField({
   icon,
   endContent,
   autoComplete,
+  inputRef,
 }: FormFieldProps) {
   return (
     <div>
@@ -41,6 +44,7 @@ export function FormField({
       <div className="relative">
         <span className="text-muted-foreground absolute top-1/2 left-3 size-4 -translate-y-1/2">{icon}</span>
         <Input
+          ref={inputRef}
           id={id}
           name={name ?? id}
           type={type}

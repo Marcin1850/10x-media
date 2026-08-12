@@ -2,7 +2,7 @@
 import Layout from "@/layouts/Layout.astro";
 import { createClient } from "@/lib/supabase";
 import { listSummaries } from "@/lib/services/summary-list";
-import { DashboardSummaries } from "@/components/summaries/DashboardSummaries";
+import { SummariesSurface } from "@/components/summaries/DashboardSummaries";
 import { copy } from "@/lib/copy";
 import type { SummaryListItem } from "@/types";
 
@@ -36,7 +36,7 @@ if (user) {
 
 <Layout title={copy.summaries.page.title}>
   <div class="mx-auto w-full max-w-3xl space-y-6 p-4 py-8">
-    <DashboardSummaries
+    <SummariesSurface
       client:load
       initialSummaries={summaries}
       initialCredits={credits}

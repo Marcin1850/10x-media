@@ -1,11 +1,9 @@
 import { useRef, useState } from "react";
-import { Plus } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import GenerateSummaryForm from "@/components/summaries/GenerateSummaryForm";
 import { SummaryList, type UnlistedSummary } from "@/components/summaries/SummaryList";
 import type { PendingSummary } from "@/components/summaries/PendingSummaryCard";
 import { useGenerateSummary, type LastSuccess } from "@/components/hooks/useGenerateSummary";
+import { copy } from "@/lib/copy";
 import type { ChannelCharacter, SummaryListItem } from "@/types";
 
 interface Props {
@@ -26,22 +24,25 @@ interface Props {
 const REFRESH_RETRY_DELAYS_MS = [250, 750];
 
 /**
- * The dashboard's single island: it owns the generation hook, the dialog that hosts the form, and
- * the list.
+ * The summaries surface's single island: it owns the generation hook, the capture bar, and the list.
  *
- * Its reason to exist is lifetime. The dialog is freely dismissable and `ui/dialog` unmounts its
- * content on close, so a `GenerateSummaryForm` that owned its own request could not finish a paid
- * generation the user walked away from. Everything that must outlive the dialog — the request
- * lifecycle in `useGenerateSummary`, and the three inputs the quote is priced from — lives here
- * instead. No `forceMount` is needed once the state is at this level.
+ * Its reason to exist is lifetime. The capture bar is always mounted now — there is no dialog to
+ * unmount it — but the three quote-relevant inputs and the request lifecycle still live here rather
+ * than in the form, because a generation that outlives a page navigation away from `/summaries` is
+ * not a case this app tries to support, while a generation that outlives the form re-rendering for
+ * an unrelated reason is. No `forceMount` concern remains once the dialog is gone; the state stays
+ * lifted anyway so the quote and the inputs it was priced from cannot drift apart.
  *
  * **Single owner of list state.** `summaries` is held here and passed down to the controlled
  * `SummaryList`, which keeps only its filter. The re-read after a generation therefore has exactly
  * one place to land, and the list never holds a second source of truth for the same corpus.
  */
-export function DashboardSummaries({ initialSummaries, initialCredits, listUnavailable }: Props) {
-  const [dialogOpen, setDialogOpen] = useState(false);
-  // The three quote-relevant inputs, held above the dialog so closing it cannot destroy them.
+export function SummariesSurface({ initialSummaries, initialCredits, listUnavailable }: Props) {
+  // The capture bar's URL input. A long-video 409 can arrive with the bar scrolled out of view — the
+  // pending card's cost gate already states everything (thumbnail, cost, balance); this just returns
+  // focus to where "Generate anyway" lives, replacing the old dialog reopen.
+  const urlInputRef = useRef<HTMLInputElement>(null);
+  // The three quote-relevant inputs.
   const [url, setUrl] = useState("");
   const [character, setCharacter] = useState<ChannelCharacter>("informational");
   const [allowLong, setAllowLong] = useState(false);
@@ -61,8 +62,8 @@ export function DashboardSummaries({ initialSummaries, initialCredits, listUnava
   const generation = useGenerateSummary({
     initialCredits,
     // Clearing policy: the inputs are cleared ONLY on a successful generation, so the next summary
-    // starts from a clean form. An error, a dismissed dialog and a pending confirmation all retain
-    // them — each is a state the user may want to retry or confirm from.
+    // starts from a clean form. An error and a pending confirmation both retain them — each is a
+    // state the user may want to retry or confirm from.
     //
     // `allowLong` in particular must not survive: it is per-video consent to a 2-credit charge, and
     // leaving it set would let the NEXT long video be charged double with no confirmation prompt at
@@ -101,9 +102,9 @@ export function DashboardSummaries({ initialSummaries, initialCredits, listUnava
    * a reload would render — the generate response carries no video metadata, so a card assembled
    * from it would quietly differ from itself after a refresh.
    *
-   * Best-effort by design. Its failure annotates the list and never discards the paid result already
-   * rendered in the dialog, and it retains the pending card rather than clearing it, so the user
-   * still sees what was generated.
+   * Best-effort by design. Its failure annotates the list and never discards the paid result the
+   * generation hook already committed, and it retains the pending card rather than clearing it, so
+   * the user still sees what was generated.
    *
    * **Bound to the success it serves.** A read is only allowed to retire the pending card once it
    * can prove the saved row is in the list it returned, and then only the attempt this success came
@@ -198,60 +199,42 @@ export function DashboardSummaries({ initialSummaries, initialCredits, listUnava
         };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-4">
-        <h2 className="text-lg font-semibold text-white">Your summaries</h2>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger asChild>
-            <Button
-              type="button"
-              className="rounded-lg bg-purple-600 px-4 py-2 font-medium text-white transition-colors hover:bg-purple-500"
-            >
-              <Plus className="size-4" />
-              New summary
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="max-h-[85vh] overflow-y-auto border-white/10 bg-[#0f1529] text-white sm:max-w-lg">
-            {/* Radix requires a title and description for the dialog's accessible name. The form
-                carries its own visible heading next to the credit chip, so these stay screen-reader
-                only rather than duplicating it. */}
-            <DialogTitle className="sr-only">Generate a summary</DialogTitle>
-            <DialogDescription className="sr-only">
-              Paste a YouTube URL and choose the channel character to generate a summary.
-            </DialogDescription>
-            <GenerateSummaryForm
-              url={url}
-              onUrlChange={(value) => {
-                setUrl(value);
-                generation.inputsChanged();
-              }}
-              character={character}
-              onCharacterChange={(value) => {
-                setCharacter(value);
-                generation.inputsChanged();
-              }}
-              allowLong={allowLong}
-              onAllowLongChange={(value) => {
-                setAllowLong(value);
-                // Keeps the quote: the toggle does not change which video is priced, and it is the
-                // very consent the confirmation prompt is asking for.
-                generation.inputsChanged({ keepConfirm: true });
-              }}
-              generation={generation}
-            />
-          </DialogContent>
-        </Dialog>
-      </div>
+    <div className="space-y-6">
+      <h1 className="font-display text-foreground text-lg font-semibold">{copy.summaries.page.heading}</h1>
+
+      <GenerateSummaryForm
+        url={url}
+        onUrlChange={(value) => {
+          setUrl(value);
+          generation.inputsChanged();
+        }}
+        character={character}
+        onCharacterChange={(value) => {
+          setCharacter(value);
+          generation.inputsChanged();
+        }}
+        allowLong={allowLong}
+        onAllowLongChange={(value) => {
+          setAllowLong(value);
+          // Keeps the quote: the toggle does not change which video is priced, and it is the
+          // very consent the confirmation prompt is asking for.
+          generation.inputsChanged({ keepConfirm: true });
+        }}
+        generation={generation}
+        urlInputRef={urlInputRef}
+      />
 
       <SummaryList
         summaries={summaries}
         listUnavailable={unavailable}
         pending={pending}
+        confirm={generation.confirm}
+        credits={generation.credits}
         unlisted={unlisted}
-        // The 409 can arrive with the dialog closed. Send the user back to the form, where the
-        // priced consent copy already lives, rather than quoting the price a second time here.
+        // The gate's full detail already renders in the pending card; this just returns the user's
+        // focus to the capture bar, where the submit button is the actual "generate anyway" trigger.
         onPendingConfirm={() => {
-          setDialogOpen(true);
+          urlInputRef.current?.focus();
         }}
         // Wrapped rather than passed through: `clearAttempt` now takes an optional attempt id, and
         // a bare handler reference would hand it the click event. The user dismisses the card they
