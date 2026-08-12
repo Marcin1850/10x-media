@@ -1006,11 +1006,11 @@ anything here.
 
 #### Manual
 
-- [ ] 1.4 Both faces load from the app's own origin
-- [ ] 1.5 Exactly four font preload links in `<head>`
-- [ ] 1.6 Polish diacritics render in the loaded faces
-- [ ] 1.7 Every page sits on the flat ground
-- [ ] 1.8 `bg-attention` produces amber
+- [x] 1.4 Both faces load from the app's own origin — verified 2026-08-12
+- [x] 1.5 Exactly four font preload links in `<head>` — verified 2026-08-12
+- [x] 1.6 Polish diacritics render in the loaded faces — verified 2026-08-12
+- [x] 1.7 Every page sits on the flat ground — verified 2026-08-12
+- [x] 1.8 `bg-attention` produces amber — verified 2026-08-12
 
 ### Phase 2: Shared infrastructure
 
@@ -1023,7 +1023,7 @@ anything here.
 
 #### Manual
 
-- [ ] 2.5 Budget event logs in the same shape as before the refactor
+- [x] 2.5 Budget event logs in the same shape as before the refactor — verified 2026-08-12 (confirmed via diff a4ae502^..a4ae502: `reportEvent` reproduces the exact `${key} ${JSON.stringify(payload)}` format and warn/error split byte-for-byte; a live generation did not itself cross a warn/stop/untracked threshold, which is expected on a fresh Supadata budget)
 
 ### Phase 3: App shell
 
@@ -1035,13 +1035,13 @@ anything here.
 
 #### Manual
 
-- [ ] 3.4 Same topbar shell on all four surfaces; summaries link on all but `/`
-- [ ] 3.5 Right side branches correctly on identity
-- [ ] 3.6 Avatar menu: click, Escape, arrow keys
-- [ ] 3.7 Top-up notice shows and emits one warning
-- [ ] 3.8 `/dashboard` 404s; `/summaries` loads and still protects
-- [ ] 3.9 Missing balance shimmers rather than showing `0`
-- [ ] 3.10 Banner `warning` renders neutral, not amber, and passes AA on the dark ground
+- [x] 3.4 Same topbar shell on all four surfaces; summaries link on all but `/` — verified 2026-08-12
+- [x] 3.5 Right side branches correctly on identity — verified 2026-08-12
+- [x] 3.6 Avatar menu: click, Escape, arrow keys — verified 2026-08-12
+- [x] 3.7 Top-up notice shows and emits one warning — verified 2026-08-12
+- [x] 3.8 `/dashboard` 404s; `/summaries` loads and still protects — verified 2026-08-12
+- [x] 3.9 Missing balance shimmers rather than showing `0` — verified 2026-08-12
+- [x] 3.10 Banner `warning` renders neutral, not amber, and passes AA on the dark ground — verified 2026-08-12 (contrast ratio 15.17:1)
 
 ### Phase 4: Auth surfaces
 
