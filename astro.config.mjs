@@ -1,6 +1,6 @@
 // @ts-check
 import { fileURLToPath } from "node:url";
-import { defineConfig, envField } from "astro/config";
+import { defineConfig, envField, fontProviders } from "astro/config";
 
 import react from "@astrojs/react";
 import sitemap from "@astrojs/sitemap";
@@ -11,6 +11,31 @@ import cloudflare from "@astrojs/cloudflare";
 export default defineConfig({
   output: "server",
   integrations: [react(), sitemap()],
+  // Both families are downloaded at build and self-hosted from the output — no CDN at runtime, which
+  // is a hard constraint on Workers. `subsets` carries the Polish diacritics (`latin-ext`) the type
+  // decision rests on; `styles` is NOT optional housekeeping — Astro defaults to
+  // ["normal", "italic"], which would silently double the generated face count with italics this
+  // scale never uses. Weights are exactly the ones ds-bundle/type.html specifies.
+  fonts: [
+    {
+      provider: fontProviders.google(),
+      name: "Space Grotesk",
+      cssVariable: "--font-space-grotesk",
+      weights: [400, 500, 600, 700],
+      styles: ["normal"],
+      subsets: ["latin", "latin-ext"],
+      fallbacks: ["ui-sans-serif", "system-ui", "sans-serif"],
+    },
+    {
+      provider: fontProviders.google(),
+      name: "IBM Plex Sans",
+      cssVariable: "--font-ibm-plex-sans",
+      weights: [400, 500, 600],
+      styles: ["normal"],
+      subsets: ["latin", "latin-ext"],
+      fallbacks: ["ui-sans-serif", "system-ui", "sans-serif"],
+    },
+  ],
   vite: {
     plugins: [tailwindcss()],
     resolve: {

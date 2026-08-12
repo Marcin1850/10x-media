@@ -1000,9 +1000,9 @@ anything here.
 
 #### Automated
 
-- [ ] 1.1 Build succeeds and emits both font families
-- [ ] 1.2 Linting passes
-- [ ] 1.3 No `bg-cosmic` reference remains
+- [x] 1.1 Build succeeds and emits both font families
+- [x] 1.2 Linting passes
+- [x] 1.3 No `bg-cosmic` reference remains
 
 #### Manual
 

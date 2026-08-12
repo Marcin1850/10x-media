@@ -1,5 +1,6 @@
 ---
 import "../styles/global.css";
+import { Font } from "astro:assets";
 import Banner from "@/components/Banner.astro";
 import { missingConfigs } from "@/lib/config-status";
 
@@ -11,12 +12,34 @@ const { title = "10xMedia" } = Astro.props;
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang="pl" class="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <title>{title}</title>
+    {
+      /* Filtered preloads, never a bare `preload` — that means `true` and emits a <link rel="preload">
+        for EVERY generated face (7 weights x 2 subsets). These four are the only ones above the fold:
+        the display face at 600 for the topbar logo and page heading, the body face at 400 for prose.
+        `latin-ext` is preloaded alongside `latin` on purpose — the copy is Polish, so the diacritic
+        subset is critical, not a long tail. Every other weight still loads, just not eagerly; if a
+        render shows a visible swap, add that specific face here rather than reverting to `true`. */
+    }
+    <Font
+      cssVariable="--font-space-grotesk"
+      preload={[
+        { weight: 600, subset: "latin" },
+        { weight: 600, subset: "latin-ext" },
+      ]}
+    />
+    <Font
+      cssVariable="--font-ibm-plex-sans"
+      preload={[
+        { weight: 400, subset: "latin" },
+        { weight: 400, subset: "latin-ext" },
+      ]}
+    />
   </head>
   <body>
     {
