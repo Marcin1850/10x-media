@@ -1016,10 +1016,10 @@ anything here.
 
 #### Automated
 
-- [ ] 2.1 Type checking and linting pass
-- [ ] 2.2 Build succeeds
-- [ ] 2.3 `BUDGET_EVENT` string unchanged
-- [ ] 2.4 `LibBadge` gone and referenced nowhere
+- [x] 2.1 Type checking and linting pass
+- [x] 2.2 Build succeeds
+- [x] 2.3 `BUDGET_EVENT` string unchanged
+- [x] 2.4 `LibBadge` gone and referenced nowhere
 
 #### Manual
 
