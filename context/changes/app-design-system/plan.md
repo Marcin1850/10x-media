@@ -1077,8 +1077,8 @@ anything here.
 
 #### Automated
 
-- [x] 6.1 Linting and build pass
-- [x] 6.2 No `Dialog` import remains in the summaries tree
+- [x] 6.1 Linting and build pass — 64b0f57
+- [x] 6.2 No `Dialog` import remains in the summaries tree — 64b0f57
 
 #### Manual
 
