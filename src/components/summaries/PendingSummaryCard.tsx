@@ -67,6 +67,9 @@ interface Props {
 export function PendingSummaryCard({ pending, confirm, credits, onConfirm, onDismiss }: Props) {
   const isGate = pending.status === "needs-confirmation";
   const gateYoutubeId = isGate && confirm !== null ? extractYoutubeId(confirm.url) : null;
+  // Matches `GenerateSummaryForm`'s `confirmTooExpensive`: the known balance can't cover the quote, so
+  // no resulting balance can ever be shown — only a known-insufficient one could go negative.
+  const gateTooExpensive = confirm !== null && credits !== null && credits < confirm.cost;
 
   return (
     <article
@@ -146,12 +149,17 @@ export function PendingSummaryCard({ pending, confirm, credits, onConfirm, onDis
 
         {/* The cost gate. States four things and only those: the run is held, the reason is a long
             video, the price, and the balance that would remain — both numbers interpolated, never
-            baked into the string. No title, channel or duration: the 409 body carries none. */}
+            baked into the string. No title, channel or duration: the 409 body carries none.
+            The resulting-balance sentence only applies when confirmation could actually proceed —
+            a known-insufficient balance uses the same shortfall copy the capture bar shows, since no
+            resulting balance is possible to state truthfully. */}
         {isGate && confirm !== null ? (
           <div className="mt-2 space-y-2">
             <p className="text-attention-text flex items-start gap-2 text-xs">
               <CircleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-              {copy.generate.gate.held(confirm.cost, credits === null ? null : credits - confirm.cost)}
+              {gateTooExpensive
+                ? copy.generate.gate.tooExpensive(confirm.cost, credits)
+                : copy.generate.gate.held(confirm.cost, credits === null ? null : credits - confirm.cost)}
             </p>
             <Button
               type="button"

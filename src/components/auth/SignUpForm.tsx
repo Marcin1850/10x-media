@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { Mail, Lock, UserPlus } from "lucide-react";
 import { FormField } from "@/components/auth/FormField";
 import { PasswordToggle } from "@/components/auth/PasswordToggle";
@@ -19,6 +19,10 @@ export default function SignUpForm({ serverError }: Props) {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [errors, setErrors] = useState<{ email?: string; password?: string; confirmPassword?: string }>({});
+  const [submitting, setSubmitting] = useState(false);
+  const emailRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
+  const confirmPasswordRef = useRef<HTMLInputElement>(null);
 
   function validate() {
     const next: typeof errors = {};
@@ -42,6 +46,13 @@ export default function SignUpForm({ serverError }: Props) {
     }
 
     setErrors(next);
+    if (next.email) {
+      emailRef.current?.focus();
+    } else if (next.password) {
+      passwordRef.current?.focus();
+    } else if (next.confirmPassword) {
+      confirmPasswordRef.current?.focus();
+    }
     return Object.keys(next).length === 0;
   }
 
@@ -52,7 +63,9 @@ export default function SignUpForm({ serverError }: Props) {
   function handleSubmit(e: React.SubmitEvent<HTMLFormElement>) {
     if (!validate()) {
       e.preventDefault();
+      return;
     }
+    setSubmitting(true);
   }
 
   const passwordHint =
@@ -77,6 +90,7 @@ export default function SignUpForm({ serverError }: Props) {
         error={errors.email}
         icon={<Mail className="size-4" />}
         autoComplete="email"
+        inputRef={emailRef}
       />
 
       <FormField
@@ -93,6 +107,7 @@ export default function SignUpForm({ serverError }: Props) {
         hint={passwordHint}
         icon={<Lock className="size-4" />}
         autoComplete="new-password"
+        inputRef={passwordRef}
         endContent={
           <PasswordToggle
             visible={showPassword}
@@ -119,6 +134,7 @@ export default function SignUpForm({ serverError }: Props) {
         error={errors.confirmPassword}
         icon={<Lock className="size-4" />}
         autoComplete="new-password"
+        inputRef={confirmPasswordRef}
         endContent={
           <PasswordToggle
             visible={showConfirmPassword}
@@ -133,7 +149,7 @@ export default function SignUpForm({ serverError }: Props) {
 
       <ServerError message={serverError} />
 
-      <SubmitButton pendingText={copy.auth.signUp.pending} icon={<UserPlus className="size-4" />}>
+      <SubmitButton pending={submitting} pendingText={copy.auth.signUp.pending} icon={<UserPlus className="size-4" />}>
         {copy.auth.signUp.submit}
       </SubmitButton>
     </form>

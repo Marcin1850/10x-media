@@ -86,7 +86,8 @@ export interface UseGenerateSummary {
    * The UI has consumed this attempt's terminal state and no longer needs to name it. Pass the
    * `GenerateAttempt.id` that was consumed to clear only that attempt; a newer one is left standing.
    * Called with no argument it clears whatever is current — for the user dismissing the card they
-   * can see, which is by definition the live one.
+   * can see, which is by definition the live one. Also clears `error` when the attempt it belongs to
+   * is the one being cleared, so a dismissed failure doesn't keep rendering elsewhere.
    */
   clearAttempt: (attemptId?: number) => void;
 }
@@ -259,7 +260,12 @@ export function useGenerateSummary({
       // The paid result and the new balance are applied above regardless. The success *event* needs
       // an id to be actionable, so a success answered without one — a contract the endpoint never
       // breaks today — raises no event rather than one no consumer can confirm the list against.
-      if (typeof payload.summaryId !== "string") return;
+      // Without a terminal error either, the pending card's status derivation has no success and no
+      // failure to read, so it falls back to "generating" forever — raise one so the card resolves.
+      if (typeof payload.summaryId !== "string") {
+        setError(copy.errors.savedResponseInvalid);
+        return;
+      }
       const success: LastSuccess = {
         seq: (successSeq.current += 1),
         attemptId: seq,
@@ -336,12 +342,16 @@ export function useGenerateSummary({
       setConfirm(null);
     },
     clearAttempt: (attemptId) => {
-      // Functional update on purpose: the caller that has an id to check reaches this from inside
-      // async work whose closure was captured before a newer attempt could have been installed, so
-      // the comparison has to run against the live attempt, not the one that render saw.
+      // Guarded against `attemptSeq`, not the `attempt` state closure: the caller that has an id to
+      // check reaches this from inside async work whose closure was captured before a newer attempt
+      // could have been installed, so the comparison has to run against the live attempt, not the one
+      // that render saw. A stale id is a no-op — the error it would otherwise clear belongs to the
+      // newer, still-standing attempt.
+      if (attemptId !== undefined && attemptSeq.current !== attemptId) return;
       setAttempt((current) =>
         current === null || (attemptId !== undefined && current.id !== attemptId) ? current : null,
       );
+      setError(null);
     },
   };
 }

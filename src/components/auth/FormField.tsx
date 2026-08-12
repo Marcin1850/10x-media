@@ -36,6 +36,9 @@ export function FormField({
   autoComplete,
   inputRef,
 }: FormFieldProps) {
+  const errorId = `${id}-error`;
+  const hintId = `${id}-hint`;
+
   return (
     <div>
       <Label htmlFor={id} className="text-muted-foreground mb-1">
@@ -55,18 +58,19 @@ export function FormField({
           placeholder={placeholder}
           autoComplete={autoComplete}
           aria-invalid={!!error}
+          aria-describedby={error ? errorId : hint ? hintId : undefined}
           className={cn("pl-10", endContent && "pr-10")}
         />
         {endContent}
       </div>
       {error ? (
-        <p className="text-destructive mt-1 flex items-center gap-1 text-xs">
+        <p id={errorId} role="alert" className="text-destructive mt-1 flex items-center gap-1 text-xs">
           <CircleAlert className="size-3" />
           {error}
         </p>
-      ) : (
-        hint
-      )}
+      ) : hint ? (
+        <div id={hintId}>{hint}</div>
+      ) : null}
     </div>
   );
 }

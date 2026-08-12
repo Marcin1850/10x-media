@@ -88,7 +88,14 @@ export default function GenerateSummaryForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="border-border bg-card space-y-4 rounded-xl border p-4" noValidate>
+    <form
+      onSubmit={handleSubmit}
+      className={cn(
+        "border-border space-y-4 rounded-xl border p-4",
+        noCredits ? "bg-background text-muted-foreground" : "bg-card",
+      )}
+      noValidate
+    >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
         <div className="flex-1">
           <FormField
@@ -112,7 +119,7 @@ export default function GenerateSummaryForm({
                 <label
                   key={option.value}
                   className={cn(
-                    "cursor-pointer rounded-lg border px-3 py-2 transition-colors",
+                    "has-[:focus-visible]:border-ring has-[:focus-visible]:ring-ring/50 cursor-pointer rounded-lg border px-3 py-2 transition-colors outline-none has-[:focus-visible]:ring-[3px]",
                     selected
                       ? "border-border bg-secondary text-foreground"
                       : "border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground bg-transparent",

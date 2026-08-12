@@ -19,6 +19,29 @@ function derivedThumbnailUrl(youtubeId: string): string {
 }
 
 /**
+ * Hosts YouTube actually serves thumbnails from. `reportedUrl` is third-party metadata persisted
+ * without validation at write time — allowlisting here, at render time, is what stops a malformed or
+ * compromised reported value from making every viewer's browser request an arbitrary origin.
+ */
+const ALLOWED_THUMBNAIL_HOSTS = new Set([
+  "i.ytimg.com",
+  "i1.ytimg.com",
+  "i2.ytimg.com",
+  "i3.ytimg.com",
+  "i4.ytimg.com",
+  "img.youtube.com",
+]);
+
+function isTrustedThumbnailUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && ALLOWED_THUMBNAIL_HOSTS.has(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Renders a video's thumbnail with a double fallback: the reported URL, then the derived
  * `hqdefault.jpg`, then a non-image placeholder.
  *
@@ -31,7 +54,10 @@ function derivedThumbnailUrl(youtubeId: string): string {
  * that also fails would loop forever without it. Each stage can only move forward.
  */
 export function VideoThumbnail({ youtubeId, reportedUrl, title }: Props) {
-  const [stage, setStage] = useState<"reported" | "derived" | "placeholder">(reportedUrl ? "reported" : "derived");
+  const trustedReportedUrl = reportedUrl && isTrustedThumbnailUrl(reportedUrl) ? reportedUrl : null;
+  const [stage, setStage] = useState<"reported" | "derived" | "placeholder">(
+    trustedReportedUrl ? "reported" : "derived",
+  );
 
   if (stage === "placeholder") {
     return (
@@ -46,7 +72,7 @@ export function VideoThumbnail({ youtubeId, reportedUrl, title }: Props) {
 
   return (
     <img
-      src={stage === "reported" && reportedUrl ? reportedUrl : derivedThumbnailUrl(youtubeId)}
+      src={stage === "reported" && trustedReportedUrl ? trustedReportedUrl : derivedThumbnailUrl(youtubeId)}
       alt={title ?? "Video thumbnail"}
       loading="lazy"
       onError={() => {

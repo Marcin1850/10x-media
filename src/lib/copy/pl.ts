@@ -99,7 +99,7 @@ export const pl = {
       refreshNote: (url: string) =>
         `Zapisaliśmy podsumowanie ${url}, ale nie udało się odświeżyć listy. Odśwież stronę, aby je zobaczyć.`,
       empty: "Nie masz jeszcze żadnych podsumowań.",
-      emptyHint: "Użyj „Nowe podsumowanie”, aby wygenerować pierwsze.",
+      emptyHint: "Wklej adres URL filmu z YouTube w pasku powyżej, aby wygenerować pierwsze.",
       emptyFiltered: "Żadne podsumowanie nie pasuje do tego filtra.",
       showAll: "Pokaż wszystkie podsumowania",
     },
@@ -154,5 +154,7 @@ export const pl = {
     sessionExpired: "Twoja sesja wygasła — zaloguj się ponownie.",
     checkUrl: "Sprawdź adres URL filmu i spróbuj ponownie.",
     noCredits: "Nie masz wystarczającej liczby kredytów.",
+    savedResponseInvalid:
+      "Podsumowanie zostało zapisane i opłacone, ale odpowiedź serwera była niekompletna. Odśwież stronę, aby je zobaczyć.",
   },
 };

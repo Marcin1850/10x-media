@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { Mail, Lock, LogIn } from "lucide-react";
 import { FormField } from "@/components/auth/FormField";
 import { PasswordToggle } from "@/components/auth/PasswordToggle";
@@ -15,6 +15,9 @@ export default function SignInForm({ serverError }: Props) {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
+  const [submitting, setSubmitting] = useState(false);
+  const emailRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
 
   function validate() {
     const next: typeof errors = {};
@@ -27,6 +30,11 @@ export default function SignInForm({ serverError }: Props) {
       next.password = copy.auth.validation.passwordRequired;
     }
     setErrors(next);
+    if (next.email) {
+      emailRef.current?.focus();
+    } else if (next.password) {
+      passwordRef.current?.focus();
+    }
     return Object.keys(next).length === 0;
   }
 
@@ -37,7 +45,9 @@ export default function SignInForm({ serverError }: Props) {
   function handleSubmit(e: React.SubmitEvent<HTMLFormElement>) {
     if (!validate()) {
       e.preventDefault();
+      return;
     }
+    setSubmitting(true);
   }
 
   return (
@@ -55,6 +65,7 @@ export default function SignInForm({ serverError }: Props) {
         error={errors.email}
         icon={<Mail className="size-4" />}
         autoComplete="email"
+        inputRef={emailRef}
       />
 
       <FormField
@@ -70,6 +81,7 @@ export default function SignInForm({ serverError }: Props) {
         error={errors.password}
         icon={<Lock className="size-4" />}
         autoComplete="current-password"
+        inputRef={passwordRef}
         endContent={
           <PasswordToggle
             visible={showPassword}
@@ -84,7 +96,7 @@ export default function SignInForm({ serverError }: Props) {
 
       <ServerError message={serverError} />
 
-      <SubmitButton pendingText={copy.auth.signIn.pending} icon={<LogIn className="size-4" />}>
+      <SubmitButton pending={submitting} pendingText={copy.auth.signIn.pending} icon={<LogIn className="size-4" />}>
         {copy.auth.signIn.submit}
       </SubmitButton>
     </form>

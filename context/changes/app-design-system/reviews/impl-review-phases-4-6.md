@@ -67,7 +67,7 @@ The Success Criteria verdict is WARNING rather than FAIL: every automated gate p
   - Tradeoff: The state cannot recover from a server response without navigation; that is acceptable for these native POSTs, but network failures before navigation need browser verification.
   - Confidence: HIGH — the installed React source and the current string-action form markup establish the behavior directly.
   - Blind spot: The browser pass is still needed to verify autofill and native validation interactions.
-- **Decision**: PENDING
+- **Decision**: FIXED — `SubmitButton` now takes an explicit `pending` prop; `SignInForm`/`SignUpForm` own a `submitting` boolean set after successful validation and passed through.
 
 ### F2 — Field errors are not programmatically connected to their inputs
 
@@ -81,7 +81,7 @@ The Success Criteria verdict is WARNING rather than FAIL: every automated gate p
   - Tradeoff: Requires a small focus contract between `FormField` and each form rather than a CSS-only edit.
   - Confidence: HIGH — the missing relationships are directly visible in the rendered attributes.
   - Blind spot: The exact announcement timing should be checked with a screen reader.
-- **Decision**: PENDING
+- **Decision**: FIXED — `FormField` now assigns stable `id`s to the error/hint node and wires `aria-describedby`; the error paragraph is `role="alert"`. Both auth forms focus the first invalid field's input (via `inputRef`) when validation fails.
 
 ### F3 — Character radios have no visible keyboard focus
 
@@ -91,7 +91,7 @@ The Success Criteria verdict is WARNING rather than FAIL: every automated gate p
 - **Location**: `src/components/summaries/GenerateSummaryForm.tsx:112`
 - **Detail**: The native radio inputs are `sr-only`, while their visible labels style selection and hover only. Keyboard users can move between the radios but receive no visible focus indicator, unlike the explicit focus-ring treatment on summary-card expansion and shadcn controls elsewhere.
 - **Fix**: Add a label-level `:has(input:focus-visible)` ring treatment (or add the shadcn radio-group primitive via the prescribed CLI and use its focus behavior).
-- **Decision**: PENDING
+- **Decision**: FIXED — added `has-[:focus-visible]:border-ring has-[:focus-visible]:ring-[3px] has-[:focus-visible]:ring-ring/50` to the label, matching the `input.tsx`/`button.tsx` focus-ring pattern.
 
 ### F4 — Dismissing a failed pending card leaves the same error visible
 
@@ -101,7 +101,7 @@ The Success Criteria verdict is WARNING rather than FAIL: every automated gate p
 - **Location**: `src/components/summaries/DashboardSummaries.tsx:242`, `src/components/summaries/GenerateSummaryForm.tsx:169`
 - **Detail**: The pending card's dismiss action calls only `generation.clearAttempt()`. `generation.error` is not cleared and the capture form renders that same error through `ServerError`, so the failure disappears from the card but remains immediately above it. Manual criterion 6.7 says the failed generation is dismissable; the current action only dismisses one of two copies.
 - **Fix**: Expose an attempt-bound failure clear that removes both the matching attempt and its error, then use it for the dismiss action; alternatively make the pending card the sole owner of request errors.
-- **Decision**: PENDING
+- **Decision**: FIXED — `clearAttempt` now also clears `error`, guarded by `attemptSeq.current` so a stale attemptId (from the post-success refresh path) is a no-op and never clears a newer, still-live attempt's error.
 
 ### F5 — A malformed successful response can leave a paid attempt “generating” forever
 
@@ -115,7 +115,7 @@ The Success Criteria verdict is WARNING rather than FAIL: every automated gate p
   - Tradeoff: Requires a small response schema/state addition around a load-bearing hook.
   - Confidence: HIGH — the missing-ID branch and fallback status are explicit in the current code.
   - Blind spot: The desired user copy for “saved but response malformed” is not specified by the plan.
-- **Decision**: PENDING
+- **Decision**: FIXED — the missing-`summaryId` branch now calls `setError(copy.errors.savedResponseInvalid)` before returning, so the pending-derivation reads `error !== null` and resolves to the existing "failed" (dismissable) status instead of falling back to "generating" forever. New `pl.ts` copy string added; `result`/`credits` already applied above are left intact.
 
 ### F6 — The cost gate can report a negative resulting balance
 
@@ -129,7 +129,7 @@ The Success Criteria verdict is WARNING rather than FAIL: every automated gate p
   - Tradeoff: Requires documenting a narrow exception to the plan's “four things and only those” gate sentence.
   - Confidence: HIGH — the arithmetic and disabled condition are both directly visible.
   - Blind spot: The exact 409 payload for this balance case still needs the pending endpoint/browser pass.
-- **Decision**: PENDING
+- **Decision**: FIXED — `PendingSummaryCard` now computes `gateTooExpensive` (same formula as `GenerateSummaryForm`'s `confirmTooExpensive`) and, when true, renders the existing `copy.generate.gate.tooExpensive` shortfall copy instead of `gate.held`'s resulting-balance sentence.
 
 ### F7 — Zero credits does not render the planned Disabled visual slot
 
@@ -139,7 +139,7 @@ The Success Criteria verdict is WARNING rather than FAIL: every automated gate p
 - **Location**: `src/components/summaries/GenerateSummaryForm.tsx:74`, `src/components/summaries/GenerateSummaryForm.tsx:91`
 - **Detail**: Zero credits correctly disables submission and keeps the layout mounted, but the capture bar remains unconditionally `bg-card`; only the default button disabled opacity and muted explanatory copy change. The Phase-6 contract explicitly requires the Disabled slot's `--background` ground under the disabled control plus `--muted-foreground`.
 - **Fix**: Apply the planned `bg-background` disabled treatment conditionally when `noCredits` is true, preserving the bar's dimensions and content.
-- **Decision**: PENDING
+- **Decision**: FIXED — the form's className now conditionally swaps `bg-card` for `bg-background text-muted-foreground` when `noCredits` is true; layout/dimensions unchanged.
 
 ### F8 — Empty-list copy names the deleted dialog action
 
@@ -149,7 +149,7 @@ The Success Criteria verdict is WARNING rather than FAIL: every automated gate p
 - **Location**: `src/lib/copy/pl.ts:102`
 - **Detail**: The genuine-empty hint still tells the user to use “Nowe podsumowanie”. Phase 6 deleted that dialog/button and replaced it with the always-visible inline capture bar, so the instruction names a control that no longer exists.
 - **Fix**: Rewrite the hint to direct the user to paste a YouTube URL in the generation bar above.
-- **Decision**: PENDING
+- **Decision**: FIXED — `emptyHint` now reads "Wklej adres URL filmu z YouTube w pasku powyżej, aby wygenerować pierwsze."
 
 ### F9 — Persisted provider thumbnail URLs can request arbitrary origins
 
@@ -168,7 +168,7 @@ The Success Criteria verdict is WARNING rather than FAIL: every automated gate p
   - Tradeoff: Adds host-policy maintenance and must account for every legitimate YouTube thumbnail hostname.
   - Confidence: MEDIUM — the current dataset's full legitimate host set was not audited.
   - Blind spot: Signed/redirecting thumbnail URLs may use hosts not yet observed.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix B — `VideoThumbnail.tsx` now allowlists `{i,i1-i4}.ytimg.com` and `img.youtube.com` over HTTPS via `isTrustedThumbnailUrl` (parsed with `new URL`); an untrusted or unparseable `reportedUrl` falls back to the derived `hqdefault.jpg` URL exactly as a 404 already does.
 
 ## Review Notes
 
