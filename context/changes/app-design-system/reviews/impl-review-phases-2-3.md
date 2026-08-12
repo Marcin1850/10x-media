@@ -58,7 +58,7 @@ The Success Criteria verdict is WARNING, not FAIL: all automated gates pass, whi
   - Tradeoff: Requires a small state/component-boundary rearrangement rather than a one-line handler change.
   - Confidence: HIGH — Radix activates the outer item for selection, and its source explicitly ignores selection keys when the event target is a nested control.
   - Blind spot: The final focus-return behavior still needs the intentionally pending browser pass.
-- **Decision**: PENDING
+- **Decision**: FIXED — `TopUpAction.tsx` now exports `useTopUpAction()` + `TopUpNotice`; `AccountMenu.tsx`'s `DropdownMenuItem` is the sole trigger (`onSelect` calls `trigger()`), and the notice/dismiss render as a sibling `div` outside the menuitem.
 
 ### F2 — Phase 3 overlays the new shell on the legacy summaries shell
 
@@ -72,7 +72,7 @@ The Success Criteria verdict is WARNING, not FAIL: all automated gates pass, whi
   - Tradeoff: Moves a documented portion of Phase 5 into the Phase 3 correction and requires synchronizing the plan/brief phase ownership.
   - Confidence: HIGH — the duplicate call and duplicate controls are directly visible in the page, and middleware already supplies the required value.
   - Blind spot: Visual spacing after removing the header still needs the pending browser pass.
-- **Decision**: PENDING
+- **Decision**: FIXED — `summaries.astro` now destructures `credits` from `Astro.locals` (no second `getBalance` call) and the legacy header card (welcome text, account link, sign-out form) is removed; `Topbar`/`AccountMenu` are the sole navigation shell.
 
 ### F3 — Unsupported-feature events are browser-local, not Worker events
 
@@ -91,7 +91,7 @@ The Success Criteria verdict is WARNING, not FAIL: all automated gates pass, whi
   - Tradeoff: Adds an abuse-sensitive public boundary, validation and failure handling outside the phase plan.
   - Confidence: MEDIUM — technically straightforward, but the operational requirements are not specified.
   - Blind spot: Rate limiting and receiver durability have not been designed.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A — `reporting.ts` now documents `reportUnsupportedFeature` as runtime-local (browser console today, since its only caller runs in a client island) and states the future receiver must support both browser and Worker transports; removed the false "counted in Workers logs" claim.
 
 ### F4 — Copy module omits the planned namespace skeleton
 
@@ -101,7 +101,7 @@ The Success Criteria verdict is WARNING, not FAIL: all automated gates pass, whi
 - **Location**: `src/lib/copy/pl.ts:10`
 - **Detail**: The plan requires `common`, `nav`, `auth`, `summaries`, `generate`, `account`, `landing` and `errors` to exist from Phase 2, with only `common` and `nav` populated. The implementation defines only `common` and `nav`, so `Copy = typeof pl` does not yet enforce the promised full locale shape.
 - **Fix**: Add empty `auth`, `summaries`, `generate`, `account`, `landing` and `errors` objects to `pl` now; later phases populate them in place.
-- **Decision**: PENDING
+- **Decision**: FIXED — added the six empty namespace objects to `pl.ts`.
 
 ### F5 — Top-up reporting is once per reveal cycle, not once per click
 
@@ -111,7 +111,7 @@ The Success Criteria verdict is WARNING, not FAIL: all automated gates pass, whi
 - **Location**: `src/components/account/TopUpAction.tsx:22`
 - **Detail**: The phase contract says the stable `top-up` event emits once per click. `handleClick` emits only when `revealed` is false, so clicking the still-visible trigger again while the notice is open records no event. It currently measures closed-to-open transitions rather than clicks.
 - **Fix**: Call `reportUnsupportedFeature("top-up")` unconditionally from the trigger handler, leaving render-time emission prohibited.
-- **Decision**: PENDING
+- **Decision**: FIXED — `trigger()` now calls `reportUnsupportedFeature("top-up")` unconditionally on every trigger, not only on the closed→open transition.
 
 ### F6 — Neutral warning banner has only a bottom border
 
@@ -121,7 +121,7 @@ The Success Criteria verdict is WARNING, not FAIL: all automated gates pass, whi
 - **Location**: `src/components/Banner.astro:27`, `src/components/Banner.astro:45`
 - **Detail**: The neutral warning contract specifies a card ground with a 1px solid `--border` outline. The shared banner rule defines only `border-bottom: 1px solid`; the warning variant changes colors but never adds the full border. It correctly avoids amber and includes the warning icon.
 - **Fix**: Set the warning variant to `border: 1px solid var(--border)` (and retain the neutral card/foreground colors).
-- **Decision**: PENDING
+- **Decision**: FIXED — `.banner--warning` now sets a full `1px solid var(--border)`, overriding the shared bottom-only rule, and keeps the `--card`/`--foreground` colors.
 
 ### F7 — Unknown credit state has no accessible value
 
@@ -131,7 +131,7 @@ The Success Criteria verdict is WARNING, not FAIL: all automated gates pass, whi
 - **Location**: `src/components/Topbar.astro:30`
 - **Detail**: When credits are unavailable, the only value-shaped element is an `aria-hidden` shimmer. Assistive technology receives the label “Kredyty” without a value or an unavailable-state announcement.
 - **Fix**: Add localized visually-hidden copy such as “saldo niedostępne” beside the decorative shimmer.
-- **Decision**: PENDING
+- **Decision**: FIXED — added `copy.nav.creditsUnavailable` ("saldo niedostępne") and rendered it as `sr-only` beside the `aria-hidden` shimmer in `Topbar.astro`.
 
 ### F8 — Generated dropdown keeps a prohibited Next.js directive
 
@@ -141,7 +141,26 @@ The Success Criteria verdict is WARNING, not FAIL: all automated gates pass, whi
 - **Location**: `src/components/ui/dropdown-menu.tsx:1`
 - **Detail**: The file starts with `"use client"`, contrary to the repository rule forbidding Next.js directives. Astro already controls hydration at `<AccountMenu client:load />`, and neighboring generated primitives do not carry the directive. It is inert here but creates a misleading framework signal.
 - **Fix**: Remove the `"use client"` directive from the generated primitive.
-- **Decision**: PENDING
+- **Decision**: FIXED — removed the `"use client"` line from `dropdown-menu.tsx`.
+
+## Triage Summary (2026-08-12)
+
+All 8 findings fixed. `npm run lint` and `npm run build` pass after every change.
+
+- **F1** — `TopUpAction.tsx` split into `useTopUpAction()` + `TopUpNotice`; `AccountMenu.tsx`'s
+  `DropdownMenuItem` is now the sole trigger via `onSelect`, notice/dismiss render as a sibling.
+- **F2** — `summaries.astro` reads `credits` from `Astro.locals` (no second `getBalance` call);
+  legacy header card (welcome text, account link, sign-out form) removed.
+- **F3** — `reporting.ts` doc comment corrected: `reportUnsupportedFeature` documented as
+  runtime-local (browser console today); future receiver must support both transports.
+- **F4** — `pl.ts` gained empty `auth`/`summaries`/`generate`/`account`/`landing`/`errors` objects.
+- **F5** — `trigger()` now emits unconditionally on every call, not only closed→open transitions.
+- **F6** — `.banner--warning` now sets a full `1px solid var(--border)`.
+- **F7** — Added `copy.nav.creditsUnavailable` ("saldo niedostępne"), rendered `sr-only` in `Topbar.astro`.
+- **F8** — Removed the `"use client"` directive from `dropdown-menu.tsx`.
+
+Manual verification checklist (lines 36-43 above) remains open — none of these fixes substitute for
+the pending browser pass, especially the reworked keyboard path in F1.
 
 ## Review Notes
 

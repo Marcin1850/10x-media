@@ -1,16 +1,12 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { createClient } from "@/lib/supabase";
-import { getBalance } from "@/lib/services/credits";
 import { listSummaries } from "@/lib/services/summary-list";
 import { DashboardSummaries } from "@/components/summaries/DashboardSummaries";
 import type { SummaryListItem } from "@/types";
 
-const { user } = Astro.locals;
+const { user, credits } = Astro.locals;
 
-// RLS-scoped read of the signed-in user's own credit balance. `null` when the row is missing,
-// Supabase isn't configured, or the read failed — rendered as "—" below rather than a misleading 0.
-let credits: number | null = null;
 // The summary list, server-seeded into the island the same way `initialCredits` is. `listUnavailable`
 // starts true and is cleared only by a read that actually returned: an empty list must mean "you have
 // no summaries", never "we couldn't ask". Telling someone with 16 saved summaries that they have none
@@ -24,16 +20,6 @@ if (user) {
     try {
       // createClient returns supabase-js's default untyped client (no generated Database types yet),
       // so passing it where the service expects its explicit shapes is an unavoidable `any` gap.
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-      credits = await getBalance(supabase, user.id);
-    } catch (err) {
-      // Display-only: this balance is never the enforcement gate (that lives in the generation
-      // endpoint, where getBalance must keep throwing), so a DB blip must not fail the page.
-      // eslint-disable-next-line no-console
-      console.error("summaries: credit balance read failed", err);
-    }
-
-    try {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
       summaries = await listSummaries(supabase, user.id);
       listUnavailable = false;
@@ -50,29 +36,6 @@ if (user) {
 <Layout title="Dashboard">
   <div class="min-h-screen p-4">
     <div class="mx-auto w-full max-w-3xl space-y-6 py-8">
-      <div class="rounded-2xl border border-white/10 bg-white/10 p-8 text-center text-white backdrop-blur-xl">
-        <h1 class="mb-4 bg-gradient-to-r from-blue-200 to-purple-200 bg-clip-text text-3xl font-bold text-transparent">
-          Dashboard
-        </h1>
-        <p class="text-blue-100/80">
-          Welcome, <span class="font-semibold text-white">{user?.email}</span>
-        </p>
-        <a
-          href="/account"
-          class="mt-6 inline-block rounded-lg border border-white/20 bg-white/10 px-4 py-2 text-sm transition-colors hover:bg-white/20"
-        >
-          Account settings
-        </a>
-        <form method="POST" action="/api/auth/signout" class="mt-4">
-          <button
-            type="submit"
-            class="rounded-lg border border-white/20 bg-white/10 px-4 py-2 text-sm transition-colors hover:bg-white/20"
-          >
-            Sign out
-          </button>
-        </form>
-      </div>
-
       <section class="rounded-2xl border border-white/10 bg-white/10 p-6 text-white backdrop-blur-xl">
         <DashboardSummaries
           client:load

@@ -8,7 +8,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { TopUpAction } from "@/components/account/TopUpAction";
+import { useTopUpAction, TopUpNotice } from "@/components/account/TopUpAction";
 import { copy } from "@/lib/copy";
 
 /**
@@ -17,6 +17,7 @@ import { copy } from "@/lib/copy";
  */
 export function AccountMenu() {
   const signOutFormRef = useRef<HTMLFormElement>(null);
+  const { revealed, trigger, dismiss } = useTopUpAction();
 
   return (
     <>
@@ -33,16 +34,23 @@ export function AccountMenu() {
           <DropdownMenuItem asChild>
             <a href="/account">{copy.nav.account}</a>
           </DropdownMenuItem>
-          {/* preventDefault keeps the menu open on click — the notice TopUpAction reveals must stay
-              visible inside it rather than being unmounted the instant Radix closes the menu. */}
+          {/* preventDefault keeps the menu open on select — the notice trigger() reveals must stay
+              visible rather than being unmounted the instant Radix closes the menu. The item is
+              the sole interactive control here; the notice below renders outside it so Radix's
+              roving-focus menuitem model never has to account for the nested dismiss button. */}
           <DropdownMenuItem
             onSelect={(event) => {
               event.preventDefault();
+              trigger();
             }}
-            className="cursor-default focus:bg-transparent"
           >
-            <TopUpAction variant="menu-item" />
+            {copy.nav.topUp}
           </DropdownMenuItem>
+          {revealed ? (
+            <div className="px-2">
+              <TopUpNotice dismiss={dismiss} />
+            </div>
+          ) : null}
           <DropdownMenuSeparator />
           <DropdownMenuItem
             onSelect={() => {

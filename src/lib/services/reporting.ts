@@ -18,12 +18,18 @@ export function reportEvent(key: string, severity: string, payload: unknown): vo
   console.error(message);
 }
 
-/** Stable search key for every unsupported-feature event. Counted per feature in Workers logs. */
+/** Stable search key for every unsupported-feature event. */
 const UNSUPPORTED_FEATURE_EVENT = "[unsupported-feature]";
 
 /**
  * The top-up affordance (and anything else not yet built) renders and tells the truth about it —
  * see decision #2. No user identifiers in the payload.
+ *
+ * Currently runtime-local, not centrally counted: every caller today (e.g. `TopUpAction`) runs in
+ * a hydrated client island, so this reaches the user's browser console, not Workers logs — unlike
+ * `reportBudgetThreshold`, whose caller runs on the Worker. A future receiver replacing
+ * `reportEvent`'s console call must support both a browser and a Worker transport, or this event
+ * family stays invisible from the client side.
  */
 export function reportUnsupportedFeature(feature: string): void {
   reportEvent(UNSUPPORTED_FEATURE_EVENT, "warn", { feature });

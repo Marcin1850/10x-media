@@ -30,7 +30,10 @@ const isLanding = Astro.url.pathname === "/";
             <div class="text-muted-foreground flex items-center gap-2 text-sm">
               <span>{copy.nav.credits}</span>
               {credits === null ? (
-                <span class="bg-muted h-4 w-8 animate-pulse rounded" aria-hidden="true" />
+                <>
+                  <span class="bg-muted h-4 w-8 animate-pulse rounded" aria-hidden="true" />
+                  <span class="sr-only">{copy.nav.creditsUnavailable}</span>
+                </>
               ) : (
                 <span class="text-foreground font-medium">{credits}</span>
               )}
