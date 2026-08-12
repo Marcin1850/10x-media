@@ -1029,9 +1029,9 @@ anything here.
 
 #### Automated
 
-- [x] 3.1 Linting and build pass
-- [x] 3.2 No `/dashboard` reference survives
-- [x] 3.3 `PROTECTED_ROUTES` contains `/summaries`
+- [x] 3.1 Linting and build pass — 7131897
+- [x] 3.2 No `/dashboard` reference survives — 7131897
+- [x] 3.3 `PROTECTED_ROUTES` contains `/summaries` — 7131897
 
 #### Manual
 
