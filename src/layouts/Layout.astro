@@ -23,8 +23,10 @@ const { title = "10xMedia" } = Astro.props;
         for EVERY generated face (7 weights x 2 subsets). These four are the only ones above the fold:
         the display face at 600 for the topbar logo and page heading, the body face at 400 for prose.
         `latin-ext` is preloaded alongside `latin` on purpose — the copy is Polish, so the diacritic
-        subset is critical, not a long tail. Every other weight still loads, just not eagerly; if a
-        render shows a visible swap, add that specific face here rather than reverting to `true`. */
+        subset is critical, not a long tail. Both keys matter: dropping `weight` matches every
+        generated weight for that subset, which re-emits the same two deduped files four times over.
+        Every other weight still loads, just not eagerly; if a render shows a visible swap, add that
+        specific face here rather than reverting to `true`. */
     }
     <Font
       cssVariable="--font-space-grotesk"
