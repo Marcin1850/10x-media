@@ -10,19 +10,24 @@ import type { Components } from "react-markdown";
 const SUMMARY_ALLOWED_ELEMENTS = ["p", "ul", "ol", "li", "strong", "em", "h2", "h3", "code"];
 
 /**
- * Tailwind-styled element map for the Markdown summary, matching the cosmic theme. Raw HTML in the
- * summary is escaped by react-markdown's default (no rehype-raw), so no extra sanitizer is needed.
+ * Element map for the Markdown summary, on tokens. This is the product's core reading surface — a
+ * summary is long Polish prose read *instead of* watching the video — so the type spec
+ * (`ds-bundle/type.html`) is exact: 16.5px/28px, weight 400 (never 300 on dark).
  */
 const summaryMarkdownComponents: Components = {
-  p: ({ children }) => <p className="text-sm leading-relaxed text-blue-50/90">{children}</p>,
-  ul: ({ children }) => <ul className="list-disc space-y-1 pl-5 text-sm text-blue-50/90">{children}</ul>,
-  ol: ({ children }) => <ol className="list-decimal space-y-1 pl-5 text-sm text-blue-50/90">{children}</ol>,
-  li: ({ children }) => <li className="marker:text-blue-200/40">{children}</li>,
-  strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
+  p: ({ children }) => <p className="text-foreground text-[16.5px] leading-[28px] font-normal">{children}</p>,
+  ul: ({ children }) => (
+    <ul className="text-foreground list-disc space-y-1 pl-5 text-[16.5px] leading-[28px] font-normal">{children}</ul>
+  ),
+  ol: ({ children }) => (
+    <ol className="text-foreground list-decimal space-y-1 pl-5 text-[16.5px] leading-[28px] font-normal">{children}</ol>
+  ),
+  li: ({ children }) => <li className="marker:text-muted-foreground">{children}</li>,
+  strong: ({ children }) => <strong className="text-foreground font-semibold">{children}</strong>,
   em: ({ children }) => <em className="italic">{children}</em>,
-  h2: ({ children }) => <h2 className="text-base font-semibold text-white">{children}</h2>,
-  h3: ({ children }) => <h3 className="text-sm font-semibold text-white">{children}</h3>,
-  code: ({ children }) => <code className="rounded bg-white/10 px-1 py-0.5 text-xs">{children}</code>,
+  h2: ({ children }) => <h2 className="text-foreground text-lg font-semibold">{children}</h2>,
+  h3: ({ children }) => <h3 className="text-foreground text-sm font-semibold">{children}</h3>,
+  code: ({ children }) => <code className="bg-muted text-foreground rounded px-1 py-0.5 text-xs">{children}</code>,
 };
 
 interface Props {

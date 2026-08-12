@@ -1,5 +1,5 @@
 import { CircleAlert, CircleCheck, Loader2, X } from "lucide-react";
-import { CHARACTER_BADGE, CHARACTER_LABEL } from "@/components/summaries/SummaryCard";
+import { CharacterBadge } from "@/components/summaries/SummaryCard";
 import { cn } from "@/lib/utils";
 import type { ChannelCharacter } from "@/types";
 
@@ -66,14 +66,7 @@ export function PendingSummaryCard({ pending, onConfirm, onDismiss }: Props) {
         <p className="min-w-0 flex-1 truncate text-sm font-medium text-white" title={pending.url}>
           {pending.url}
         </p>
-        <span
-          className={cn(
-            "shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium",
-            CHARACTER_BADGE[pending.character],
-          )}
-        >
-          {CHARACTER_LABEL[pending.character]}
-        </span>
+        <CharacterBadge character={pending.character} />
       </div>
 
       {/* One persistent live region for every non-failure lifecycle message.

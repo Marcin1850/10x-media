@@ -3,6 +3,7 @@ import Layout from "@/layouts/Layout.astro";
 import { createClient } from "@/lib/supabase";
 import { listSummaries } from "@/lib/services/summary-list";
 import { DashboardSummaries } from "@/components/summaries/DashboardSummaries";
+import { copy } from "@/lib/copy";
 import type { SummaryListItem } from "@/types";
 
 const { user, credits } = Astro.locals;
@@ -33,17 +34,13 @@ if (user) {
 }
 ---
 
-<Layout title="Dashboard">
-  <div class="min-h-screen p-4">
-    <div class="mx-auto w-full max-w-3xl space-y-6 py-8">
-      <section class="rounded-2xl border border-white/10 bg-white/10 p-6 text-white backdrop-blur-xl">
-        <DashboardSummaries
-          client:load
-          initialSummaries={summaries}
-          initialCredits={credits}
-          listUnavailable={listUnavailable}
-        />
-      </section>
-    </div>
+<Layout title={copy.summaries.page.title}>
+  <div class="mx-auto w-full max-w-3xl space-y-6 p-4 py-8">
+    <DashboardSummaries
+      client:load
+      initialSummaries={summaries}
+      initialCredits={credits}
+      listUnavailable={listUnavailable}
+    />
   </div>
 </Layout>

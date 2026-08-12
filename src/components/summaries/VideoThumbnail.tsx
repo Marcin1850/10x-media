@@ -36,10 +36,10 @@ export function VideoThumbnail({ youtubeId, reportedUrl, title }: Props) {
   if (stage === "placeholder") {
     return (
       <div
-        className="flex aspect-video w-full items-center justify-center rounded-lg border border-white/10 bg-white/5"
+        className="border-border bg-muted flex aspect-video w-full items-center justify-center rounded-lg border"
         aria-hidden="true"
       >
-        <VideoOff className="size-6 text-blue-100/30" />
+        <VideoOff className="text-muted-foreground size-6" />
       </div>
     );
   }
@@ -52,7 +52,7 @@ export function VideoThumbnail({ youtubeId, reportedUrl, title }: Props) {
       onError={() => {
         setStage((current) => (current === "reported" ? "derived" : "placeholder"));
       }}
-      className="aspect-video w-full rounded-lg border border-white/10 bg-white/5 object-cover"
+      className="border-border bg-muted aspect-video w-full rounded-lg border object-cover"
     />
   );
 }

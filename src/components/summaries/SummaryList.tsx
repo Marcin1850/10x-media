@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { CircleAlert, Sparkles } from "lucide-react";
-import { SummaryCard } from "@/components/summaries/SummaryCard";
+import { SummaryCard, CHARACTER_LABEL } from "@/components/summaries/SummaryCard";
 import { PendingSummaryCard, type PendingSummary } from "@/components/summaries/PendingSummaryCard";
 import { cn } from "@/lib/utils";
+import { copy } from "@/lib/copy";
 import type { ChannelCharacter, SummaryListItem } from "@/types";
 
 interface Props {
@@ -45,9 +46,9 @@ export interface UnlistedSummary {
 type Filter = "all" | ChannelCharacter;
 
 const FILTERS: { value: Filter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "informational", label: "Informational" },
-  { value: "educational", label: "Educational" },
+  { value: "all", label: copy.summaries.filters.all },
+  { value: "informational", label: CHARACTER_LABEL.informational },
+  { value: "educational", label: CHARACTER_LABEL.educational },
 ];
 
 /**
@@ -84,19 +85,17 @@ export function SummaryList({
 
   // The re-read after a generation is best-effort, so its failure never discards the list that is
   // already rendered — it annotates it. The summary itself is saved and paid for; only this view of
-  // it is stale, which is exactly what the copy has to say.
+  // it is stale, which is exactly what the copy has to say. This is information, not a request to
+  // spend credits, so it takes the neutral warning treatment rather than --attention.
   //
   // Naming the video is not decoration. A generation started after the failed re-read replaces the
   // pending card, and an unqualified "your summary was saved" then reads as a claim about the video
   // currently on screen — which is still generating.
   const refreshNote =
     unlisted === null ? null : (
-      <div className="flex items-start gap-2 rounded-xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-        <CircleAlert className="mt-0.5 size-4 shrink-0" />
-        <span>
-          We saved your summary of <span className="font-medium break-all">{unlisted.url}</span>, but couldn&apos;t
-          refresh this list. Reload the page to see it.
-        </span>
+      <div className="bg-card border-border text-foreground flex items-start gap-2 rounded-xl border px-4 py-3 text-sm">
+        <CircleAlert className="text-muted-foreground mt-0.5 size-4 shrink-0" aria-hidden="true" />
+        <span>{copy.summaries.list.refreshNote(unlisted.url)}</span>
       </div>
     );
 
@@ -108,9 +107,9 @@ export function SummaryList({
             summary explained by nothing but a generic "we couldn't load your summaries". */}
         {refreshNote}
         {pendingCard}
-        <div className="flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-900/20 px-4 py-3 text-sm text-red-200">
-          <CircleAlert className="mt-0.5 size-4 shrink-0" />
-          <span>We couldn&apos;t load your summaries just now. Reload the page to try again.</span>
+        <div className="border-destructive bg-destructive/10 text-destructive flex items-start gap-2 rounded-xl border-2 px-4 py-3 text-sm">
+          <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+          <span>{copy.summaries.list.unavailable}</span>
         </div>
       </div>
     );
@@ -124,12 +123,10 @@ export function SummaryList({
       <div className="space-y-3">
         {refreshNote}
         {pendingCard ?? (
-          <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-8 text-center">
-            <Sparkles className="mx-auto size-5 text-blue-100/40" aria-hidden="true" />
-            <p className="mt-2 text-sm text-blue-100/70">You haven&apos;t generated any summaries yet.</p>
-            {/* The generate form moved into a dialog in Phase 3, so "above" is no longer where it is —
-                point at the control that actually opens it. */}
-            <p className="text-xs text-blue-100/40">Use &ldquo;New summary&rdquo; to generate your first one.</p>
+          <div className="bg-card border-border rounded-xl border px-4 py-8 text-center">
+            <Sparkles className="text-muted-foreground mx-auto size-5" aria-hidden="true" />
+            <p className="text-card-foreground mt-2 text-sm">{copy.summaries.list.empty}</p>
+            <p className="text-muted-foreground text-xs">{copy.summaries.list.emptyHint}</p>
           </div>
         )}
       </div>
@@ -140,7 +137,7 @@ export function SummaryList({
     <div className="space-y-4">
       {refreshNote}
 
-      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filter by channel character">
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label={copy.summaries.filters.groupLabel}>
         {FILTERS.map((option) => {
           const active = filter === option.value;
           return (
@@ -154,8 +151,8 @@ export function SummaryList({
               className={cn(
                 "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
                 active
-                  ? "border-purple-400 bg-purple-500/20 text-white"
-                  : "border-white/15 bg-white/5 text-blue-100/70 hover:bg-white/10",
+                  ? "border-border bg-secondary text-foreground"
+                  : "border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground bg-transparent",
               )}
             >
               {option.label}
@@ -167,16 +164,16 @@ export function SummaryList({
       {pendingCard}
 
       {visible.length === 0 ? (
-        <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-8 text-center">
-          <p className="text-sm text-blue-100/70">No summaries match this filter.</p>
+        <div className="bg-card border-border rounded-xl border px-4 py-8 text-center">
+          <p className="text-card-foreground text-sm">{copy.summaries.list.emptyFiltered}</p>
           <button
             type="button"
             onClick={() => {
               setFilter("all");
             }}
-            className="mt-2 text-xs text-purple-300 transition-colors hover:text-purple-100 hover:underline"
+            className="text-primary mt-2 text-xs transition-colors hover:underline"
           >
-            Show all summaries
+            {copy.summaries.list.showAll}
           </button>
         </div>
       ) : (

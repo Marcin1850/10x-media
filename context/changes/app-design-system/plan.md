@@ -1047,8 +1047,8 @@ anything here.
 
 #### Automated
 
-- [x] 4.1 Linting and build pass
-- [x] 4.2 No palette utility remains in the auth tree
+- [x] 4.1 Linting and build pass — 30394e9
+- [x] 4.2 No palette utility remains in the auth tree — 30394e9
 
 #### Manual
 
@@ -1062,8 +1062,8 @@ anything here.
 
 #### Automated
 
-- [ ] 5.1 Linting and build pass
-- [ ] 5.2 `CHARACTER_LABEL` still has exactly one definition
+- [x] 5.1 Linting and build pass
+- [x] 5.2 `CHARACTER_LABEL` still has exactly one definition
 
 #### Manual
 

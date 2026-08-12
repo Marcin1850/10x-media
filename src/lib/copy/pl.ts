@@ -81,7 +81,34 @@ export const pl = {
       },
     },
   },
-  summaries: {},
+  summaries: {
+    page: {
+      title: "Podsumowania",
+    },
+    character: {
+      informational: "Informacyjny",
+      educational: "Edukacyjny",
+    },
+    filters: {
+      all: "Wszystkie",
+      groupLabel: "Filtruj według charakteru kanału",
+    },
+    list: {
+      unavailable: "Nie udało się wczytać Twoich podsumowań. Odśwież stronę, aby spróbować ponownie.",
+      refreshNote: (url: string) =>
+        `Zapisaliśmy podsumowanie ${url}, ale nie udało się odświeżyć listy. Odśwież stronę, aby je zobaczyć.`,
+      empty: "Nie masz jeszcze żadnych podsumowań.",
+      emptyHint: "Użyj „Nowe podsumowanie”, aby wygenerować pierwsze.",
+      emptyFiltered: "Żadne podsumowanie nie pasuje do tego filtra.",
+      showAll: "Pokaż wszystkie podsumowania",
+    },
+    card: {
+      generatedOn: (date: string) => `Wygenerowano ${date}`,
+      expand: "Rozwiń",
+      collapse: "Zwiń",
+      summaryOf: (title: string) => `podsumowanie: ${title}`,
+    },
+  },
   generate: {},
   account: {},
   landing: {},
