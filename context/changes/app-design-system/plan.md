@@ -1047,8 +1047,8 @@ anything here.
 
 #### Automated
 
-- [ ] 4.1 Linting and build pass
-- [ ] 4.2 No palette utility remains in the auth tree
+- [x] 4.1 Linting and build pass
+- [x] 4.2 No palette utility remains in the auth tree
 
 #### Manual
 

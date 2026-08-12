@@ -1,21 +1,21 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import SignInForm from "@/components/auth/SignInForm";
+import { copy } from "@/lib/copy";
 
 const error = Astro.url.searchParams.get("error");
 ---
 
-<Layout title="Sign in">
-  <div class="flex min-h-screen items-center justify-center p-4">
-    <div class="w-full max-w-sm rounded-2xl border border-white/10 bg-white/10 p-8 text-white backdrop-blur-xl">
-      <h1
-        class="mb-6 bg-gradient-to-r from-blue-200 to-purple-200 bg-clip-text text-center text-2xl font-bold text-transparent"
-      >
-        Sign in
+<Layout title={copy.auth.signIn.heading}>
+  <div class="flex min-h-[calc(100vh-3.5rem)] items-center justify-center p-4">
+    <div class="bg-card text-card-foreground border-border w-full max-w-sm rounded-2xl border p-8">
+      <h1 class="font-display text-foreground mb-6 text-center text-2xl font-semibold">
+        {copy.auth.signIn.heading}
       </h1>
       <SignInForm serverError={error} client:load />
-      <p class="mt-4 text-center text-sm text-blue-100/60">
-        Don't have an account? <a href="/auth/signup" class="text-purple-300 hover:underline">Sign up</a>
+      <p class="text-muted-foreground mt-4 text-center text-sm">
+        {copy.auth.signIn.noAccount}{" "}
+        <a href="/auth/signup" class="text-primary hover:underline">{copy.auth.signIn.signUpLink}</a>
       </p>
     </div>
   </div>
