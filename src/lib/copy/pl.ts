@@ -169,15 +169,16 @@ export const pl = {
       read: {
         heading: "Czytaj zamiast oglądać",
         description:
-          "Wklej link i otrzymaj najważniejsze punkty po polsku — wystarczy, aby ocenić film bez poświęcania mu 40 minut.",
+          "Wklej link i otrzymaj najważniejsze punkty — wystarczą, aby ocenić, czy film jest wart obejrzenia w całości, bez marnowania na to czasu.",
       },
       tuned: {
         heading: "Dopasowane do kanału",
         description: "Kanały informacyjne — fakty i wnioski. Kanały edukacyjne — pojęcia wyjaśnione krok po kroku.",
       },
-      yours: {
-        heading: "Tylko dla Ciebie",
-        description: "Twoja lista filmów i każde wygenerowane podsumowanie widoczne są tylko na Twoim koncie.",
+      library: {
+        heading: "Twoja biblioteka podsumowań",
+        description:
+          "Każde podsumowanie zostaje zapisane na Twoim koncie — wracaj do niego, kiedy chcesz, bez szukania filmu na nowo.",
       },
     },
     deletedToast: "Twoje konto i wszystkie dane zostały usunięte.",
