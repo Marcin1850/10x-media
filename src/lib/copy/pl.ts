@@ -141,11 +141,31 @@ export const pl = {
     },
     dismissFailed: "Odrzuć to nieudane generowanie",
   },
-  account: {},
+  account: {
+    heading: "Konto",
+    signedInAs: (email: string) => `Zalogowano jako ${email}`,
+    creditsLabel: "Kredyty",
+    dangerZone: {
+      heading: "Strefa zagrożenia",
+      description: "Trwale usuń swoje konto i wszystkie powiązane dane. Tej operacji nie można cofnąć.",
+    },
+    deleteDialog: {
+      trigger: "Usuń moje konto",
+      heading: "Usuń swoje konto",
+      description:
+        "Ta operacja trwale usuwa Twoje konto i wszystkie powiązane dane — każdy film i podsumowanie. Nie można jej cofnąć.",
+      confirmLabel: (email: string) => `Wpisz ${email}, aby potwierdzić`,
+      cancel: "Anuluj",
+      confirm: "Usuń trwale",
+      pending: "Usuwanie…",
+    },
+  },
   landing: {},
   errors: {
     generic: "Coś poszło nie tak. Spróbuj ponownie.",
     network: "Błąd sieci — spróbuj ponownie.",
+    accountDeleteFailed: "Coś poszło nie tak. Twoje konto nie zostało usunięte.",
+    accountDeleteNetwork: "Błąd sieci. Twoje konto nie zostało usunięte.",
     alreadyGenerating: "Podsumowanie jest już generowane. Poczekaj, aż się zakończy, zanim rozpoczniesz kolejne.",
     tooLong: "Ten film jest zbyt długi, aby go podsumować.",
     noTranscript: "Brak dostępnego transkryptu dla tego filmu.",

@@ -1094,8 +1094,8 @@ anything here.
 
 #### Automated
 
-- [ ] 7.1 Linting and build pass
-- [ ] 7.2 No palette utility remains in the account tree
+- [x] 7.1 Linting and build pass
+- [x] 7.2 No palette utility remains in the account tree
 
 #### Manual
 
