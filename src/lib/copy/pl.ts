@@ -160,7 +160,28 @@ export const pl = {
       pending: "Usuwanie…",
     },
   },
-  landing: {},
+  landing: {
+    tagline: "Pierwsze podsumowania gratis",
+    heroDescription:
+      "Zamień listę filmów z YouTube w podsumowania, które mówią, co warto obejrzeć — i przekazują kluczową treść reszty.",
+    ctaSummaries: "Przejdź do podsumowań",
+    features: {
+      read: {
+        heading: "Czytaj zamiast oglądać",
+        description:
+          "Wklej link i otrzymaj najważniejsze punkty po polsku — wystarczy, aby ocenić film bez poświęcania mu 40 minut.",
+      },
+      tuned: {
+        heading: "Dopasowane do kanału",
+        description: "Kanały informacyjne — fakty i wnioski. Kanały edukacyjne — pojęcia wyjaśnione krok po kroku.",
+      },
+      yours: {
+        heading: "Tylko dla Ciebie",
+        description: "Twoja lista filmów i każde wygenerowane podsumowanie widoczne są tylko na Twoim koncie.",
+      },
+    },
+    deletedToast: "Twoje konto i wszystkie dane zostały usunięte.",
+  },
   errors: {
     generic: "Coś poszło nie tak. Spróbuj ponownie.",
     network: "Błąd sieci — spróbuj ponownie.",

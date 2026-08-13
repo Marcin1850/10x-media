@@ -1094,8 +1094,8 @@ anything here.
 
 #### Automated
 
-- [x] 7.1 Linting and build pass
-- [x] 7.2 No palette utility remains in the account tree
+- [x] 7.1 Linting and build pass — f736221
+- [x] 7.2 No palette utility remains in the account tree — f736221
 
 #### Manual
 
@@ -1109,8 +1109,8 @@ anything here.
 
 #### Automated
 
-- [ ] 8.1 Linting and build pass
-- [ ] 8.2 No decorative blur layers remain
+- [x] 8.1 Linting and build pass
+- [x] 8.2 No decorative blur layers remain
 
 #### Manual
 
