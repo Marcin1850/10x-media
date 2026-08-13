@@ -1109,8 +1109,8 @@ anything here.
 
 #### Automated
 
-- [x] 8.1 Linting and build pass
-- [x] 8.2 No decorative blur layers remain
+- [x] 8.1 Linting and build pass — 4987a77
+- [x] 8.2 No decorative blur layers remain — 4987a77
 
 #### Manual
 
