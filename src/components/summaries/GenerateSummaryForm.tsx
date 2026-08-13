@@ -96,71 +96,71 @@ export default function GenerateSummaryForm({
       )}
       noValidate
     >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-        <div className="flex-1">
-          <FormField
-            id="url"
-            label={copy.generate.urlLabel}
-            value={url}
-            onChange={onUrlChange}
-            placeholder={copy.generate.urlPlaceholder}
-            icon={<Link2 className="size-4" />}
-            error={urlError}
-            inputRef={urlInputRef}
-          />
+      <div className="space-y-3">
+        <FormField
+          id="url"
+          label={copy.generate.urlLabel}
+          value={url}
+          onChange={onUrlChange}
+          placeholder={copy.generate.urlPlaceholder}
+          icon={<Link2 className="size-4" />}
+          error={urlError}
+          inputRef={urlInputRef}
+        />
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <fieldset>
+            <legend className="text-muted-foreground mb-1 block text-sm">{copy.generate.characterLabel}</legend>
+            <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label={copy.generate.characterLabel}>
+              {CHARACTERS.map((option) => {
+                const selected = character === option.value;
+                return (
+                  <label
+                    key={option.value}
+                    className={cn(
+                      "has-[:focus-visible]:border-ring has-[:focus-visible]:ring-ring/50 cursor-pointer rounded-lg border px-3 py-2 transition-colors outline-none has-[:focus-visible]:ring-[3px]",
+                      selected
+                        ? "border-border bg-secondary text-foreground"
+                        : "border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground bg-transparent",
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="character"
+                      value={option.value}
+                      checked={selected}
+                      onChange={() => {
+                        onCharacterChange(option.value);
+                      }}
+                      className="sr-only"
+                    />
+                    <span className="block text-sm font-medium">{option.label}</span>
+                    <span className="block text-xs opacity-80">{option.hint}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </fieldset>
+
+          <Button type="submit" disabled={submitDisabled}>
+            {loading ? (
+              <span className="flex items-center gap-2">
+                <span className="border-primary-foreground/30 border-t-primary-foreground size-4 animate-spin rounded-full border-2" />
+                {copy.generate.submitPending}
+              </span>
+            ) : confirm !== null ? (
+              <span className="flex items-center gap-2">
+                <Sparkles className="size-4" />
+                {copy.generate.confirmSubmit(confirm.cost)}
+              </span>
+            ) : (
+              <span className="flex items-center gap-2">
+                <Sparkles className="size-4" />
+                {copy.generate.submit}
+              </span>
+            )}
+          </Button>
         </div>
-
-        <fieldset>
-          <legend className="text-muted-foreground mb-1 block text-sm">{copy.generate.characterLabel}</legend>
-          <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label={copy.generate.characterLabel}>
-            {CHARACTERS.map((option) => {
-              const selected = character === option.value;
-              return (
-                <label
-                  key={option.value}
-                  className={cn(
-                    "has-[:focus-visible]:border-ring has-[:focus-visible]:ring-ring/50 cursor-pointer rounded-lg border px-3 py-2 transition-colors outline-none has-[:focus-visible]:ring-[3px]",
-                    selected
-                      ? "border-border bg-secondary text-foreground"
-                      : "border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground bg-transparent",
-                  )}
-                >
-                  <input
-                    type="radio"
-                    name="character"
-                    value={option.value}
-                    checked={selected}
-                    onChange={() => {
-                      onCharacterChange(option.value);
-                    }}
-                    className="sr-only"
-                  />
-                  <span className="block text-sm font-medium">{option.label}</span>
-                  <span className="block text-xs opacity-80">{option.hint}</span>
-                </label>
-              );
-            })}
-          </div>
-        </fieldset>
-
-        <Button type="submit" disabled={submitDisabled}>
-          {loading ? (
-            <span className="flex items-center gap-2">
-              <span className="border-primary-foreground/30 border-t-primary-foreground size-4 animate-spin rounded-full border-2" />
-              {copy.generate.submitPending}
-            </span>
-          ) : confirm !== null ? (
-            <span className="flex items-center gap-2">
-              <Sparkles className="size-4" />
-              {copy.generate.confirmSubmit(confirm.cost)}
-            </span>
-          ) : (
-            <span className="flex items-center gap-2">
-              <Sparkles className="size-4" />
-              {copy.generate.submit}
-            </span>
-          )}
-        </Button>
       </div>
 
       <label className="text-muted-foreground flex items-center gap-2 text-sm">
