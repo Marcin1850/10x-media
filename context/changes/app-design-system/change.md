@@ -3,11 +3,65 @@ change_id: app-design-system
 title: App design system
 status: impl_reviewed
 created: 2026-08-10
-updated: 2026-08-12
+updated: 2026-08-13
 archived_at: null
 ---
 
 ## Notes
+
+### Manual QA — phases 4-6 (2026-08-13)
+
+All manual verification items for phases 4-6 in `plan.md` are now checked off, driven live in Chrome
+against the local dev stack with throwaway `@example.com` test accounts. Notes for future QA passes:
+
+- **A stale dev server (started the prior day) was already listening on :4321** before this session
+  started anything. It hot-reloaded most edits but silently ignored a `middleware.ts` change — Astro's
+  dev server does not always hot-reload middleware the same way it does components/pages. Killed and
+  restarted clean when a `credits` fault injection in `middleware.ts` had no effect after two reloads.
+  Worth checking `netstat`/process start time before trusting "it didn't work" during future live QA.
+- **Chrome autofilled the real signed-in-user credentials into `/auth/signin` on every page load** in
+  this browser profile (saved credential matching the `localhost:4321` origin from prior manual use).
+  Handled by always overwriting both fields with test credentials before any interaction and never
+  submitting a form population came from autofill rather than typed input.
+- **Fault injection (temporary `throw`, reverted immediately after screenshotting, confirmed via
+  `git diff`) was used for three states that are impractical to hit organically**: 5.4's read-failed
+  list (`summaries.astro`), 6.4's cost gate (`generate.ts` — padded a real fetched transcript past the
+  40,000-char threshold rather than hunting for a real video in the 40k-200k char transcript window),
+  and 6.8's unknown-balance shimmer (`middleware.ts`). Same technique the plan itself prescribes for 5.4.
+- **6.6 (amber isolation)** was verified by grepping `--attention` usage across `src/` and confirming
+  ghost/outline button and dropdown-menu hover states are `hover:bg-accent` in the untouched shadcn
+  primitives — a visual hover screenshot on a dark-on-dark JPEG was too subtle to trust.
+- **6.9**: navigating away before the debit landed aborted the in-flight request entirely (no card, no
+  charge) rather than completing in the background — consistent with "no incorrect debit", the
+  criterion's actual intent, even though the specific timing didn't exercise the "completes anyway"
+  path. Cloudflare Workers' behavior on client disconnect mid-request was not investigated further.
+
+Phases 7 (account), 8 (landing) and 9 (failure-copy branch + sweep guard) remain unimplemented — this
+QA pass only closed out manual verification for already-shipped phases 4-6.
+
+### Fix — capture bar row layout broke below ~1024px, and stayed broken above it too (2026-08-13)
+
+Found by the user manually resizing Chrome to 640px during the QA pass above and screenshotting the
+result: the three-part capture bar (URL field, character radiogroup, submit button) crammed into one
+`sm:flex-row` (640px) row with no room, squeezing the URL input to a sliver and wrapping its error
+message into a vertical column of single words.
+
+**First attempt (raising the breakpoint to `lg:` / 1024px) did not actually fix it.** `summaries.astro`
+wraps the page in `max-w-3xl` (768px) — the content column's width is capped there regardless of
+viewport, so once a `flex-row` layout triggers at *any* viewport ≥ ~800px, the row only ever has ~702px
+to work with. The radiogroup (~392px) and button (~208px) alone need ~624px of that, leaving ~78px for
+the URL field — confirmed by re-testing at 1200px after the first "fix" and finding it just as broken.
+Meaning: no breakpoint choice for a 3-way `flex-row` fixes this, because the container's max-width never
+grows past 768px on any screen.
+
+**Real fix**: `GenerateSummaryForm.tsx` now puts the URL field on its own full-width row, with the
+character radiogroup and submit button sharing a second `sm:flex-row` row below it (their combined
+~624px fits comfortably inside the ~702px available). Verified at 640px, ~657px (Chrome's practical
+desktop minimum), 960px and 1200px — URL field always full-width, error message always one line.
+
+**Lesson for future responsive checks in this codebase**: a component's own breakpoint classes are not
+enough evidence — check the width of its actual containing element (`max-w-3xl` pages cap at 768px
+regardless of viewport) before concluding a `sm:`/`lg:` bump fixes a squeeze.
 
 ### Intent (user, 2026-08-10)
 

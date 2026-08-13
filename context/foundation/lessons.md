@@ -71,3 +71,10 @@
 - **Problem**: The drift is silent and durable. In `app-design-system` step 4, triage fixed 8 findings in `plan.md` while the brief drifted on seven separate points — its scope line still scoped the `charged` signal to "the two 422 sites" after triage had established three, plus a stale decisions table and phase-risk cells. Nothing in the triage loop would have caught it; it surfaced only because the user asked. The brief is the short doc read first, so a stale one hands the implementer the pre-review design.
 - **Rule**: Whenever a fix changes `plan.md`, propagate it to `plan-brief.md` — and to any other derived doc in the change folder — in the same pass. Never leave the brief for later.
 - **Applies to**: plan, plan-review, implement, impl-review
+
+## Check for an already-running dev server before starting a new one
+
+- **Context**: Any local dev-server session (`npm run dev` or equivalent) started during a working session — especially on Windows where an old process can keep running invisibly across conversation turns.
+- **Problem**: A dev server from a prior session was already listening on :4321. Starting a second `npm run dev` silently fell back to :4322 while the browser kept hitting the stale original — which then didn't pick up a `middleware.ts` edit. Time was spent debugging why an injected fault "wasn't working" before discovering two processes were running.
+- **Rule**: Before starting a dev server, check whether one is already listening on the target port (`netstat`/`Get-NetTCPConnection` on Windows, `lsof`/`ss` elsewhere) and reuse it. Only start a new instance if none is running, or after deliberately stopping the old one.
+- **Applies to**: implement, impl-review

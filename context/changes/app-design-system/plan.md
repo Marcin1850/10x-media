@@ -1052,11 +1052,11 @@ anything here.
 
 #### Manual
 
-- [ ] 4.3 Three auth screens render in Polish on the at-rest slot
-- [ ] 4.4 Validation errors render in the error slot with correct plurals
-- [ ] 4.5 Password generator offered with password visible AND hidden
-- [ ] 4.6 Server error renders in the error slot
-- [ ] 4.7 Pending state shows; no double submit
+- [x] 4.3 Three auth screens render in Polish on the at-rest slot — verified 2026-08-13
+- [x] 4.4 Validation errors render in the error slot with correct plurals — verified 2026-08-13
+- [x] 4.5 Password generator offered with password visible AND hidden — verified 2026-08-13
+- [x] 4.6 Server error renders in the error slot — verified 2026-08-13
+- [x] 4.7 Pending state shows; no double submit — verified 2026-08-13
 
 ### Phase 5: Summaries — list and saved cards
 
@@ -1067,11 +1067,11 @@ anything here.
 
 #### Manual
 
-- [ ] 5.3 All four list states render and stay mutually exclusive
-- [ ] 5.4 Read-failed state never claims the list is empty
-- [ ] 5.5 Summary body reads at the specified measure and leading
-- [ ] 5.6 Both badges distinguishable in greyscale
-- [ ] 5.7 Expand/collapse, clickable header row, visible focus ring
+- [x] 5.3 All four list states render and stay mutually exclusive — verified 2026-08-13
+- [x] 5.4 Read-failed state never claims the list is empty — verified 2026-08-13
+- [x] 5.5 Summary body reads at the specified measure and leading — verified 2026-08-13
+- [x] 5.6 Both badges distinguishable in greyscale — verified 2026-08-13
+- [x] 5.7 Expand/collapse, clickable header row, visible focus ring — verified 2026-08-13
 
 ### Phase 6: Summaries — capture bar and generation states
 
@@ -1082,13 +1082,13 @@ anything here.
 
 #### Manual
 
-- [ ] 6.3 Short-video generation: pending → saved → real card
-- [ ] 6.4 Cold cost gate renders and confirms at the quoted price
-- [ ] 6.5 Pre-authorisation checkbox skips the gate
-- [ ] 6.6 Amber appears nowhere else; ghost/outline hover is neutral
-- [ ] 6.7 Failed generation renders the error slot and is dismissable
-- [ ] 6.8 Zero credits disables with no layout shift; unknown balance shimmers
-- [ ] 6.9 Navigating away mid-generation loses the card but not the credit
+- [x] 6.3 Short-video generation: pending → saved → real card — verified 2026-08-13
+- [x] 6.4 Cold cost gate renders and confirms at the quoted price — verified 2026-08-13
+- [x] 6.5 Pre-authorisation checkbox skips the gate — verified 2026-08-13
+- [x] 6.6 Amber appears nowhere else; ghost/outline hover is neutral — verified 2026-08-13
+- [x] 6.7 Failed generation renders the error slot and is dismissable — verified 2026-08-13
+- [x] 6.8 Zero credits disables with no layout shift; unknown balance shimmers — verified 2026-08-13
+- [x] 6.9 Navigating away mid-generation loses the card but not the credit — verified 2026-08-13
 
 ### Phase 7: Account surface
 
