@@ -1199,11 +1199,11 @@ anything here.
 
 #### Manual
 
-- [x] 9.5 Caption-less video reports the failure and the charge
-- [x] 9.6 Replay of the same `requestId` reports charged, worded as not a second debit
-- [x] 9.7 Transient failure reports no charge
-- [x] 9.8 Missing or non-boolean `charged` field says nothing about money
-- [x] 9.9 Full pass over the manual matrix with no visual regressions
+- [x] 9.5 Caption-less video reports the failure and the charge — 66eb5fe
+- [x] 9.6 Replay of the same `requestId` reports charged, worded as not a second debit — 66eb5fe
+- [x] 9.7 Transient failure reports no charge — 66eb5fe
+- [x] 9.8 Missing or non-boolean `charged` field says nothing about money — 66eb5fe
+- [x] 9.9 Full pass over the manual matrix with no visual regressions — 66eb5fe
 
 ### Phase 10: Full-app visual QA pass and fixes
 
