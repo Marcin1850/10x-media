@@ -936,6 +936,64 @@ value comes from the ledger outcome rather than a literal, and that no other res
 
 ---
 
+## Phase 10: Full-app visual QA pass and fixes
+
+### Overview
+
+An open-ended, freeform review of every shipped surface, run **after** Phase 9 so the failure-copy states
+it adds are in scope too. This is not a re-run of the fixed 11-item regression matrix in §Testing
+Strategy (Phase 9's 9.9 already covers that as a pass/fail check) — it is a slower, exploratory look for
+anything that reads as visually or structurally off, at widths beyond the desktop width every prior
+phase's manual verification was written against: normal desktop, the ~640–960px zone where the capture
+bar previously broke (see `change.md`'s 2026-08-13 fix note), and a genuine mobile width (~375px). Issues
+found are fixed directly as part of this phase; **the fix list below cannot be pre-specified** — it is
+populated by what the sweep actually finds, then closed out issue by issue.
+
+### Changes Required:
+
+#### 1. Systematic sweep
+
+**Files**: `src/pages/`, `src/components/` — exact files depend on findings
+
+**Intent**: Find what a fixed checklist misses. Every prior phase's manual verification confirmed its own
+surface in isolation, mostly at one width; nothing in the plan has looked at the whole app together, or
+away from desktop.
+
+**Contract**: Walk every surface in §Testing Strategy's 11-item list at three widths — desktop (~1280px),
+the squeeze zone (~640–960px), and mobile (~375px). At each stop, check: spacing/alignment against the
+token system (no ad-hoc values), text overflow and wrapping (Polish diacritics, long channel/video
+titles, the reading surface's 62ch measure), hover/focus/active states on every interactive element,
+thumbnail aspect ratios and fallbacks, and that empty/loading/error states still render correctly at the
+narrower widths. Log every issue found (what, where, at which width) before fixing anything — record
+findings in `change.md` under a dated note, the same way the capture-bar bug was recorded — then fix each
+one in its owning component. Fixes stay minimal and consistent with the existing token system: no new
+colors outside `global.css`'s palette, no one-off spacing that a `gap`/`p`/`m` scale value already covers.
+
+### Success Criteria:
+
+#### Automated Verification:
+
+- Linting and build pass: `npm run lint && npm run build`
+- The token guard still passes after any fixes: `npm run lint:tokens`
+- No palette utility regressions introduced by fixes:
+  `git grep -nE "(bg|text|border)-(white|blue|purple|red|slate)-?" -- src/` returns nothing outside
+  `src/styles/global.css`
+
+#### Manual Verification:
+
+- Every surface in §Testing Strategy reviewed at desktop width (~1280px) with issues logged in `change.md`
+- The same sweep repeated at the squeeze zone (~640–960px)
+- The same sweep repeated at mobile width (~375px)
+- Every logged issue is either fixed or explicitly deferred in `change.md` with a reason
+- A final pass over every width confirms the fixes themselves introduced no new regressions
+
+**Implementation Note**: This phase has no fixed contract because its purpose is discovery. Do not invent
+issues to have something to fix — an empty findings list is a valid, good outcome. Any fix touching the
+paid generation path or credit/session logic gets the same scrutiny Phase 9 asks for; everything else is
+presentational.
+
+---
+
 ## Testing Strategy
 
 There is no automated test suite; this is the manual matrix.
@@ -1146,3 +1204,19 @@ anything here.
 - [ ] 9.7 Transient failure reports no charge
 - [ ] 9.8 Missing or non-boolean `charged` field says nothing about money
 - [ ] 9.9 Full pass over the manual matrix with no visual regressions
+
+### Phase 10: Full-app visual QA pass and fixes
+
+#### Automated
+
+- [ ] 10.1 Linting and build pass
+- [ ] 10.2 Token guard passes after any fixes
+- [ ] 10.3 No palette utility regressions introduced by fixes
+
+#### Manual
+
+- [ ] 10.4 Desktop sweep (~1280px) across all 11 Testing Strategy surfaces, issues logged in `change.md`
+- [ ] 10.5 Squeeze-zone sweep (~640-960px) across all 11 surfaces, issues logged
+- [ ] 10.6 Mobile sweep (~375px) across all 11 surfaces, issues logged
+- [ ] 10.7 Every logged issue fixed or explicitly deferred with a reason
+- [ ] 10.8 Final pass confirms fixes introduced no new regressions

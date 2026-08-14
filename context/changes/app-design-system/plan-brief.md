@@ -67,10 +67,14 @@ confirmation email" action from wireframe card `2b`; self-serve top-up; speculat
 
 ## Architecture / Approach
 
-Dependency-forced, nine phases: tokens and fonts must exist before anything consumes them; the copy
+Dependency-forced, ten phases: tokens and fonts must exist before anything consumes them; the copy
 module, reporting seam and primitives before any surface is rewritten; the shell before surfaces can drop
-their ad-hoc navigation. Surfaces then land one at a time. The one paid-path change is isolated into the
-final phase so it gets S-09-grade review rather than being buried in a restyle diff.
+their ad-hoc navigation. Surfaces then land one at a time. The one paid-path change is isolated into
+phase 9 so it gets S-09-grade review rather than being buried in a restyle diff. Phase 10, added after the
+first nine were largely implemented, closes the plan with an open-ended visual/UX sweep across the whole
+app rather than another fixed-contract surface — it exists because every other phase's manual
+verification checked its own surface in isolation, mostly at desktop width, and nothing had looked at the
+app as a whole or away from desktop.
 
 ## Phases at a Glance
 
@@ -85,10 +89,12 @@ final phase so it gets S-09-grade review rather than being buried in a restyle d
 | 7. Account surface | Account page + delete dialog | Breaking the dialog's locked-shut-while-deleting guard |
 | 8. Landing surface | Hero, three steps, toast, orbs deleted | Empty left nav looking broken rather than deliberate |
 | 9. Failure copy + guard | `charged` signal, token guard in CI | Touching the paid path; reporting a debit that never landed |
+| 10. Full-app visual QA pass | Open-ended sweep at desktop, ~640-960px and ~375px, with fixes | No fixed contract — the risk is under-scoping the sweep, not any single file |
 
 **Prerequisites:** steps 1–3 closed (they are); local Supabase running; a synthetic local account for the
-delete-flow test; Supadata + OpenRouter credit for the generation-path tests.
-**Estimated effort:** ~5–7 sessions across 9 phases. Phases 5 and 6 are the largest.
+delete-flow test; Supadata + OpenRouter credit for the generation-path tests; phase 10 additionally
+requires phases 1–9 implemented, since it reviews the failure-copy states phase 9 adds.
+**Estimated effort:** ~5–7 sessions across phases 1–9, plus one open-ended sweep for phase 10.
 
 ## Open Risks & Assumptions
 
