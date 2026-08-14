@@ -3,11 +3,37 @@ change_id: app-design-system
 title: App design system
 status: impl_reviewed
 created: 2026-08-10
-updated: 2026-08-13
+updated: 2026-08-14
 archived_at: null
 ---
 
 ## Notes
+
+### Manual QA — phases 7-8 (2026-08-14)
+
+All manual verification items for phases 7-8 in `plan.md` (7.3-7.7, 8.3-8.6) are now checked off,
+driven live in Chrome against a freshly restarted local dev stack with a synthetic
+`ads-qa-p78@example.com` account created and deleted as part of the flow itself.
+
+- **Restarted the dev server before testing**, per the phase 4-6 lesson below: `2a9c04d` (this morning)
+  touched `src/pages/api/account/delete.ts`, an API route, and the server had been running since the
+  day before. The very first page load after restart threw an `Invalid hook call` in `AccountMenu.tsx`
+  — Vite mid-flight dependency re-optimization on cold start, not an app bug. A reload cleared it and
+  it did not recur.
+  Verified the landing page renders correctly signed-in and signed-out, and that the account menu
+  (Konto / Doładuj / Wyloguj się) works, before treating the page as stable.
+- **7.5 (dialog cannot be dismissed while a deletion is in flight)** used the same fault-injection
+  technique as phases 4-6: a temporary `await new Promise(r => setTimeout(r, 5000))` in
+  `delete.ts` before the `admin.auth.admin.deleteUser` call, reverted immediately after confirming
+  the locked state via screenshot, with `git diff` on the file confirming a clean revert before
+  moving on. Escape, an overlay click, and the close (×) button were all tried against the
+  `Usuwanie…` loading state and none dismissed the dialog.
+- **7.6 / 8.6** were verified together: the same deletion run in the 7.5 test redirected to `/` and
+  showed the toast; a second navigation to `/` confirmed it does not repeat (one-shot
+  `account_deleted` cookie consumed on first read).
+- **7.7**: console-verified exactly one `[unsupported-feature] {"feature":"top-up"}` warning from
+  `src/lib/services/reporting.ts` on clicking the account page's `Doładuj` button — same event key
+  the topbar's `AccountMenu` emits, confirming the shared `useTopUpAction` hook.
 
 ### Manual QA — phases 4-6 (2026-08-13)
 
