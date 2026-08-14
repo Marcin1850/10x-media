@@ -151,9 +151,10 @@ function messageForStatus(status: number, serverError?: string): string {
  * a paid-path guarantee, and each fails silently (a double charge, a replayed wrong summary, a
  * result the user paid for but never sees) rather than loudly:
  *
- * 1. `pendingRequest` — the idempotency key — is held ONLY across a network error, and released by
- *    any HTTP response. Widening that lifetime replays a previous video's summary; narrowing it
- *    charges twice for one ambiguous retry.
+ * 1. `pendingRequest` — the idempotency key — is held ONLY across a network error or a server-flagged
+ *    ambiguous refusal charge (`ambiguousCharge: true`), and released by every other HTTP response.
+ *    Widening that lifetime replays a previous video's summary; narrowing it charges twice for one
+ *    ambiguous retry.
  * 2. `requestSeq` is bumped on submit AND on every quote-relevant input change.
  * 3. A successful response is applied BEFORE the staleness check, never after.
  */
@@ -240,10 +241,6 @@ export function useGenerateSummary({
       return;
     }
 
-    // A response — of any status — means the server reached a decision, so there is nothing ambiguous
-    // left to deduplicate. Release the key before branching so every path below starts clean.
-    pendingRequest.current = null;
-
     const data: unknown = await response.json().catch(() => ({}));
 
     const payload = (data ?? {}) as {
@@ -255,7 +252,16 @@ export function useGenerateSummary({
       summaryId?: string;
       error?: string;
       charged?: unknown;
+      ambiguousCharge?: unknown;
     };
+
+    // A response usually means the server reached a decision, so there is nothing left to deduplicate
+    // and the key releases. The one exception is this specific 422: the server itself could not prove
+    // whether the refusal fee landed, so the key must survive to let a resubmit of these SAME inputs
+    // replay that decision instead of risking a second charge for one ambiguous attempt.
+    if (!(response.status === 422 && payload.ambiguousCharge === true)) {
+      pendingRequest.current = null;
+    }
 
     // A successful response means the summary was already saved and the user was charged. Apply it even
     // if the form was edited while the request was in flight (seq is now stale): dropping paid work

@@ -181,13 +181,15 @@ export function PendingSummaryCard({ pending, confirm, credits, onConfirm, onDis
 
       {pending.status === "failed" ? (
         <div className="mt-2 flex items-start justify-between gap-2">
-          <div className="min-w-0 flex-1 space-y-1">
+          <div role="alert" className="min-w-0 flex-1 space-y-1">
             {/* The server's own message, passed through by the hook — a transcript-less video and a
                 tripped budget breaker say very different things, and a generic "failed" hides which. */}
-            {/* Its own alert rather than a member of the polite region above: this is the one state
-                that stops the user's work and asks them to do something about a charge that did not
-                land. The dismiss button stays outside the alert so the announcement is the message. */}
-            <p role="alert" className="text-destructive flex items-start gap-2 text-xs">
+            {/* `role="alert"` sits on this wrapper, not the `<p>` below, so the charge outcome shares
+                ONE live region with the error instead of being a silent sibling outside it — a screen
+                reader must not announce the failure while dropping the one thing it stopped for: what
+                happened to the user's credit. The dismiss button stays outside the alert so the
+                announcement is only this text. */}
+            <p className="text-destructive flex items-start gap-2 text-xs">
               <CircleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
               <span className="break-words">{pending.error ?? copy.errors.generic}</span>
             </p>

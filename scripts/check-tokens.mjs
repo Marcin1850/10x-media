@@ -1,9 +1,14 @@
 // Sweep-completeness guard (S-09 / app-design-system phase 9).
 //
 // This repo has no test suite, so this grep-shaped scan is the only mechanical proof that the
-// design-system sweep (phases 1-8) is complete and stays that way: every colour must come from a
-// token in `src/styles/global.css`, never from a hardcoded Tailwind palette utility, a `white`/
-// `black` utility, or an arbitrary hex value in class position.
+// design-system sweep (phases 1-8) stays regression-free for EXACTLY the three utility-class
+// syntaxes below: a named Tailwind palette utility, a `white`/`black` utility, or an arbitrary hex
+// value in class position — each restricted to the `UTILITY_PREFIXES` families. It does not — and by
+// its grep-shaped design cannot — prove every colour in the tree is tokenized: raw CSS/inline style
+// declarations, non-hex arbitrary colours (`bg-[rgb(...)]`, `bg-[oklch(...)]`), and Tailwind colour
+// families outside `UTILITY_PREFIXES` (`divide-*`, `outline-*`, `accent-*`, …) all pass through
+// undetected. Widen `UTILITY_PREFIXES`/`PATTERNS` deliberately if one of those becomes a real risk;
+// don't read a clean run here as proof of the broader claim.
 //
 // `src/styles/global.css` is the sole exemption — it is where the 3b palette is SUPPOSED to live,
 // as CSS custom properties. Wired into `npm run lint:tokens` and into CI, after `npm run lint`.
@@ -66,6 +71,52 @@ const PATTERNS = [
     regex: new RegExp(`\\b(?:${UTILITY_PREFIXES.join("|")})-\\[#[0-9a-fA-F]{3,8}\\]`, "g"),
   },
 ];
+
+// Fixtures locking down what the three families above actually catch and, just as importantly,
+// what they deliberately do not (the header comment's scope note). `hit: true` lines must match
+// exactly one pattern; `hit: false` lines are the boundary cases a looser regex would wrongly flag,
+// or the out-of-scope syntaxes a future reader might assume are covered.
+const FIXTURES = [
+  { line: "bg-purple-600", hit: true },
+  { line: "text-red-500/50", hit: true },
+  { line: "border-white", hit: true },
+  { line: "ring-black/20", hit: true },
+  { line: "bg-[#fff]", hit: true },
+  { line: "bg-[#a1b2c3ff]", hit: true },
+  // In scope, but not a violation on its own — a real file line is checked as-is, and `bg-primary`
+  // must never match a hue/family it merely starts with.
+  { line: "bg-primary", hit: false },
+  { line: "text-foreground", hit: false },
+  // Out of scope by design: non-hex arbitrary colours and Tailwind families outside
+  // `UTILITY_PREFIXES` pass through undetected, per the header comment's scope note.
+  { line: "bg-[rgb(0,0,0)]", hit: false },
+  { line: "bg-[oklch(0.5_0_0)]", hit: false },
+  { line: "divide-red-500", hit: false },
+  { line: "outline-white", hit: false },
+  { line: "accent-blue-500", hit: false },
+  // Out of scope: a raw CSS/inline declaration, not a Tailwind utility class.
+  { line: "color: #ffffff;", hit: false },
+];
+
+function selfCheck() {
+  const failures = [];
+  for (const { line, hit } of FIXTURES) {
+    const matched = PATTERNS.some(({ regex }) => {
+      regex.lastIndex = 0;
+      return regex.test(line);
+    });
+    if (matched !== hit) {
+      failures.push(`"${line}": expected hit=${hit}, got hit=${matched}`);
+    }
+  }
+  if (failures.length > 0) {
+    console.error("✖ check-tokens.mjs fixture self-check failed — the patterns drifted from their documented scope:");
+    for (const failure of failures) console.error(`  ${failure}`);
+    process.exit(1);
+  }
+}
+
+selfCheck();
 
 function walk(dir, files = []) {
   for (const entry of readdirSync(dir)) {

@@ -235,9 +235,18 @@ interface GenerationInput {
  * `charged` is reported, never decided here (S-09 phase 9 D1): the client cannot tell from the status
  * alone whether this particular refusal took a credit, because three causes answer 422 and only some of
  * them charge. Callers derive the value from the ledger outcome — see `refuseAndCharge`.
+ *
+ * `charged` is OMITTED, not `false`, when the caller cannot prove no credit was taken (the `"ambiguous"`
+ * ledger outcome) — asserting `false` there would be a false statement about the user's money. The
+ * companion `ambiguousCharge: true` flag is what tells the client this specific 422 is safe, and
+ * necessary, to retry on the SAME idempotency key rather than a fresh one.
  */
-function refusalResponse(reason: RefusalReason, charged: boolean): Response {
-  return Response.json({ error: REFUSAL_COPY[reason], charged }, { status: 422 });
+function refusalResponse(reason: RefusalReason, charged: boolean | "ambiguous"): Response {
+  const body =
+    charged === "ambiguous"
+      ? { error: REFUSAL_COPY[reason], ambiguousCharge: true as const }
+      : { error: REFUSAL_COPY[reason], charged };
+  return Response.json(body, { status: 422 });
 }
 
 /**
@@ -254,10 +263,11 @@ function refusalResponse(reason: RefusalReason, charged: boolean): Response {
  * same action cost differently depending on state the user cannot see, and rewards rapid resubmission
  * of exactly the videos that window exists to re-check.
  *
- * The charge is fired and its outcome ignored for response purposes: `chargeFailedTranscript` never
- * throws, and a failure to bill costs the operator one credit while the user still gets the answer
- * they were owed. The response is unchanged from before this phase — same status, same string, no
- * balance field (D14, the user's explicit call that this ships silently).
+ * The charge is fired and its outcome never changes the refusal itself: `chargeFailedTranscript`
+ * never throws, and a failure to bill costs the operator one credit while the user still gets the
+ * 422 status and error string they were owed either way. The outcome DOES control one thing on the
+ * response — the `charged` signal added by this phase (see below) — but never the status, the error
+ * copy, or a balance field (D14, the user's explicit call that this ships without one).
  *
  * A `null` requestId SKIPS the charge rather than inventing a key. See the service: a generated key
  * would make the fee non-idempotent across exactly the retries `requestId` exists to absorb, and a
@@ -269,6 +279,10 @@ function refusalResponse(reason: RefusalReason, charged: boolean): Response {
  * (S-09 phase 9 D1): `charged` and `replay` both mean a credit was taken — `replay` by the original
  * attempt on this key, not by this retry — while `insufficient` and `notCharged` mean it was not. The
  * skipped-charge branch (no `requestId`) reports `false` for the same reason it charges nothing.
+ *
+ * The `ambiguous` ledger outcome reports neither: it passes straight through to `refusalResponse` as
+ * `"ambiguous"`, which omits `charged` and sends `ambiguousCharge: true` instead — the caller cannot
+ * prove which way this one went, so it must not guess `false` and must let the client retry safely.
  */
 async function refuseAndCharge(
   admin: NonNullable<ReturnType<typeof createAdminClient>>,
@@ -285,6 +299,9 @@ async function refuseAndCharge(
     amount: REFUSAL_CHARGE,
     refusalReason: reason,
   });
+  if (result.outcome === "ambiguous") {
+    return refusalResponse(reason, "ambiguous");
+  }
   const charged = result.outcome === "charged" || result.outcome === "replay";
   return refusalResponse(reason, charged);
 }
