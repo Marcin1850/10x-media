@@ -1192,10 +1192,10 @@ anything here.
 
 #### Automated
 
-- [x] 9.1 Guard passes on the swept tree
-- [x] 9.2 Guard catches an injected violation, then reverted
-- [x] 9.3 Linting and build pass
-- [x] 9.4 CI runs the new step
+- [x] 9.1 Guard passes on the swept tree — d94e0b1
+- [x] 9.2 Guard catches an injected violation, then reverted — d94e0b1
+- [x] 9.3 Linting and build pass — d94e0b1
+- [x] 9.4 CI runs the new step — d94e0b1
 
 #### Manual
 
