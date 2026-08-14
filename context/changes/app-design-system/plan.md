@@ -1110,11 +1110,11 @@ anything here.
 
 #### Manual
 
-- [x] 7.3 Page renders in Polish under the shared topbar, no back-link
-- [x] 7.4 Confirm button disabled until the email matches exactly
-- [x] 7.5 Dialog cannot be dismissed while a deletion is in flight
-- [x] 7.6 Successful deletion lands on `/` and shows the toast (via the `account_deleted` cookie)
-- [x] 7.7 Credit-row top-up shows the notice and emits one warning
+- [x] 7.3 Page renders in Polish under the shared topbar, no back-link — dc1952e
+- [x] 7.4 Confirm button disabled until the email matches exactly — dc1952e
+- [x] 7.5 Dialog cannot be dismissed while a deletion is in flight — dc1952e
+- [x] 7.6 Successful deletion lands on `/` and shows the toast (via the `account_deleted` cookie) — dc1952e
+- [x] 7.7 Credit-row top-up shows the notice and emits one warning — dc1952e
 
 ### Phase 8: Landing surface
 
@@ -1125,10 +1125,10 @@ anything here.
 
 #### Manual
 
-- [x] 8.3 Landing renders in Polish on the flat ground, no orbs or star field
-- [x] 8.4 Logo-only left side still looks deliberate
-- [x] 8.5 CTAs branch correctly on identity
-- [x] 8.6 Deletion toast renders
+- [x] 8.3 Landing renders in Polish on the flat ground, no orbs or star field — dc1952e
+- [x] 8.4 Logo-only left side still looks deliberate — dc1952e
+- [x] 8.5 CTAs branch correctly on identity — dc1952e
+- [x] 8.6 Deletion toast renders — dc1952e
 
 ### Phase 9: Failure-copy branch and sweep guard
 
