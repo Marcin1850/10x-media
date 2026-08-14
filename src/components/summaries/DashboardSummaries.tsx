@@ -196,6 +196,7 @@ export function SummariesSurface({ initialSummaries, initialCredits, listUnavail
                     // can report, so it keeps naming the attempt as running.
                     "generating",
           error: generation.error,
+          charged: generation.charged,
         };
 
   return (

@@ -71,6 +71,13 @@ export interface LastSuccess {
 export interface UseGenerateSummary {
   loading: boolean;
   error: string | null;
+  /**
+   * Whether the failure named by `error` took a credit — `null` when the endpoint sent no `charged`
+   * field or a non-boolean one, which degrades to silence rather than to `false` (S-09 phase 9 D1). A
+   * wrong statement about the user's money is worse than saying nothing. Cleared alongside `error` by
+   * the same `attemptId`-bound `clearAttempt`, so a stale charge line can never outlive its attempt.
+   */
+  charged: boolean | null;
   confirm: ConfirmState | null;
   result: SuccessState | null;
   credits: number | null;
@@ -168,6 +175,7 @@ export function useGenerateSummary({
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<SuccessState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [charged, setCharged] = useState<boolean | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [credits, setCredits] = useState<number | null>(initialCredits);
   const [attempt, setAttempt] = useState<GenerateAttempt | null>(null);
@@ -196,6 +204,7 @@ export function useGenerateSummary({
     const seq = (requestSeq.current += 1);
     setLoading(true);
     setError(null);
+    setCharged(null);
     setAttempt({ id: seq, url: submittedUrl, character: submittedCharacter });
     attemptSeq.current = seq;
 
@@ -245,6 +254,7 @@ export function useGenerateSummary({
       requiresConfirmation?: boolean;
       summaryId?: string;
       error?: string;
+      charged?: unknown;
     };
 
     // A successful response means the summary was already saved and the user was charged. Apply it even
@@ -311,6 +321,9 @@ export function useGenerateSummary({
       return;
     }
 
+    // Only the 422 bodies this endpoint sends actually carry `charged`; every other status leaves it
+    // `undefined`, which narrows to `null` here — silence about money rather than a guessed `false`.
+    setCharged(typeof payload.charged === "boolean" ? payload.charged : null);
     setError(messageForStatus(response.status, payload.error));
     setConfirm(null);
     setLoading(false);
@@ -319,6 +332,7 @@ export function useGenerateSummary({
   return {
     loading,
     error,
+    charged,
     confirm,
     result,
     credits,
@@ -352,6 +366,7 @@ export function useGenerateSummary({
         current === null || (attemptId !== undefined && current.id !== attemptId) ? current : null,
       );
       setError(null);
+      setCharged(null);
     },
   };
 }

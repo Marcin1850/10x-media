@@ -140,6 +140,11 @@ export const pl = {
       savedRefreshFailed: "Podsumowanie zapisane. Odśwież stronę, aby zobaczyć je na liście.",
     },
     dismissFailed: "Odrzuć to nieudane generowanie",
+    // Worded as a fact about the operation, not about this specific attempt — a replay of a
+    // request already charged by the original attempt must read identically to a first-time
+    // charge, never as "this retry charged you" (S-09 phase 9 D1).
+    charged: "Za tę próbę pobrano kredyt.",
+    notCharged: "Nie pobrano kredytu za tę próbę.",
   },
   account: {
     heading: "Konto",

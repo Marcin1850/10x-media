@@ -28,6 +28,12 @@ export interface PendingSummary {
   status: "generating" | "needs-confirmation" | "failed" | "saved" | "saved-refresh-failed";
   /** The server's message. Only ever set on `failed`. */
   error: string | null;
+  /**
+   * Whether the failure took a credit. Only meaningful on `failed`; `null` means the endpoint said
+   * nothing about money (a non-422 status, or a malformed body) and the card must say nothing either
+   * — see `useGenerateSummary`'s `charged`.
+   */
+  charged: boolean | null;
 }
 
 interface Props {
@@ -175,15 +181,25 @@ export function PendingSummaryCard({ pending, confirm, credits, onConfirm, onDis
 
       {pending.status === "failed" ? (
         <div className="mt-2 flex items-start justify-between gap-2">
-          {/* The server's own message, passed through by the hook — a transcript-less video and a
-              tripped budget breaker say very different things, and a generic "failed" hides which. */}
-          {/* Its own alert rather than a member of the polite region above: this is the one state
-              that stops the user's work and asks them to do something about a charge that did not
-              land. The dismiss button stays outside the alert so the announcement is the message. */}
-          <p role="alert" className="text-destructive flex min-w-0 items-start gap-2 text-xs">
-            <CircleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-            <span className="break-words">{pending.error ?? copy.errors.generic}</span>
-          </p>
+          <div className="min-w-0 flex-1 space-y-1">
+            {/* The server's own message, passed through by the hook — a transcript-less video and a
+                tripped budget breaker say very different things, and a generic "failed" hides which. */}
+            {/* Its own alert rather than a member of the polite region above: this is the one state
+                that stops the user's work and asks them to do something about a charge that did not
+                land. The dismiss button stays outside the alert so the announcement is the message. */}
+            <p role="alert" className="text-destructive flex items-start gap-2 text-xs">
+              <CircleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+              <span className="break-words">{pending.error ?? copy.errors.generic}</span>
+            </p>
+            {/* Charge outcome, stated only when the endpoint actually said something about money
+                (S-09 phase 9 D1). `null` — a non-422 status, or a malformed body — renders nothing:
+                a wrong statement about the user's money is worse than silence. */}
+            {pending.charged === true ? (
+              <p className="text-destructive text-xs">{copy.generate.charged}</p>
+            ) : pending.charged === false ? (
+              <p className="text-muted-foreground text-xs">{copy.generate.notCharged}</p>
+            ) : null}
+          </div>
           <button
             type="button"
             onClick={onDismiss}

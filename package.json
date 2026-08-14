@@ -9,6 +9,7 @@
     "astro": "astro",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "lint:tokens": "node scripts/check-tokens.mjs",
     "format": "prettier --write .",
     "db:sync-from-prod": "node scripts/sync-prod-to-local.mjs",
     "grant-credits": "node --env-file=.env scripts/grant-credits.mjs"
