@@ -879,7 +879,7 @@ shape changes; the strings stay English.
 #### 2. Branching failure copy
 
 **Files**: `src/components/hooks/useGenerateSummary.ts`,
-`src/components/summaries/SummariesSurface.tsx`, `src/components/summaries/PendingSummaryCard.tsx`
+`src/components/summaries/DashboardSummaries.tsx`, `src/components/summaries/PendingSummaryCard.tsx`
 
 **Intent**: Surface the signal so the card states the charge outcome truthfully.
 

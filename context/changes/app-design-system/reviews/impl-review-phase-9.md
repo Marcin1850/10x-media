@@ -4,8 +4,8 @@
 - **Plan**: `context/changes/app-design-system/plan.md`
 - **Scope**: Phase 9 of 10
 - **Date**: 2026-08-14
-- **Verdict**: REJECTED
-- **Findings**: 1 critical, 2 warnings, 3 observations
+- **Verdict**: REJECTED (as originally reviewed — all 6 findings below are now FIXED; see each Decision field and Verification Evidence)
+- **Findings**: 1 critical, 2 warnings, 3 observations — 0 remaining after triage
 
 ## Verdicts
 
@@ -37,7 +37,7 @@
   - Tradeoff: Adds another database round trip and a more complex tri-state contract on the paid failure path.
   - Confidence: MEDIUM — it is sound if the lookup distinguishes “no row” from “lookup failed,” which the current nullable lookup does not.
   - Blind spot: Database visibility and timing immediately after a dropped RPC response have not been exercised.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A — added an explicit `"ambiguous"` outcome to `ChargeFailedTranscriptResult` in `src/lib/services/credits.ts` (reserved for a rejected promise, a missing/malformed row, or an unrecognised outcome; `"notCharged"` now means only a structured PostgREST error, proving the reserve-and-settle statement rolled back). `refuseAndCharge`/`refusalResponse` in `src/pages/api/summaries/generate.ts` omit `charged` and send `ambiguousCharge: true` for that outcome. `useGenerateSummary.ts` keeps `pendingRequest` alive (instead of unconditionally releasing it on any response) when it sees a 422 with `ambiguousCharge: true`, so a resubmit of the same inputs reuses the same `requestId` for a safe idempotent retry. Lint and build verified clean.
 
 ### F2 — Replay copy says this attempt took the credit
 
@@ -47,7 +47,7 @@
 - **Location**: `src/lib/copy/pl.ts:146`
 - **Detail**: The plan and the adjacent comment require wording about the operation so a replay does not imply that the retry caused a second debit. `Za tę próbę pobrano kredyt.` means “A credit was charged for this attempt,” directly contradicting that contract and manual criterion 9.6.
 - **Fix**: Change the charged line to `Za tę operację pobrano kredyt.` and use the same operation-level noun in the no-charge line for symmetry.
-- **Decision**: PENDING
+- **Decision**: FIXED — `src/lib/copy/pl.ts:146-147` now reads `Za tę operację pobrano kredyt.` / `Nie pobrano kredytu za tę operację.`
 
 ### F3 — The new charge outcome is outside the alert region
 
@@ -57,7 +57,7 @@
 - **Location**: `src/components/summaries/PendingSummaryCard.tsx:190`
 - **Detail**: The async failure message has `role="alert"`, but the newly added charged/not-charged statement is a sibling outside that live region. Assistive technology may announce the error while omitting the financial outcome, which is the load-bearing information introduced by this phase.
 - **Fix**: Put the failure text and conditional money line inside one `role="alert"` container, without nesting another live region.
-- **Decision**: PENDING
+- **Decision**: FIXED — moved `role="alert"` from the inner `<p>` to the wrapping `<div>` in `src/components/summaries/PendingSummaryCard.tsx:183-201`, so the error text and the charged/not-charged line share one live region.
 
 ### F4 — Token guard's stated invariant is broader than its detection
 
@@ -76,7 +76,7 @@
   - Tradeoff: Regex false positives and parser edge cases grow quickly; a proper Tailwind/CSS-aware lint rule may be more maintainable.
   - Confidence: MEDIUM — the missing syntaxes are identifiable, but robust parsing is wider than the phase's grep-shaped design.
   - Blind spot: Generated strings and unusual Tailwind variants can still evade regex-only scanning.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A — narrowed the header comment in `scripts/check-tokens.mjs` to claim only what the three families/`UTILITY_PREFIXES` actually enforce, explicitly listing what stays out of scope (raw CSS/inline declarations, non-hex arbitrary colours, `divide-*`/`outline-*`/`accent-*`). Added a `FIXTURES`/`selfCheck()` self-test (no test framework exists in this repo) that locks down both the in-scope hits and the now-documented out-of-scope misses, run automatically at the top of every `npm run lint:tokens` invocation. Verified: the guard still passes clean on the swept tree, and a deliberately broken fixture correctly fails the self-check.
 
 ### F5 — Paid-path comment contradicts the implementation
 
@@ -86,7 +86,7 @@
 - **Location**: `src/pages/api/summaries/generate.ts:257`
 - **Detail**: The comment says the charge outcome is ignored for response purposes and that the response is unchanged, while phase 9 now reads the outcome and adds `charged` to the body. The later paragraph says the opposite. Contradictory documentation is risky beside load-bearing billing code.
 - **Fix**: Rewrite the stale paragraph to say billing failure never changes the refusal status/error copy, while the outcome controls only the `charged` signal.
-- **Decision**: PENDING
+- **Decision**: FIXED — rewrote the paragraph at `src/pages/api/summaries/generate.ts:266-270` to state the outcome never changes the refusal's status/error copy and controls only the `charged` signal.
 
 ### F6 — Phase 9 names a nonexistent forwarding file
 
@@ -96,7 +96,7 @@
 - **Location**: `context/changes/app-design-system/plan.md:881`
 - **Detail**: The phase file list names `src/components/summaries/SummariesSurface.tsx`, which does not exist. The contract later correctly points to `DashboardSummaries.tsx`, where the `SummariesSurface` component is exported and `charged` is forwarded. The implementation is present; only the plan pathname is stale.
 - **Fix**: Replace the nonexistent pathname with `src/components/summaries/DashboardSummaries.tsx` in `plan.md` and mirror the correction in `plan-brief.md` if that path appears there.
-- **Decision**: PENDING
+- **Decision**: FIXED — corrected `plan.md:882` to `src/components/summaries/DashboardSummaries.tsx`. `plan-brief.md` does not reference `SummariesSurface.tsx`, so no mirror was needed there.
 
 ## Verification Evidence
 
