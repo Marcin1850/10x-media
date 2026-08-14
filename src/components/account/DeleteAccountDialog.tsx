@@ -48,7 +48,9 @@ export default function DeleteAccountDialog({ email }: Props) {
         body: JSON.stringify({ confirmation: confirmValue }),
       });
       if (res.ok) {
-        window.location.assign("/?deleted=1");
+        // The server sets a one-shot cookie on this response; the landing
+        // page reads it directly, so no query param is needed here.
+        window.location.assign("/");
         return;
       }
       const body: unknown = await res.json().catch(() => null);
@@ -106,8 +108,12 @@ export default function DeleteAccountDialog({ email }: Props) {
         </div>
 
         {error ? (
-          <p className="border-destructive bg-destructive/10 text-destructive flex items-center gap-2 rounded-lg border-2 px-3 py-2 text-sm">
-            <CircleAlert className="size-4 shrink-0" />
+          <p
+            role="alert"
+            aria-atomic="true"
+            className="border-destructive bg-destructive/10 text-destructive flex items-center gap-2 rounded-lg border-2 px-3 py-2 text-sm"
+          >
+            <CircleAlert aria-hidden="true" className="size-4 shrink-0" />
             {error}
           </p>
         ) : null}

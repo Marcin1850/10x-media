@@ -32,7 +32,7 @@
   - Tradeoff: Records a discovered design adjustment in the plan instead of restoring its original component shape.
   - Confidence: HIGH — the component comment and both call sites make the implemented ownership explicit.
   - Blind spot: The pending manual top-up check must still confirm both surfaces emit the same event and show the same notice.
-- **Decision**: PENDING
+- **Decision**: FIXED — plan.md Phase 3 and Phase 7 contracts updated to document the implemented split (`useTopUpAction` shared hook + `TopUpNotice`; `TopUpAction` is the row-button presentation for phase 7; `AccountMenu` calls the hook/notice directly to preserve Radix menu-item semantics).
 
 ### F2 — Delete failure is not announced to assistive technology
 
@@ -42,7 +42,7 @@
 - **Location**: `src/components/account/DeleteAccountDialog.tsx:108`
 - **Detail**: An asynchronous deletion failure is inserted as a plain paragraph without `role="alert"`, `role="status"`, or live-region semantics. A screen-reader user may receive no indication that the irreversible request failed and the dialog is ready for retry. Existing dynamic error patterns announce errors in `src/components/auth/FormField.tsx` and `src/components/summaries/PendingSummaryCard.tsx`.
 - **Fix**: Add `role="alert"` (optionally `aria-atomic="true"`) to the error paragraph and mark the decorative `CircleAlert` as `aria-hidden="true"`.
-- **Decision**: PENDING
+- **Decision**: FIXED — added `role="alert" aria-atomic="true"` to the error paragraph and `aria-hidden="true"` to `CircleAlert` in `src/components/account/DeleteAccountDialog.tsx`.
 
 ### F3 — Public query state can display a false deletion-success message
 
@@ -61,7 +61,11 @@
   - Tradeoff: Adds hydration to a currently static toast and provides weaker provenance than server-issued evidence.
   - Confidence: MEDIUM — browser storage behavior is straightforward, but it changes the SSR presentation path.
   - Blind spot: Redirect timing and disabled-storage behavior would need browser verification.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A — `src/pages/api/account/delete.ts` now sets a short-lived, `httpOnly`,
+  `sameSite: "strict"` one-shot cookie (`account_deleted`, `maxAge: 60`, `secure` in prod) on successful
+  deletion; `src/pages/index.astro` reads and immediately clears it (`Astro.cookies.delete`); the client
+  redirect in `DeleteAccountDialog.tsx` now targets plain `/` instead of `/?deleted=1`. `plan.md` phase 8
+  §2 and the phase 7 manual-verification / progress items were updated to match.
 
 ### F4 — Fresh build verification was inconclusive in this environment
 
@@ -71,7 +75,8 @@
 - **Location**: N/A
 - **Detail**: `npm.cmd run lint` passed, the account palette grep returned no matches, and the landing blur grep returned no matches. A fresh `npm.cmd run build` did not reach compilation results: first Astro/Wrangler could not write config/log files outside the workspace, then Miniflare's Workers runtime terminated inside the sandbox; the unrestricted retry did not complete and was stopped. The Progress section records successful build verification in implementation commits `f736221` and `4987a77`, but this review could not independently reproduce it.
 - **Fix**: Rerun `npm.cmd run build` in the normal local environment with the Cloudflare Workers runtime available and attach the result before closing phases 7–8.
-- **Decision**: PENDING
+- **Decision**: FIXED — `npm run build` reran during triage (after the F2/F3 code edits) and completed
+  successfully: `[build] Complete!`, server built in 18.85s, no errors. `npm run lint` also reran clean.
 
 ## Verification Evidence
 
@@ -80,7 +85,7 @@
 | Criterion | Command | Result |
 |-----------|---------|--------|
 | 7.1 / 8.1 lint | `npm.cmd run lint` | PASS |
-| 7.1 / 8.1 build | `npm.cmd run build` | INCONCLUSIVE — environment/runtime blocker; implementation commits record PASS |
+| 7.1 / 8.1 build | `npm.cmd run build` | PASS — rerun during triage (post F2/F3 edits): `[build] Complete!`, server built in 18.85s |
 | 7.2 account palette sweep | `git grep -nE "(bg|text|border)-(white|blue|purple|red|slate)-?" -- src/pages/account.astro src/components/account` | PASS — no matches |
 | 8.2 landing blur sweep | `git grep -n "blur-\\[" -- src/components/Welcome.astro` | PASS — no matches |
 

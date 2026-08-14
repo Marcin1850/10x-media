@@ -3,7 +3,13 @@ import Welcome from "@/components/Welcome.astro";
 import Layout from "@/layouts/Layout.astro";
 import { copy } from "@/lib/copy";
 
-const deleted = Astro.url.searchParams.get("deleted") === "1";
+// Server-issued one-shot cookie, not the `?deleted=1` query param: the cookie
+// can only have been set by a successful `/api/account/delete` response, so
+// visiting this URL directly can no longer show a false success toast.
+const deleted = Astro.cookies.get("account_deleted")?.value === "1";
+if (deleted) {
+  Astro.cookies.delete("account_deleted", { path: "/" });
+}
 ---
 
 <Layout>

@@ -387,14 +387,20 @@ renders `<Topbar />` above `<slot />`; `Welcome.astro` drops its own import.
 **Intent**: Keep the affordance decision #2 preserved while telling the truth about it — and define the
 behaviour **once**, because phase 7 needs the identical interaction on the account page's credit row.
 
-**Contract**: `TopUpAction.tsx` is the single owner of the top-up affordance: a small React component
-taking a `variant` (`"menu-item"` | `"row-button"`) for its trigger presentation only. Clicking reveals a
-plain not-supported notice — no pricing, no plans, no card — rendered into a container with
-`role="status"` and `aria-live="polite"` so it is announced without stealing focus, and dismissable. The
-click calls `reportUnsupportedFeature("top-up")` from the phase 2 seam: **one** stable event key
-(`"top-up"`, the same literal from both surfaces), severity `warn`, and no user identifiers in the
-payload. `AccountMenu.tsx` renders it as the top-up menu item (`copy.nav.topUp`); phase 7 hydrates the
-same component on `account.astro`. Emitting once per click, not once per render.
+**Contract**: `TopUpAction.tsx` is the single owner of the top-up affordance. As implemented, ownership
+splits into a shared `useTopUpAction()` hook (reveal state, the `trigger`/`dismiss` handlers and the
+`reportUnsupportedFeature("top-up")` call) plus two presentations built on it: `TopUpNotice` (the shared
+notice UI) and `TopUpAction` (a standalone row-button that composes the hook and the notice for phase 7).
+`AccountMenu.tsx` calls `useTopUpAction` and `TopUpNotice` directly rather than a `variant` prop on
+`TopUpAction`, because Radix's dropdown-menu-item semantics require the trigger to stay a `DropdownMenuItem`
+element, not a nested `<button>` — `TopUpAction`'s own trigger cannot satisfy that. This replaces the
+originally planned `variant` (`"menu-item"` | `"row-button"`) prop API; the hook is the actual seam that
+keeps both surfaces from drifting. The notice — no pricing, no plans, no card — renders into a container
+with `role="status"` and `aria-live="polite"` so it is announced without stealing focus, and is
+dismissable. The click calls `reportUnsupportedFeature("top-up")` from the phase 2 seam: **one** stable
+event key (`"top-up"`, the same literal from both surfaces), severity `warn`, and no user identifiers in
+the payload. `AccountMenu.tsx` renders the top-up menu item (`copy.nav.topUp`); phase 7 renders the
+`TopUpAction` row-button on `account.astro`. Emitting once per click, not once per render.
 
 #### 4. Route rename
 
@@ -736,9 +742,9 @@ The account page and its delete dialog, rebuilt on tokens with the destructive s
 
 **Contract**: `bg-cosmic` wrapper and glassmorphic cards give way to the at-rest slot. The identity block
 shows the email; a credit row shows the balance from `Astro.locals.credits` alongside
-`<TopUpAction variant="row-button" client:load />` — **the phase 3 component, imported, not
-reimplemented**. This page adds no inline `<script>`; the interaction, the notice and the
-`reportUnsupportedFeature("top-up")` call all live in that island, so the two surfaces cannot drift. The
+`<TopUpAction client:load />` — **the phase 3 component, imported, not reimplemented**. This page adds
+no inline `<script>`; the interaction, the notice and the `reportUnsupportedFeature("top-up")` call all
+live in `useTopUpAction` (shared with `AccountMenu` — see phase 3), so the two surfaces cannot drift. The
 danger zone is a distinct card bound to `--destructive`. Copy from `copy.account`.
 
 #### 2. Delete dialog
@@ -769,7 +775,8 @@ server's `error` field is still preferred when present, and stays English.
 - The page renders in Polish under the shared topbar, with no "back to dashboard" link
 - The delete dialog opens; the confirm button stays disabled until the email matches exactly
 - While a deletion is in flight the dialog cannot be dismissed by Escape, overlay click or close button
-- A successful deletion lands on `/?deleted=1`
+- A successful deletion lands on `/` and shows the deletion toast (server-issued via the one-shot
+  `account_deleted` cookie — see phase 8 §2); a direct visit to `/` afterward does not repeat the toast
 - The top-up action on the credit row shows the notice and emits one warning — the same `"top-up"` event
   key the topbar menu emits, from the same component
 
@@ -810,8 +817,12 @@ later, and no billing exists. Copy from `copy.landing`.
 
 **Intent**: Keep the post-deletion confirmation, tokenized.
 
-**Contract**: The `?deleted=1` toast keeps its `role="status"` and its position, rendering on `--card`
-with a `--border` outline rather than hardcoded emerald. Copy from `copy.landing`.
+**Contract**: The toast keeps its `role="status"` and its position, rendering on `--card` with a
+`--border` outline rather than hardcoded emerald. Copy from `copy.landing`. Its trigger changed post-plan
+(impl-review-phases-7-8.md F3): rather than the client-set `?deleted=1` query param — which anyone could
+type into the URL bar regardless of whether their account still exists — `/api/account/delete` now sets a
+short-lived, `httpOnly`, `sameSite: "strict"` one-shot cookie (`account_deleted`) on its success response;
+`index.astro` reads and immediately clears that cookie, and the client redirects to plain `/`.
 
 ### Success Criteria:
 
@@ -1102,7 +1113,7 @@ anything here.
 - [ ] 7.3 Page renders in Polish under the shared topbar, no back-link
 - [ ] 7.4 Confirm button disabled until the email matches exactly
 - [ ] 7.5 Dialog cannot be dismissed while a deletion is in flight
-- [ ] 7.6 Successful deletion lands on `/?deleted=1`
+- [ ] 7.6 Successful deletion lands on `/` and shows the toast (via the `account_deleted` cookie)
 - [ ] 7.7 Credit-row top-up shows the notice and emits one warning
 
 ### Phase 8: Landing surface
