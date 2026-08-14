@@ -9,6 +9,46 @@ archived_at: null
 
 ## Notes
 
+### Manual QA — phase 9 (2026-08-14)
+
+All manual verification items for phase 9 in `plan.md` (9.5-9.9) are now checked off, driven live in
+Chrome against a synthetic `ads-qa-p9@example.com` account created for this pass.
+
+- **Technique**: fault-injected `generate.ts`'s `fetchTranscript` call (temporary one-line swap to a
+  literal `{ ok: false, reason: ... }`, reverted immediately after each sub-test and confirmed via
+  `git diff` showing no residual change) to force the `unavailable` (9.5/9.6) and `failed` (9.7) outcomes
+  deterministically, without a real Supadata call. 9.6's replay was driven by intercepting `window.fetch`
+  client-side to let the real request land server-side then throw instead of resolving — simulating
+  "request delivered, reply lost" — so the idempotency key survived for the resubmit. 9.8 reused the same
+  interception technique to strip the `charged` field from a real response before it reached the hook.
+- **9.5**: server confirmed `422` + `charged: true` + the caption-less copy; the UI card showed the
+  server's message plus "Za tę operację pobrano kredyt."
+- **9.6**: the resubmitted request (same `requestId`) hit `respondToRepeatedRequest`'s replay branch and
+  answered `charged: true` with the same generic copy as a first-time charge — no second debit (credits
+  unchanged across both attempts).
+- **9.7**: server confirmed `422` + `charged: false` + the generic transient copy; UI showed "Nie pobrano
+  kredytu za tę operację."
+- **9.8**: with `charged` stripped from the response, the card rendered neither the charged nor
+  not-charged line — confirmed silent on money, per the hook's `typeof payload.charged === "boolean"`
+  contract.
+- **9.9**: light regression sweep (phase 9's diff only touches the generation/failure-copy path) —
+  summaries list/filters/expand-collapse, account page, landing signed-in/signed-out, and sign-in all
+  rendered correctly.
+
+**Real-cost incident, recorded for future QA sessions in this repo.** Before the fault-injection timing
+was sorted out, three requests landed on pre-edit or cache-warmed code paths and ran for real: a stale
+Vite dependency-reoptimization window (same class of issue as the phases 4-6 note below) let two
+submissions execute against the OLD `generate.ts` before the edit was picked up, and a third
+("PSY - Gangnam Style") hit a warm shared-transcript cache from earlier phase testing and bypassed the
+mock entirely even though the code was current. ~3 credits and a small real Supadata/OpenRouter spend
+were consumed unintentionally. **Fix applied**: after any edit to an API route under this dev setup, kill
+and restart the dev server fully (don't rely on hot-reload) and verify the change is live via a
+zero-risk `fetch` probe from the console before submitting through the UI — and use clearly fake,
+guaranteed-unique video IDs (e.g. `qa9fake001x`) for any mocked-transcript test, since a real or
+previously-tested video ID can carry a warm cache that silently bypasses the fault injection. The
+synthetic test account was topped up via `npm run grant-credits` (local dev only) after burning through
+its starting balance.
+
 ### Manual QA — phases 7-8 (2026-08-14)
 
 All manual verification items for phases 7-8 in `plan.md` (7.3-7.7, 8.3-8.6) are now checked off,
