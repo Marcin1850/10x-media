@@ -3,7 +3,7 @@ change_id: app-design-system
 title: App design system
 status: impl_reviewed
 created: 2026-08-10
-updated: 2026-08-14
+updated: 2026-08-15
 archived_at: null
 ---
 
