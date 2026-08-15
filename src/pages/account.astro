@@ -16,7 +16,7 @@ const { user, credits } = Astro.locals;
           {copy.account.signedInAs(user?.email ?? "")}
         </p>
 
-        <div class="border-border mt-6 flex items-center justify-between border-t pt-6">
+        <div class="border-border mt-6 flex items-start justify-between border-t pt-6">
           <div class="text-muted-foreground flex items-center gap-2 text-sm">
             <span>{copy.account.creditsLabel}</span>
             {

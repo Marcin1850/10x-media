@@ -52,7 +52,7 @@ export function TopUpAction() {
   const { revealed, trigger, dismiss } = useTopUpAction();
 
   return (
-    <div>
+    <div className="flex flex-col items-end">
       <Button type="button" variant="outline" size="sm" onClick={trigger}>
         {copy.nav.topUp}
       </Button>

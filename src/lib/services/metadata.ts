@@ -189,10 +189,18 @@ export async function fetchVideoMetadata(
     // response (image/carousel/post, i.e. not a YouTube video) still yields title, channel and date.
     const media = metadata.media.type === "video" ? metadata.media : null;
 
+    // YouTube responses carry no `author.username` — despite the SDK's `MetadataAuthor` type
+    // declaring it a required `string`, it is simply absent for this platform (verified against a
+    // real response, see `context/changes/persist-video-metadata/docs/supadata-metadata.md`). The
+    // one stable channel identifier YouTube actually returns is `additionalData.channelId`, which is
+    // untyped (`Record<string, any>`) and so is narrowed here rather than trusted.
+    const channelId = typeof metadata.additionalData.channelId === "string" ? metadata.additionalData.channelId : null;
+
     return {
       title: metadata.title,
       thumbnailUrl: media?.thumbnailUrl ?? null,
       channelName: metadata.author.displayName,
+      channelId,
       durationSeconds: normaliseDuration(media?.duration),
       publishedAt: normalisePublishedAt(metadata.createdAt),
     };

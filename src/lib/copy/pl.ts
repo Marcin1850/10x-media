@@ -1,3 +1,5 @@
+import { relativeTimeBucket } from "@/lib/format";
+
 /**
  * The single Polish copy source. Structured per-surface so a second locale is a new file that
  * satisfies `Copy` (see `index.ts`), not another sweep across every component.
@@ -15,6 +17,42 @@ function pluralChars(n: number): string {
   const last = n % 10;
   if (last >= 2 && last <= 4 && !(lastTwo >= 12 && lastTwo <= 14)) return "znaki";
   return "znaków";
+}
+
+/**
+ * The 1 / 2-4 excl. 12-14 / 5+ noun-plural class used by `relativeTime` below. "dzień" (day) needs no
+ * entry here: its plural is "dni" uniformly for every count 2 and up, with no separate 2-4 form —
+ * unlike week/month/year, which do distinguish one — so `relativeTime` spells that unit out directly.
+ */
+function pluralClass(n: number, one: string, few: string, many: string): string {
+  if (n === 1) return one;
+  const lastTwo = n % 100;
+  const last = n % 10;
+  return last >= 2 && last <= 4 && !(lastTwo >= 12 && lastTwo <= 14) ? few : many;
+}
+
+/**
+ * "dzisiaj" / "wczoraj" / "N <jednostka> temu", from a bucket already decided by
+ * `relativeTimeBucket` in `lib/format.ts` — that module owns which bucket a day count falls into
+ * (identical for every locale); this only chooses the Polish words for it, the one part that
+ * genuinely differs per language.
+ */
+function relativeTime(days: number): string {
+  const { unit, value } = relativeTimeBucket(days);
+  switch (unit) {
+    case "today":
+      return "dzisiaj";
+    case "yesterday":
+      return "wczoraj";
+    case "days":
+      return `${value} dni temu`;
+    case "weeks":
+      return `${value} ${pluralClass(value, "tydzień", "tygodnie", "tygodni")} temu`;
+    case "months":
+      return `${value} ${pluralClass(value, "miesiąc", "miesiące", "miesięcy")} temu`;
+    case "years":
+      return `${value} ${pluralClass(value, "rok", "lata", "lat")} temu`;
+  }
 }
 
 export const pl = {
@@ -108,6 +146,10 @@ export const pl = {
       expand: "Rozwiń",
       collapse: "Zwiń",
       summaryOf: (title: string) => `podsumowanie: ${title}`,
+      openVideo: (title: string) => `Otwórz na YouTube: ${title}`,
+      openChannel: (channelName: string) => `Otwórz kanał na YouTube: ${channelName}`,
+      /** Parenthesised suffix after the upload date, e.g. `"(3 dni temu)"` — the date alone is exact but not immediately legible as "how long ago". */
+      publishedRelative: (days: number) => `(${relativeTime(days)})`,
     },
   },
   generate: {
@@ -177,8 +219,9 @@ export const pl = {
           "Wklej link i otrzymaj najważniejsze punkty — wystarczą, aby ocenić, czy film jest wart obejrzenia w całości, bez marnowania na to czasu.",
       },
       tuned: {
-        heading: "Dopasowane do kanału",
-        description: "Kanały informacyjne — fakty i wnioski. Kanały edukacyjne — pojęcia wyjaśnione krok po kroku.",
+        heading: "Dopasowane do treści",
+        description:
+          "Materiały informacyjne — fakty i wnioski. Materiały edukacyjne — pojęcia wyjaśnione krok po kroku.",
       },
       library: {
         heading: "Twoja biblioteka podsumowań",

@@ -61,10 +61,12 @@ interface Props {
 /**
  * The generation in flight, sitting in the same slot the saved card will occupy once it commits.
  *
- * Deliberately NOT a lookalike of `SummaryCard`: no thumbnail outside the cost-gate state, because
- * nothing here is saved yet. The summary body is never rendered here even after the response arrives
- * — it belongs to the real card the re-read produces, and showing it twice would let the two
- * disagree.
+ * Deliberately NOT a lookalike of `SummaryCard`: never a *real* (reported/persisted) thumbnail,
+ * because nothing here is saved yet. It does show a thumbnail in every status, but always the free
+ * one derived from the video id alone (`VideoThumbnail` with `reportedUrl: null`) — that needs no
+ * saved or fetched data, so the "nothing here is saved yet" rule never blocks it. The summary body is
+ * never rendered here even after the response arrives — it belongs to the real card the re-read
+ * produces, and showing it twice would let the two disagree.
  *
  * This card is client-session-only. A reload mid-generation drops it, which is accepted: the
  * server-side generation lease and the idempotency ledger already prevent a double charge, so the
@@ -72,7 +74,10 @@ interface Props {
  */
 export function PendingSummaryCard({ pending, confirm, credits, onConfirm, onDismiss }: Props) {
   const isGate = pending.status === "needs-confirmation";
-  const gateYoutubeId = isGate && confirm !== null ? extractYoutubeId(confirm.url) : null;
+  // `pending.url` is `attempt.url` for every status (`DashboardSummaries.tsx`), and equals
+  // `confirm.url` for the same attempt (`useGenerateSummary.ts`) — one id, valid for the card's whole
+  // lifecycle, not just the gate.
+  const youtubeId = extractYoutubeId(pending.url);
   // Matches `GenerateSummaryForm`'s `confirmTooExpensive`: the known balance can't cover the quote, so
   // no resulting balance can ever be shown — only a known-insufficient one could go negative.
   const gateTooExpensive = confirm !== null && credits !== null && credits < confirm.cost;
@@ -95,9 +100,9 @@ export function PendingSummaryCard({ pending, confirm, credits, onConfirm, onDis
                 "border-border bg-muted animate-pulse border border-dashed",
       )}
     >
-      {isGate && confirm !== null && gateYoutubeId ? (
+      {youtubeId ? (
         <div className="mb-3 w-28">
-          <VideoThumbnail youtubeId={gateYoutubeId} reportedUrl={null} title={null} />
+          <VideoThumbnail youtubeId={youtubeId} reportedUrl={null} title={null} />
         </div>
       ) : null}
 

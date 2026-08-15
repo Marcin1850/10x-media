@@ -1,8 +1,15 @@
 import { useId, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { Calendar, ChevronDown, Clock } from "lucide-react";
 import { VideoThumbnail } from "@/components/summaries/VideoThumbnail";
 import { SummaryMarkdown } from "@/components/summaries/SummaryMarkdown";
-import { formatCreatedDate, formatDuration, formatPublishedDate } from "@/lib/format";
+import {
+  daysSince,
+  formatCreatedDate,
+  formatDuration,
+  formatPublishedDate,
+  youtubeChannelUrl,
+  youtubeWatchUrl,
+} from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { copy } from "@/lib/copy";
 import type { ChannelCharacter, SummaryListItem } from "@/types";
@@ -74,18 +81,29 @@ export function SummaryCard({ item }: Props) {
 
   const duration = formatDuration(item.durationSeconds);
   const published = formatPublishedDate(item.publishedAt);
+  const publishedDaysAgo = daysSince(item.publishedAt);
   // Pre-S-08 rows carry nulls in every descriptive column. Omit the whole row in that case rather
-  // than render a line of separators with nothing between them.
-  const meta = [item.channelName, duration, published].filter((part): part is string => part !== null);
+  // than render an empty one.
+  const hasMeta = item.channelName !== null || duration !== null || published !== null;
 
   const toggleLabel = `${expanded ? copy.summaries.card.collapse : copy.summaries.card.expand} ${copy.summaries.card.summaryOf(item.title ?? item.url)}`;
+  const videoUrl = youtubeWatchUrl(item.youtubeId);
+  // `relative z-10` on the two links below lifts them above the toggle button's stretched `::after`
+  // (see the comment on the outer row), which otherwise catches every click in the row first.
+  const linkClassName = "relative z-10 hover:text-foreground hover:underline";
 
   return (
     <article className="border-border bg-card hover:bg-accent rounded-xl border transition-colors">
       {/* `relative` anchors the expand button's stretched `::after`, which is what makes the whole
           header row clickable without nesting the heading and paragraphs inside a `<button>`. */}
       <div className="relative flex items-start gap-4 p-4">
-        <div className="w-32 shrink-0 sm:w-40">
+        <a
+          href={videoUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="relative z-10 block w-32 shrink-0 sm:w-40"
+          aria-label={copy.summaries.card.openVideo(item.title ?? item.url)}
+        >
           {/* Keyed by the thumbnail source: `stage` is a one-shot forward-only guard seeded on mount,
               so a card whose source changes under a list refresh has to remount to retry it. */}
           <VideoThumbnail
@@ -94,18 +112,56 @@ export function SummaryCard({ item }: Props) {
             reportedUrl={item.thumbnailUrlReported}
             title={item.title}
           />
-        </div>
+        </a>
 
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex items-start justify-between gap-2">
             {/* `url` is NOT NULL, so there is always something to name the card with. */}
             <h3 className="text-card-foreground line-clamp-2 text-sm font-semibold break-words">
-              {item.title ?? item.url}
+              <a href={videoUrl} target="_blank" rel="noopener noreferrer" className={linkClassName}>
+                {item.title ?? item.url}
+              </a>
             </h3>
             <CharacterBadge character={item.character} />
           </div>
 
-          {meta.length > 0 ? <p className="text-muted-foreground truncate text-xs">{meta.join(" · ")}</p> : null}
+          {hasMeta ? (
+            <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+              {item.channelName !== null ? (
+                <span className="min-w-0 truncate">
+                  {item.channelId !== null ? (
+                    <a
+                      href={youtubeChannelUrl(item.channelId)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={linkClassName}
+                      aria-label={copy.summaries.card.openChannel(item.channelName)}
+                    >
+                      {item.channelName}
+                    </a>
+                  ) : (
+                    item.channelName
+                  )}
+                </span>
+              ) : null}
+              {/* Duration and upload date get an icon rather than relying on the `·` separator alone
+                  to say what kind of value each is — both were previously bare, same-styled text
+                  indistinguishable from the channel name and from each other at a glance. */}
+              {duration !== null ? (
+                <span className="inline-flex shrink-0 items-center gap-1">
+                  <Clock className="size-3" aria-hidden="true" />
+                  {duration}
+                </span>
+              ) : null}
+              {published !== null ? (
+                <span className="inline-flex shrink-0 items-center gap-1">
+                  <Calendar className="size-3" aria-hidden="true" />
+                  {published}
+                  {publishedDaysAgo !== null ? ` ${copy.summaries.card.publishedRelative(publishedDaysAgo)}` : null}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
 
           <p className="text-muted-foreground text-xs">
             {copy.summaries.card.generatedOn(formatCreatedDate(item.createdAt))}
@@ -129,7 +185,7 @@ export function SummaryCard({ item }: Props) {
       </div>
 
       {expanded ? (
-        <div id={contentId} className="border-border max-w-[62ch] space-y-2 border-t px-4 py-4">
+        <div id={contentId} className="border-border mx-auto max-w-[62ch] space-y-2 border-t px-4 py-4">
           <SummaryMarkdown>{item.content}</SummaryMarkdown>
         </div>
       ) : null}

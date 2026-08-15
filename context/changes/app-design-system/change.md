@@ -9,6 +9,278 @@ archived_at: null
 
 ## Notes
 
+### Manual QA — phase 10 sweep, in progress (2026-08-14)
+
+Sweep run against the branch deployed directly to production (`https://10x-media.nightshiftlab.workers.dev`,
+version `eae88462-fe2d-4b64-92a9-115746c1ff75`) rather than local dev, per user request — bypasses CI and
+the `master` merge, does not affect `master`'s deployed state going forward.
+
+- **Finding 1 — landing copy mismatched its own model (fixed).** The "tuned" feature card on `/` read
+  "Dopasowane do kanału" ("Tuned to the channel"), but `src/lib/services/llm.ts:20,48` selects the
+  `informational` / `educational` prompt **per video**, not per channel — a single YouTube channel can mix
+  both kinds of content, so the channel-level claim was simply false. Changed heading to "Dopasowane do
+  treści" and reworded the description from "Kanały informacyjne… Kanały edukacyjne…" to "Materiały
+  informacyjne… Materiały edukacyjne…" (`src/lib/copy/pl.ts:180-182`). Presentational only, no scope
+  overlap with the paid path.
+
+- **Finding 2 — no way to reach the source video or channel from a summary card (fixed, wider than
+  presentational).** `SummaryCard.tsx` rendered the thumbnail, title and channel name as inert text —
+  nothing linked out to YouTube. The video half was free (`youtubeId` is a `NOT NULL` column, so
+  `https://www.youtube.com/watch?v=<id>` always resolves), but the channel half needed a real
+  identifier: `videos.channel_name` is the vendor's **display name**, not a handle, and is not a valid
+  link target (display names aren't unique or URL-safe). Checked `@supadata/js`'s `MetadataAuthor` type
+  — it carries `username` (the channel handle) alongside `displayName`, but the app had never captured
+  it.
+  - **Schema change, on production, mid-sweep**: `channel_username text` added to `videos` and
+    `metadata_cache`, and `get_metadata_cache` / `save_metadata_cache` / `persist_summary` widened to
+    carry it (`supabase/migrations/20260814130000_channel_username.sql`), following the exact
+    drop-and-recreate pattern `20260725120000` and `20260731120000` established for a signature change,
+    including the same "run `db push` and `wrangler deploy` back to back, no gap" discipline — confirmed
+    with a `--dry-run` first, then pushed and redeployed in one shot. Threaded through
+    `metadata.ts` -> `metadata-cache.ts` -> `summaries.ts` -> `summary-list.ts` -> `types.ts` ->
+    `SummaryCard.tsx`.
+  - **Existing summaries stay without a channel link** — `channel_username` is null on every row
+    persisted before this migration, and there is no backfill (would mean re-fetching metadata from
+    Supadata, at cost, for every historical row). Only generations from this point forward pick it up.
+    Accepted rather than backfilled, consistent with how `metadata_via`, `resolved_via` and every other
+    telemetry column added mid-project already treats pre-migration rows (null, not reconstructed).
+  - **UI**: thumbnail and title both link to the video; channel name links to the channel only when
+    `channelUsername` is non-null, else renders as plain text (never a dead or wrong link). Both open in
+    a new tab (`target="_blank" rel="noopener noreferrer"`, per user request). The links sit at
+    `relative z-10` to escape the toggle button's stretched `::after` click-catcher described in the
+    header-row comment — without that, the two would have received the row's expand/collapse click
+    instead of navigating.
+  - Copy: two new accessible-name strings, `card.openVideo` / `card.openChannel`
+    (`src/lib/copy/pl.ts:111-112`).
+
+- **Finding 3 — Markdown renderer silently drops H1 headings (fixed, presentational only).** Pulled the
+  raw `content` for the "Update from Ukraine…" card straight from `DashboardSummaries`'s hydration props
+  (`astro-island[component-url*="DashboardSummaries"]`'s `props` attribute), no DB access needed — it
+  starts with `# Przegląd wideo`, a real Markdown H1. `SummaryMarkdown.tsx`'s `SUMMARY_ALLOWED_ELEMENTS`
+  only listed `h2`/`h3`; `react-markdown`'s `unwrapDisallowed` strips any element outside that list of its
+  tag and styling, so the H1 rendered as bare unstyled text — exactly the "doesn't match the DB" symptom
+  reported, and nothing to do with caching. Root cause: the `informational` system prompt
+  (`llm.ts:20-47`) never authorizes or forbids headings (only the `educational` prompt explicitly grants
+  `### `), so the model sometimes adds one anyway and the renderer's allowlist didn't cover it. Fixed by
+  adding `h1` to both the allowlist and the component map (`text-xl font-semibold`, one step above `h2`)
+  — makes the renderer robust to whatever heading level the model produces rather than depending on
+  prompt compliance, consistent with how the existing `img`/`a` exclusion already treats LLM output as
+  untrusted rather than guaranteed-conformant. Left the generation prompts untouched — that is the paid
+  path and out of scope for a presentational fix.
+
+- **Finding 4 — duration and upload date were bare, same-styled text (fixed, presentational only).**
+  User's own framing: hard to tell apart from the channel name or from each other at a glance, since all
+  three sat in one `·`-joined string with identical styling. Added `lucide-react` icons — `Clock` before
+  duration, `Calendar` before upload date — consistent with how `CharacterBadge` already differentiates
+  by shape rather than introducing a new colour. Icons are `aria-hidden`; the text values are unchanged
+  (`12:34`, `2026-08-13`), so nothing is lost for screen readers. Restructured the meta line from a
+  joined string in one `<p>` to a `flex flex-wrap` row of independent chips (`SummaryCard.tsx`) — this
+  also means a long channel name now truncates on its own rather than eating space that would otherwise
+  cut off the duration/date, and the row wraps instead of overflowing at the mobile width Phase 10 is
+  sweeping.
+  - **Deliberately left `generatedOn` unchanged** (user's own question, before implementing): that line
+    already carries a text label ("Wygenerowano …"), so the ambiguity icons solve for the unlabeled
+    duration/date values doesn't apply there. It is also the least important date on the card, and an
+    icon would raise its visual weight in the wrong direction.
+
+- **Finding 5 — upload date had no sense of "how long ago" (fixed, presentational only).** User's
+  suggestion: add it in parentheses next to the date. Added `daysSince()` (`lib/format.ts`) — whole UTC
+  calendar days between `published_at` and now, built from `Date.UTC` day-parts rather than a raw
+  millisecond subtraction so "yesterday" can't flip to "2 days ago" purely from time-of-day. Renders as
+  `2026-08-13 (3 dni temu)` next to the `Calendar` icon from finding 4.
+  - **Split on a second pass, on review**: the day/week/month/year bucketing (`<7`/`<30`/`<365`
+    thresholds) is language-independent — every locale would pick the same bucket for the same input —
+    so it moved to `relativeTimeBucket()` in `lib/format.ts`, returning `{ unit, value }` rather than a
+    string. `relativeTime()` in `copy/pl.ts` now only turns that bucket into Polish words (reusing the
+    same 1 / 2-4-excl.-12-14 / 5+ plural-class shape `pluralChars` already established for
+    password-length copy, generalised into `pluralClass()`). First pass had put the bucketing thresholds
+    inside `pl.ts` itself, which would have made a second locale copy-paste the same day-math instead of
+    just supplying words — caught because a stray comment ended up explaining English control flow by
+    naming the Polish word it produced, a sign the function was doing two jobs.
+  - **Deliberate exception to this file's "deterministic, locale-free" rule.** Every other date helper
+    in `format.ts` is frozen so SSR and hydration always agree; `daysSince` defaults to the real clock
+    on purpose, because a relative age is supposed to change on its own as time passes — freezing it
+    would defeat the point. Documented in the function's own comment: the only cost is a hydration
+    mismatch if the SSR-to-hydration gap (milliseconds, on `client:load`) straddles a UTC midnight,
+    which React reconciles as one harmless single-frame correction. Accepted rather than engineered
+    around, the same way this file already accepts one other small-probability date-off-by-one cost.
+
+- **Finding 6 — the pending card showed no thumbnail while generating (fixed, presentational only).**
+  User's question: could we "borrow" a YouTube thumbnail before real metadata exists? Turned out the
+  free, ID-derived thumbnail (`i.ytimg.com/vi/<id>/hqdefault.jpg`, no vendor call, no persisted data)
+  was already implemented — but only for the `"needs-confirmation"` cost-gate status, per the design
+  decision recorded in this file's 2026-08-11 correction ("derived thumbnail … same answer for the
+  pending card"), which never actually reached the plain `"generating"` status. `PendingSummaryCard.tsx`
+  even carried a stale comment framing this as deliberate ("no thumbnail outside the cost-gate state").
+  Generalised: `youtubeId = extractYoutubeId(pending.url)` computed once, unconditionally, replacing the
+  gate-only `gateYoutubeId` derived from `confirm.url` — safe, since `DashboardSummaries.tsx` sets
+  `pending.url = attempt.url` for every status and `useGenerateSummary.ts` shows `attempt.url` and
+  `confirm.url` are always the same value for one attempt. The thumbnail now renders in every status
+  (user's choice, via AskUserQuestion): generating, needs-confirmation, saved, saved-refresh-failed, and
+  failed. Rewrote the stale comment to say what's actually true: never a *real* thumbnail before
+  something is saved, but the derived one needs no saved data so it was never actually blocked by that
+  rule.
+
+**Findings 2-6 deployed together (2026-08-14).** `db push --linked` (the queued `channel_id_correction`
+migration) immediately followed by `wrangler deploy`, back-to-back per this file's own established
+discipline. Live at `https://10x-media.nightshiftlab.workers.dev`, version `88cac879-c449-4463-bb64-7d502ddea092`.
+
+**Findings 7-8 deployed together (2026-08-14).** No schema changes this round — `wrangler deploy` only.
+Live at `https://10x-media.nightshiftlab.workers.dev`, version `035c6fa6-f701-4ebd-8e5a-2207a10ca923`.
+
+**Finding 9 (heading fix + full Markdown element coverage) deployed 2026-08-15.** No schema changes —
+`wrangler deploy` only (new `remark-gfm` dependency, no DB impact). Live at
+`https://10x-media.nightshiftlab.workers.dev`, version `59d20d79-717f-45f7-9ddc-d78038d68163`.
+
+**Findings 10-11 deployed together (2026-08-15).** No schema changes — `wrangler deploy` only. Live at
+`https://10x-media.nightshiftlab.workers.dev`, version `f616dc69-5ae3-416e-ab82-9b0aedafad8d`.
+
+- **Finding 7 — summary reading column sat left-flush inside a wider card (fixed, presentational
+  only).** User's screenshot from production: the expanded body text stops well short of the card's
+  right edge with no counterbalancing space on the left, while the header row above it (thumbnail +
+  title + character badge) spans the card's full width — the mismatch reads as unfinished rather than
+  deliberate. Confirmed via exploration: `SummaryCard.tsx`'s expanded-content wrapper carries
+  `max-w-[62ch]` with no `mx-auto`, and it's the only place in the app `SummaryMarkdown` renders (the
+  component's own doc comment referencing "the generate form's result block" was stale — no such block
+  exists; `PendingSummaryCard.tsx` explicitly never shows the body, `GenerateSummaryForm.tsx` doesn't
+  render one either). Checked the design system's own spec (`ds-bundle/type.html`,
+  `visual-direction-outcome.md`): both define the `62ch` measure and 16.5/28 type metrics for
+  readability, but neither says anything about horizontal centering — the reference mockup itself
+  renders left-flush too, but only because its own specimen container was never tested at a ~736px card
+  width. This was an undescribed gap in the spec, not a considered decision to leave uncentered. Fixed
+  by adding `mx-auto` to the wrapper (`SummaryCard.tsx`) — the `62ch` cap itself is untouched, only its
+  horizontal position changes; no effect at the mobile/squeeze widths where the card is already narrower
+  than 62ch. Also corrected `SummaryMarkdown.tsx`'s stale doc comment while in the area.
+
+- **Finding 8 — "Doładuj" button jumped left when the top-up notice appeared (fixed, presentational
+  only).** User's screenshot from `/account`. Root cause chain, confirmed by exploration:
+  `account.astro`'s credit row is `flex items-center justify-between` — with `justify-between` and two
+  items, the second item's *right* edge is always pinned to the row's right edge regardless of its own
+  width. `TopUpAction.tsx`'s root was a bare `<div>` (no classes), so the `Button` sat at its *left*
+  edge in normal block flow. When `useTopUpAction`'s `revealed` flips true, `TopUpNotice` — visibly
+  wider than the button — mounts underneath, forcing the div to grow; since its right edge is pinned,
+  it grows leftward, dragging the left-anchored button with it. `items-center` on the row compounded it:
+  once the right-hand item got taller (button + notice stacked), the "Kredyty N" label re-centered
+  against that new height and visibly sank. (`AccountMenu.tsx`'s dropdown version never hits this: there
+  the notice is a sibling inside a fixed-width Radix popover, not a shrink-to-fit flex item — different
+  container, not a pattern to copy here.)
+  - Fix: `TopUpAction.tsx`'s root div → `flex flex-col items-end`, so the button and notice share the
+    same right edge instead of the same left edge — the already-pinned right edge means the button's
+    position never changes when the notice mounts. `account.astro`'s row → `items-start`, so the label
+    stays aligned with the top of the button instead of re-centering against a taller sibling.
+  - **Accepted minor side effect**: in the resting state (no notice), the button and the single-line
+    label now align at the top instead of centered — a few px, typical for this label-next-to-a-control
+    pattern, not corrected further.
+  - `TopUpNotice`'s own `mt-2` and `useTopUpAction`/`AccountMenu.tsx` untouched — `TopUpNotice` is shared
+    with the dropdown, which still depends on that margin for its own spacing.
+
+- **Finding 9 — headings disappeared into the surrounding body text (fixed, presentational only).**
+  User's framing: "technically fine, but doesn't read as legible" — headings less visible than other
+  elements. Confirmed by exploration: `SummaryMarkdown.tsx`'s `h3` rendered at **14px** (`text-sm`) —
+  smaller than the 16.5px body text and the 16.5px `strong` lead-ins it sat among. Not a taste question:
+  a heading literally smaller than its own body text is a measurable defect. `h3` is also the *only*
+  heading level reachable in practice — the `educational` prompt (`llm.ts:61-63`) permits only `### `,
+  and `informational` (`llm.ts:32-34`) permits none at all (h1's rare appearance, per Finding 3, is
+  model non-compliance, not a sanctioned path).
+  - **The design system already had the answer.** `ds-bundle/type.html`'s `.body-spec h3` — the one
+    example that actually covers a heading *inside* the reading surface, as opposed to page-level UI
+    chrome — specs `18px/600/1.35` in `IBM Plex Sans`, explicitly keeping `--font-display` (Space
+    Grotesk) out of summary bodies. Phase 4's plan (`plan.md:575-586`) only carried the *body* spec into
+    its contract ("Headings take `--foreground}`", no size), so the `text-xl/lg/sm` choice in code was
+    never checked against this and landed wrong.
+  - **User's call (before implementing): the literal 18px alone (only 1.5px over body, same weight as
+    `strong`) still risked reading as weak — go with the doc's 18px as the base plus an explicit
+    breathing-room channel, not size alone.** Implemented: `h3` → 18px/600/1.35 (matches the doc
+    exactly); `h2`/`h1` scaled up proportionally (20px/22px) so they don't collide with the corrected
+    `h3`; and `pt-2` added to all three heading levels for extra space *before* a heading specifically.
+  - **One easy-to-miss correctness detail, documented in the component now:** the extra spacing had to
+    be `pt-2` (padding), not `mt-2` (margin). The parent's `space-y-2` is implemented via a
+    `> :not([hidden]) ~ :not([hidden])` selector, whose specificity beats a plain `.mt-2` utility on the
+    child — a margin-based attempt would have been silently overridden with no visible effect. Padding
+    isn't touched by `space-y-*`, so it stacks on top of the existing gap instead.
+  - `npm run lint:tokens` only guards hardcoded *colors*, not font-size/weight utilities, so this fix
+    needed no exception there. Zero changes to `llm.ts`'s prompts — out of scope for a presentational fix.
+
+- **Finding 9 (follow-up) — full Markdown element coverage, not just headings (fixed, presentational
+  only + one new dependency).** User's question after the heading fix: since the model doesn't reliably
+  stay within the syntax its prompts demonstrate, could other tags have the same problem? Confirmed with
+  direct production evidence, not just theory: two separate real generations under the `informational`
+  prompt (which requests **no** headings at all) produced two different unrequested heading levels — H1
+  once (Finding 3), H2 once (`context/changes/generate-and-save-summary/reviews/manual-e2e-2026-07-23.md:18`).
+  Audited every element plain CommonMark and GFM can produce against `SummaryMarkdown.tsx`'s 10-element
+  allow-list:
+  - **Reachable with zero plugins, previously unhandled:** `h4`-`h6`, `blockquote`, `hr`, `br`, fenced
+    code blocks. Headings/blockquotes at least kept their text when unwrapped; `hr`/`br` are childless
+    nodes, so unwrapping them **deleted them with no trace** — worse than a styling miss.
+  - **GFM wasn't wired in at all** (`react-markdown` on bare `remark-parse`) — tables, strikethrough,
+    and task lists didn't parse as those node types, degrading to literal source characters (`| a | b |`,
+    `~~x~~`, `[ ] text`) inside an ordinary paragraph. Tables were flagged as the realistic risk: content
+    comparing things (exactly what the Finding-9 screenshot's video was about — AI model comparisons) is
+    a natural fit for a table.
+  - User chose the full-scope fix (over the minimal CommonMark-only option, and over waiting for a real
+    production sighting the way headings were): added `remark-gfm` and extended both the allow-list and
+    the styled component map to cover `h4-h6` (flattened to `h3`'s exact treatment — no deeper level is
+    sanctioned by either prompt, so there's nothing to scale toward and no risk of re-landing below body
+    size), `blockquote` (left border + italic + muted, the same non-hue differentiation `CharacterBadge`
+    already uses), `hr` (a real divider instead of vanishing), `br`, `pre` (safety net for a fenced block
+    despite both prompts explicitly forbidding it), and the full `table`/`thead`/`tbody`/`tr`/`th`/`td`
+    family (wrapped in `overflow-x-auto` so a wide comparison table scrolls inside the card at
+    squeeze/mobile widths instead of forcing the card wider), `del` (strikethrough), and `input` (GFM
+    task-list checkbox, always `disabled` — this is rendered content, not a form).
+  - **Security check, verified not just reasoned about**: `remark-gfm` auto-linkifies bare URLs into `a`
+    nodes. Confirmed via an isolated `renderToStaticMarkup` test (fixtures for every new element, run
+    with a temporary, unsaved `tsx` install, then deleted) that `allowedElements`/`unwrapDisallowed`
+    still catches these exactly like a hand-typed `[text](url)` — a bare `www.example.com` /
+    `https://example.com/path` rendered as plain text, not a clickable link, and the existing malicious
+    link/image fixture still stripped exactly as before. `allowedElements` runs at the final
+    React-rendering step, after every remark/rehype plugin, so it was always going to catch plugin-
+    produced nodes the same way — confirmed empirically rather than left as an assumption.
+  - Same render test confirmed every other new element (h4-h6, blockquote, hr, hard break, table,
+    strikethrough, task-list checkboxes, fenced code) renders with real structure/styling instead of
+    vanishing, merging, or showing raw syntax characters.
+  - `npm run lint:tokens` still passes — every new class reuses existing `--border`/`--foreground`/
+    `--muted-foreground`/`--muted` tokens, no new colors. Zero changes to `llm.ts`'s prompts.
+
+- **Finding 10 — the browser scrollbar disappears when the account dropdown opens, shifting the whole
+  page a few px right (fixed, presentational only).** Exploration traced the full chain: `AccountMenu.tsx`
+  uses Radix `DropdownMenu` with the default `modal: true`, so opening it scroll-locks the page via
+  `react-remove-scroll`/`react-remove-scroll-bar` (both current versions, working as designed). That
+  library measures the scrollbar's width and injects `body[data-scroll-locked] { overflow: hidden
+  !important; margin-right: {gap}px !important; }` — sized to compensate an `auto`-width body so nothing
+  visibly moves. But `Layout.astro:69-76`'s scoped `<style>` pins `html, body` to an **explicit**
+  `width: 100%`, not `auto` — on an explicitly-sized box, adding `margin-right` doesn't shrink it to
+  compensate, it just adds margin outside a box that's already full width, while the real scrollbar
+  vanishing simultaneously frees up that same width in the viewport. Net effect: centered/full-width
+  content recomputes against a viewport that's temporarily wider, and shifts right.
+  - **Root cause, one level deeper than the `width: 100%` interaction:** nothing anywhere in the project
+    (`global.css`, `Layout.astro`, Tailwind v4's own preflight — all checked) reserves scrollbar gutter
+    space, so the scrollbar's presence/absence is free to change available content width at all — that's
+    the actual enabler of the whole bug class, not just this one interaction.
+  - Fix: `scrollbar-gutter: stable;` on `html`, added to `global.css`'s existing `@layer base` block next
+    to the base `body` rule. Reserves the gutter permanently, so hiding/showing the scrollbar never
+    changes available width — removes what Radix's margin compensation was trying to fix in the first
+    place, rather than patching that compensation. As a direct consequence, `react-remove-scroll-bar`'s
+    own gap measurement reads 0 once locked (no width difference to detect), so the injected
+    `margin-right` becomes a no-op — `Layout.astro`'s `width: 100%` didn't need touching.
+  - Also fixes the same shift for `DeleteAccountDialog`'s Radix `Dialog` (same default `modal: true`,
+    same scroll-lock mechanism) — one shared root cause, one shared fix, no component-level changes.
+
+- **Finding 11 — post-login/confirmation redirect landed on the marketing page, not summaries (fixed).**
+  User's framing: an unnecessary extra step, since the user almost always clicks through to `/summaries`
+  anyway. Confirmed both sign-in (`signin.ts:19`) and the sign-up email-confirmation callback
+  (`callback.ts:31`) shared the identical `context.redirect("/")` pattern on success — a plain
+  server-side redirect the native form POST just follows, no client-side logic involved. No prior design
+  decision existed either way (`wireframe-outcome.md` only settles what `/` *shows* per auth state — a
+  CTA swap in `Welcome.astro`, no capture bar — never what happens right after the auth action itself).
+  User confirmed (before implementing): fix both call sites for one consistent "you're authenticated →
+  you land in summaries" rule, rather than leaving sign-up's confirmation link on the old behavior while
+  only sign-in changed. Both now `context.redirect("/summaries")`.
+  - **Deliberately untouched:** `Welcome.astro`'s existing CTA swap for a signed-in visitor and
+    `middleware.ts` (`/` stays outside `PROTECTED_ROUTES`) — a signed-in user can still visit `/`
+    directly (bookmark, shared link) and see the landing page with its "Przejdź do podsumowań" CTA.
+    This fix only changes where the *action itself* (sign-in submit, confirmation link click) lands
+    immediately after succeeding, not general access to `/`.
+
 ### Manual QA — phase 9 (2026-08-14)
 
 All manual verification items for phase 9 in `plan.md` (9.5-9.9) are now checked off, driven live in

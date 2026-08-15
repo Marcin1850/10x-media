@@ -152,6 +152,14 @@
 }
 
 @layer base {
+  /* Radix's scroll-lock (DropdownMenu/Dialog, both default `modal: true`) hides the real scrollbar
+     and compensates with a margin sized for an `auto`-width body — but Layout.astro pins `body` to an
+     explicit `width: 100%`, so that compensation doesn't shrink to absorb it, and the freed scrollbar
+     width instead nudges centered/full-width content a few px right. Reserving the gutter permanently
+     removes the thing being compensated for in the first place, rather than patching the compensation. */
+  html {
+    scrollbar-gutter: stable;
+  }
   * {
     @apply border-border outline-ring/50;
   }

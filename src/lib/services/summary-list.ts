@@ -29,6 +29,7 @@ interface SummaryListRow {
     title: string | null;
     thumbnail_url_reported: string | null;
     channel_name: string | null;
+    channel_id: string | null;
     duration_seconds: number | null;
     published_at: string | null;
   } | null;
@@ -43,7 +44,7 @@ interface SummaryListRow {
  */
 const LIST_SELECT =
   "id, character, content, created_at, " +
-  "videos ( youtube_id, url, title, thumbnail_url_reported, channel_name, duration_seconds, published_at )";
+  "videos ( youtube_id, url, title, thumbnail_url_reported, channel_name, channel_id, duration_seconds, published_at )";
 
 /**
  * Reads the caller's own summaries with their video joined, newest first.
@@ -87,6 +88,7 @@ function toListItem(row: SummaryListRow): SummaryListItem {
     title: video.title,
     thumbnailUrlReported: video.thumbnail_url_reported,
     channelName: video.channel_name,
+    channelId: video.channel_id,
     durationSeconds: video.duration_seconds,
     publishedAt: video.published_at,
   };
