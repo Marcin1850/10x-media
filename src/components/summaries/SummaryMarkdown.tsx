@@ -4,20 +4,23 @@ import type { Components } from "react-markdown";
 
 /**
  * Elements the summary is allowed to render. LLM output is untrusted (transcript content can steer
- * it), so `img` and `a` are excluded: an image would make the viewer's browser fetch an
- * attacker-controlled URL, and a link would offer an attacker-controlled navigation target. Anything
- * outside this list is unwrapped, so its text still shows.
+ * it), so `img` is excluded entirely: an image would make the viewer's browser fetch an
+ * attacker-controlled URL. `a` is admitted but constrained by `allowElement` below to only the
+ * same-document footnote anchors `remark-gfm` itself generates — every other link (including one
+ * hand-written by the model or hidden in transcript content) is still unwrapped to plain text.
+ * Anything outside this list is unwrapped, so its text still shows.
  *
  * This list is deliberately wider than what either system prompt (`llm.ts`) asks the model to produce.
  * Real production output has already contradicted both prompts once each — an unrequested `# `/`## `
  * heading landed twice under a prompt that never mentions headings at all (see `change.md`'s Finding 3
  * and 9) — so every element plain CommonMark or GFM can produce is covered here rather than only the
- * ones the prompts happen to demonstrate. `remark-gfm` (tables, strikethrough, task lists, autolinks)
- * is wired in below for the same reason: nothing stops the model reaching for a comparison table.
+ * ones the prompts happen to demonstrate. `remark-gfm` (tables, strikethrough, task lists, autolinks,
+ * footnotes) is wired in below for the same reason: nothing stops the model reaching for a comparison
+ * table or a footnote.
  *
- * `remark-gfm`'s autolinks become `a` nodes like any other link — `allowedElements`/`unwrapDisallowed`
- * runs at the final React-rendering step, after every remark/rehype plugin, so the `a`/`img` exclusion
- * above already covers them with no extra handling needed.
+ * `remark-gfm`'s autolinks become `a` nodes like any other link — `allowElement` below applies to
+ * every `a` regardless of how it was produced, so a bare-URL autolink is rejected exactly like a
+ * hand-typed `[text](url)` unless its href happens to match the internal footnote-anchor prefix.
  */
 const SUMMARY_ALLOWED_ELEMENTS = [
   "p",
@@ -45,7 +48,23 @@ const SUMMARY_ALLOWED_ELEMENTS = [
   "td",
   "del",
   "input",
+  "sup",
+  "section",
+  "a",
 ];
+
+/**
+ * Prefix `remark-gfm` gives every footnote anchor's `href` — both the forward reference
+ * (`#user-content-fn-1`) and the backreference (`#user-content-fnref-1`) start with it. Same-document
+ * anchors can only scroll the page; they carry none of the navigation/fetch risk a real link does, so
+ * admitting exactly this shape (and nothing else) keeps the `img`/external-link security boundary
+ * intact while restoring footnote semantics.
+ */
+const FOOTNOTE_ANCHOR_HREF_PREFIX = "#user-content-fn";
+
+function isAllowedSummaryLink(href: string | undefined): boolean {
+  return href?.startsWith(FOOTNOTE_ANCHOR_HREF_PREFIX) ?? false;
+}
 
 /**
  * Element map for the Markdown summary, on tokens. This is the product's core reading surface — a
@@ -77,7 +96,17 @@ const summaryMarkdownComponents: Components = {
   // paragraph-to-paragraph gap gets — a second, non-color channel (rhythm) alongside size, the same
   // "differentiate on more than one axis" approach `CharacterBadge` already uses.
   h1: ({ children }) => <h1 className="text-foreground pt-2 text-[22px] leading-[1.35] font-semibold">{children}</h1>,
-  h2: ({ children }) => <h2 className="text-foreground pt-2 text-[20px] leading-[1.35] font-semibold">{children}</h2>,
+  // `remark-gfm`'s footnotes section carries its own `<h2 class="sr-only">Footnotes</h2>` label —
+  // GitHub's own footnote markup is screen-reader-only there because the section itself is visually
+  // self-evident. Passed straight through to the visible 20px heading style, that landed as an
+  // orphaned "Footnotes" heading in the middle of the reading surface; honouring the incoming
+  // `sr-only` class instead keeps the accessible label without a visible one.
+  h2: ({ children, className }) =>
+    className?.includes("sr-only") ? (
+      <h2 className="sr-only">{children}</h2>
+    ) : (
+      <h2 className="text-foreground pt-2 text-[20px] leading-[1.35] font-semibold">{children}</h2>
+    ),
   h3: ({ children }) => <h3 className="text-foreground pt-2 text-[18px] leading-[1.35] font-semibold">{children}</h3>,
   // Neither prompt sanctions a heading level deeper than `###` (h3) — h4-h6 flatten to h3's exact
   // treatment rather than shrinking further, so a heading can never re-land smaller than body text,
@@ -123,6 +152,25 @@ const summaryMarkdownComponents: Components = {
   input: ({ checked }) => (
     <input type="checkbox" checked={checked ?? false} disabled className="accent-foreground align-middle" />
   ),
+  // Footnote reference marker (`Text[^1]` → `Text<sup>1</sup>`). `sup` already superscripts by
+  // default; sized down and muted so a reference number reads as an annotation, not body text.
+  sup: ({ children }) => <sup className="text-muted-foreground text-[0.7em]">{children}</sup>,
+  // Footnote definitions block. Bordered and muted like `blockquote` above — same non-hue
+  // differentiation from the reading body, `pt-2` for the same `space-y-2`-safe reason every heading
+  // above uses.
+  section: ({ children }) => (
+    <section className="border-border text-muted-foreground pt-2 text-[14px] leading-[1.5] [&>ol]:pl-5">
+      {children}
+    </section>
+  ),
+  // Only reaches this component for the same-document footnote anchors `allowElement` admits below —
+  // every other link is unwrapped to plain text before it gets here. Muted + underlined so it reads
+  // as a small internal control, not body copy or an external navigation affordance.
+  a: ({ children, href }) => (
+    <a href={href} className="text-muted-foreground underline hover:no-underline">
+      {children}
+    </a>
+  ),
 };
 
 interface Props {
@@ -131,9 +179,9 @@ interface Props {
 
 /**
  * The single renderer for summary Markdown — currently just `SummaryCard`'s expanded body, but kept
- * as one component rather than inlined there so the `img`/`a` exclusion above has exactly one
+ * as one component rather than inlined there so the `img`/link exclusion above has exactly one
  * definition if a second surface (e.g. a generate-form result block) ever needs to show a summary
- * body too. A second, hand-rolled renderer is how those two elements quietly come back for content an
+ * body too. A second, hand-rolled renderer is how those elements quietly come back for content an
  * attacker can steer through a transcript.
  */
 export function SummaryMarkdown({ children }: Props) {
@@ -141,6 +189,9 @@ export function SummaryMarkdown({ children }: Props) {
     <Markdown
       remarkPlugins={[remarkGfm]}
       allowedElements={SUMMARY_ALLOWED_ELEMENTS}
+      allowElement={(element) =>
+        element.tagName === "a" ? isAllowedSummaryLink(element.properties.href as string | undefined) : true
+      }
       unwrapDisallowed
       components={summaryMarkdownComponents}
     >

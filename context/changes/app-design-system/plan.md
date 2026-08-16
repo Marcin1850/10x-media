@@ -992,6 +992,19 @@ issues to have something to fix — an empty findings list is a valid, good outc
 paid generation path or credit/session logic gets the same scrutiny Phase 9 asks for; everything else is
 presentational.
 
+**Addendum (2026-08-15, impl-review F5) — Finding 11 crossed the presentational boundary this phase's
+Implementation Note draws.** Redirecting successful sign-in (`src/pages/api/auth/signin.ts:19`) and the
+sign-up email-confirmation callback (`src/pages/auth/callback.ts:31`) from `/` to `/summaries` is an
+auth-flow behavior change, not a visual one — recorded here because the phase's own note says exactly
+this class of change needs scrutiny, and none was written down at the time. **User-approved before
+implementing** (`change.md`'s Finding 11): both call sites shared the identical `context.redirect("/")`
+pattern with no prior design decision either way, and the user chose one consistent
+"you're authenticated → you land in summaries" rule over leaving the two flows inconsistent.
+**Verification**: covered only by the general Phase 10 desktop/squeeze-zone/mobile sweep (sign-in is one
+of the §Testing Strategy surfaces) — there was no dedicated test exercising a real sign-in submit and a
+real confirmation-link click specifically to confirm both land on `/summaries` post-fix. Both destinations
+are fixed internal paths (`/summaries`), so the change carries low risk despite the thinner verification.
+
 ---
 
 ## Testing Strategy
@@ -1209,14 +1222,14 @@ anything here.
 
 #### Automated
 
-- [ ] 10.1 Linting and build pass
-- [ ] 10.2 Token guard passes after any fixes
-- [ ] 10.3 No palette utility regressions introduced by fixes
+- [x] 10.1 Linting and build pass — 1c75118
+- [x] 10.2 Token guard passes after any fixes — 1c75118
+- [x] 10.3 No palette utility regressions introduced by fixes — 1c75118
 
 #### Manual
 
-- [ ] 10.4 Desktop sweep (~1280px) across all 11 Testing Strategy surfaces, issues logged in `change.md`
-- [ ] 10.5 Squeeze-zone sweep (~640-960px) across all 11 surfaces, issues logged
-- [ ] 10.6 Mobile sweep (~375px) across all 11 surfaces, issues logged
-- [ ] 10.7 Every logged issue fixed or explicitly deferred with a reason
-- [ ] 10.8 Final pass confirms fixes introduced no new regressions
+- [x] 10.4 Desktop sweep (~1280px) across all 11 Testing Strategy surfaces, issues logged in `change.md` — 1c75118, user-confirmed
+- [x] 10.5 Squeeze-zone sweep (~640-960px) across all 11 surfaces, issues logged — user-confirmed, distinct from the 10.4 desktop pass
+- [x] 10.6 Mobile sweep (~375px) across all 11 surfaces, issues logged — user-confirmed
+- [x] 10.7 Every logged issue fixed or explicitly deferred with a reason — all 11 findings in `change.md`'s 2026-08-14/15 QA note fixed
+- [x] 10.8 Final pass confirms fixes introduced no new regressions — user-confirmed final all-width regression pass

@@ -2,6 +2,7 @@ import { useId, useState } from "react";
 import { Calendar, ChevronDown, Clock } from "lucide-react";
 import { VideoThumbnail } from "@/components/summaries/VideoThumbnail";
 import { SummaryMarkdown } from "@/components/summaries/SummaryMarkdown";
+import { useHasMounted } from "@/components/hooks/useHasMounted";
 import {
   daysSince,
   formatCreatedDate,
@@ -78,10 +79,16 @@ function previewText(content: string): string {
 export function SummaryCard({ item }: Props) {
   const [expanded, setExpanded] = useState(false);
   const contentId = useId();
+  // `daysSince` reads the real clock (see its doc comment) — computed once on the server and again,
+  // independently, during hydration. Held back until after mount so the very first client render
+  // matches the server's exactly; a few-ms gap straddling UTC midnight would otherwise make the two
+  // disagree, a real hydration mismatch. Recomputed on every render once mounted, so the suffix still
+  // advances live as the page stays open, same as before.
+  const mounted = useHasMounted();
 
   const duration = formatDuration(item.durationSeconds);
   const published = formatPublishedDate(item.publishedAt);
-  const publishedDaysAgo = daysSince(item.publishedAt);
+  const publishedDaysAgo = mounted ? daysSince(item.publishedAt) : null;
   // Pre-S-08 rows carry nulls in every descriptive column. Omit the whole row in that case rather
   // than render an empty one.
   const hasMeta = item.channelName !== null || duration !== null || published !== null;

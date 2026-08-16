@@ -40,7 +40,7 @@
 - **Location**: context/changes/app-design-system/plan.md:1212; context/changes/app-design-system/change.md:12; context/foundation/roadmap.md:39
 - **Detail**: Commit `1c75118` says all eleven Phase 10 findings were fixed and manually verified, the user confirms desktop/mobile browser verification, and all automated gates pass in this review. The durable state says otherwise: Progress 10.1–10.8 is entirely unchecked; the QA note still says “in progress” and describes the superseded `channel_username` contract as final; both S-06 roadmap entries still say the plan has nine phases, only P1–P3 landed, and manual verification remains open. The plan’s distinct squeeze-zone and final all-width pass are not explicitly recorded.
 - **Fix**: Reconcile `plan.md`, the Phase 10 note in `change.md`, and both S-06 roadmap entries with commit `1c75118`, the automated results above, and the user’s browser evidence; record whether the desktop pass included the planned 640–960px squeeze zone.
-- **Decision**: PENDING
+- **Decision**: FIXED — `plan.md` Progress 10.1-10.8 checked off; `change.md`'s QA note header changed from "in progress" to "complete" and its stale `channel_username` write-up corrected to the shipped `channel_id` contract; both S-06 roadmap entries (summary table + detail section) updated to reflect all 10 phases landed and the Phase 10 review outcome. User confirmed the desktop pass included a distinct ~640-960px squeeze-zone check and a final all-width regression pass.
 
 ### F2 — RPC swaps leave no compatibility window or safe code rollback
 
@@ -59,7 +59,7 @@
   - Tradeoff: Accepts generation downtime/provider waste if schema and Worker versions diverge.
   - Confidence: HIGH — this is the behavior the migrations themselves document.
   - Blind spot: Operational response time during a failed deployment is unknown.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix B — `change.md`'s Finding 2 write-up now documents the rollback policy explicitly: drop/recreate is intentional, old-Worker rollback is unsupported, recovery is a new forward deployment following the same `db push`/`wrangler deploy` back-to-back discipline as prior signature changes.
 
 ### F3 — Warm metadata-cache rows delay channel links for up to 30 days
 
@@ -78,7 +78,7 @@
   - Tradeoff: Spends one vendor credit per affected video and weakens the cost-saving cache temporarily.
   - Confidence: MED — the policy is straightforward, but the deployment cutoff and affected-row count must be verified first.
   - Blind spot: No production cache-age distribution was inspected in this review.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A — `change.md`'s Finding 2 write-up now documents that warm pre-deployment cache rows delay channel links until their normal 30-day expiry, as an accepted extension of the existing no-backfill decision. No code change.
 
 ### F4 — “Full” Markdown coverage drops footnote semantics
 
@@ -92,7 +92,7 @@
   - Tradeoff: Adds non-trivial allowlist logic and needs focused render fixtures for internal and external links.
   - Confidence: HIGH — the broken output was reproduced against the installed renderer.
   - Blind spot: Exact generated footnote href/id shapes should be locked to the installed `react-markdown` version in fixtures.
-- **Decision**: PENDING
+- **Decision**: FIXED — `SummaryMarkdown.tsx` now admits `sup`/`section`/`a`, gated by `allowElement` to hrefs starting with `#user-content-fn` (both the forward ref and backref remark-gfm generates). The `sr-only` footnote-label `h2` is now honoured instead of rendered as a visible heading. Verified with a temporary `renderToStaticMarkup` probe (installed `tsx`, deleted after use): a footnote renders full sup/a/section/backref structure; an external link, a bare-URL autolink, and an image all still render as plain text or nothing, exactly as before. `npm run lint` and `npm run build` both pass.
 
 ### F5 — Post-auth redirect is an undocumented behavior change
 
@@ -106,7 +106,7 @@
   - Tradeoff: The plan gains a post-implementation addendum.
   - Confidence: HIGH — the two changed call sites and intended destination are explicit.
   - Blind spot: This review did not execute a fresh email-confirmation flow.
-- **Decision**: PENDING
+- **Decision**: FIXED — `plan.md`'s Phase 10 section now carries an addendum recording the user-approved redirect decision and stating plainly that verification was limited to the general sweep (no dedicated sign-in/confirmation-link regression test was run).
 
 ### F6 — Relative-date rendering can mismatch at UTC midnight
 
@@ -116,7 +116,7 @@
 - **Location**: src/lib/format.ts:89; src/components/summaries/SummaryCard.tsx:84
 - **Detail**: `daysSince()` reads the real clock independently during SSR and hydration. If those renders straddle UTC midnight, the suffix differs and React may regenerate the subtree; the comment’s “harmless single-frame correction” is not guaranteed. The occurrence window is very small and no user-visible regression was reported.
 - **Fix**: Anchor the initial relative-date calculation to a server-provided UTC date/timestamp, or render the relative suffix only after hydration.
-- **Decision**: PENDING
+- **Decision**: FIXED — added `useHasMounted` (`src/components/hooks/useHasMounted.ts`, via `useSyncExternalStore` so the mount flip doesn't trip `react-hooks/set-state-in-effect`) and used it in `SummaryCard.tsx` to hold the relative-date suffix back until after mount, guaranteeing the first client render matches SSR exactly rather than merely narrowing the mismatch window. `daysSince` still recomputes on every render once mounted, so the suffix keeps advancing live. `npm run lint` and `npm run build` both pass.
 
 ### F7 — Changed API route still misses the repository’s SSR marker
 
@@ -126,4 +126,4 @@
 - **Location**: src/pages/api/auth/signin.ts:1
 - **Detail**: Repository instructions require every API route to export `export const prerender = false;`. The changed sign-in endpoint still lacks it, while the changed auth callback carries it. The omission predates Phase 10 and the other auth API handlers share the debt, so this is a touched-file convention mismatch rather than a newly introduced runtime failure.
 - **Fix**: Add `export const prerender = false;` to `signin.ts`; track `signup.ts` and `signout.ts` as the same small consistency follow-up.
-- **Decision**: PENDING
+- **Decision**: FIXED — `export const prerender = false;` added to all three auth API routes (`signin.ts`, `signup.ts`, `signout.ts`), matching `callback.ts`'s placement. `npm run lint` and `npm run build` both pass.

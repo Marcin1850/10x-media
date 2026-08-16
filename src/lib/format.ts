@@ -77,10 +77,10 @@ export function formatPublishedDate(iso: string | null): string | null {
  *
  * `now` defaults to the real clock, unlike every other helper in this file: a relative age is
  * SUPPOSED to change from one render to the next as real time passes, so freezing it would defeat the
- * point. The one cost is the risk `formatCreatedDate` et al. exist to avoid — SSR and hydration call
- * this microseconds apart, and if that gap straddles a UTC midnight the two renders disagree by one
- * day, which React reconciles as a harmless single-frame correction. Accepted: the window this can
- * happen in is a few milliseconds wide out of 86,400,000 in a day.
+ * point. SSR and hydration call this independently and microseconds apart, so if that gap straddles a
+ * UTC midnight the two renders would disagree by one day — a real hydration mismatch, not just a
+ * cosmetic one. Callers that render on both the server and the client (`SummaryCard.tsx`) are
+ * responsible for suppressing the value until after mount rather than trusting the two calls to agree.
  *
  * A negative result (an `iso` after `now` — clock skew, not a real case in this app's data) clamps to
  * 0 rather than reading as "in the future". Returns `null` when the input doesn't parse, matching the

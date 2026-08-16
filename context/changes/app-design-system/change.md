@@ -9,7 +9,9 @@ archived_at: null
 
 ## Notes
 
-### Manual QA — phase 10 sweep, in progress (2026-08-14)
+### Manual QA — phase 10 sweep, complete (2026-08-14 to 2026-08-15)
+
+All 11 findings below were fixed and deployed to production by 2026-08-15 (`1c75118`). Desktop (~1280px, including the ~640-960px squeeze zone distinctly), mobile (~375px) and a final all-width regression pass were user-confirmed complete with no new regressions — `plan.md` Phase 10 Progress (10.1-10.8) reconciled accordingly.
 
 Sweep run against the branch deployed directly to production (`https://10x-media.nightshiftlab.workers.dev`,
 version `eae88462-fe2d-4b64-92a9-115746c1ff75`) rather than local dev, per user request — bypasses CI and
@@ -39,13 +41,41 @@ the `master` merge, does not affect `master`'s deployed state going forward.
     with a `--dry-run` first, then pushed and redeployed in one shot. Threaded through
     `metadata.ts` -> `metadata-cache.ts` -> `summaries.ts` -> `summary-list.ts` -> `types.ts` ->
     `SummaryCard.tsx`.
-  - **Existing summaries stay without a channel link** — `channel_username` is null on every row
-    persisted before this migration, and there is no backfill (would mean re-fetching metadata from
+  - **Corrected same day (`20260814140000_channel_id_correction.sql`): `channel_username` was never a
+    real field.** `@supadata/js`'s `MetadataAuthor` type declares `username` as required, but the real
+    YouTube response carries no such field (only `displayName`/`avatarUrl`) — every row written under
+    the first migration had `channel_username = null`. The stable identifier YouTube actually returns is
+    `additionalData.channelId`, so the column and its RPC plumbing were renamed to `channel_id`, and the
+    link target changed from the originally planned `youtube.com/@handle` to `youtube.com/channel/<id>`.
+    Nothing had a non-null value to lose either direction. **This is the contract that shipped** — treat
+    every `channel_username` reference above as superseded by `channel_id`.
+  - **Rollback policy, made explicit (2026-08-15 impl-review F2): both migrations drop the previous
+    `get_metadata_cache`/`save_metadata_cache`/`persist_summary` signatures rather than keeping a
+    compatibility overload.** This is the same intentional single-signature RPC pattern
+    `20260725120000` and `20260731120000` already established — deliberately not carrying old
+    signatures forward. Consequence: rolling the Worker back to a pre-migration version after the
+    schema has moved is **not safe** — the old code calls a signature that no longer exists, and
+    generation fails after the paid LLM call (refunded, so the cost is provider spend/availability, not
+    an incorrect debit). **The supported recovery path is a new forward deployment, not an old-Worker
+    rollback** — same discipline as any other RPC signature change in this project: fix forward,
+    `db push` immediately followed by `wrangler deploy`, no gap. Accepted rather than adding temporary
+    compatibility wrappers, to keep exactly one RPC surface live at a time.
+  - **Existing summaries stay without a channel link** — `channel_id` is null on every row
+    persisted before these migrations, and there is no backfill (would mean re-fetching metadata from
     Supadata, at cost, for every historical row). Only generations from this point forward pick it up.
     Accepted rather than backfilled, consistent with how `metadata_via`, `resolved_via` and every other
     telemetry column added mid-project already treats pre-migration rows (null, not reconstructed).
+  - **Warm cache rows widen the gap further (2026-08-15 impl-review F3).** `getCachedMetadata` treats
+    any fresh `metadata_cache` row as complete without checking whether `channel_id` is populated, so a
+    video whose metadata was cached *before* this migration keeps returning `channel_id: null` on every
+    new summary until that cache row's normal 30-day expiry — not just pre-migration summaries, but any
+    summary generated against a pre-migration cache hit. **Accepted as an extension of the no-backfill
+    decision above**: forcing every fresh-but-incomplete row to refetch would spend a vendor credit per
+    hit and risks refetching forever for videos where the vendor itself has no channel id to report
+    (null there is legitimate, not staleness). The gap self-heals as each cache row naturally expires
+    and is refreshed; no code change made.
   - **UI**: thumbnail and title both link to the video; channel name links to the channel only when
-    `channelUsername` is non-null, else renders as plain text (never a dead or wrong link). Both open in
+    `channelId` is non-null, else renders as plain text (never a dead or wrong link). Both open in
     a new tab (`target="_blank" rel="noopener noreferrer"`, per user request). The links sit at
     `relative z-10` to escape the toggle button's stretched `::after` click-catcher described in the
     header-row comment — without that, the two would have received the row's expand/collapse click
