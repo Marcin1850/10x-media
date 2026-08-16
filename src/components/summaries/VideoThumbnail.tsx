@@ -19,6 +19,29 @@ function derivedThumbnailUrl(youtubeId: string): string {
 }
 
 /**
+ * Hosts YouTube actually serves thumbnails from. `reportedUrl` is third-party metadata persisted
+ * without validation at write time — allowlisting here, at render time, is what stops a malformed or
+ * compromised reported value from making every viewer's browser request an arbitrary origin.
+ */
+const ALLOWED_THUMBNAIL_HOSTS = new Set([
+  "i.ytimg.com",
+  "i1.ytimg.com",
+  "i2.ytimg.com",
+  "i3.ytimg.com",
+  "i4.ytimg.com",
+  "img.youtube.com",
+]);
+
+function isTrustedThumbnailUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && ALLOWED_THUMBNAIL_HOSTS.has(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Renders a video's thumbnail with a double fallback: the reported URL, then the derived
  * `hqdefault.jpg`, then a non-image placeholder.
  *
@@ -31,28 +54,31 @@ function derivedThumbnailUrl(youtubeId: string): string {
  * that also fails would loop forever without it. Each stage can only move forward.
  */
 export function VideoThumbnail({ youtubeId, reportedUrl, title }: Props) {
-  const [stage, setStage] = useState<"reported" | "derived" | "placeholder">(reportedUrl ? "reported" : "derived");
+  const trustedReportedUrl = reportedUrl && isTrustedThumbnailUrl(reportedUrl) ? reportedUrl : null;
+  const [stage, setStage] = useState<"reported" | "derived" | "placeholder">(
+    trustedReportedUrl ? "reported" : "derived",
+  );
 
   if (stage === "placeholder") {
     return (
       <div
-        className="flex aspect-video w-full items-center justify-center rounded-lg border border-white/10 bg-white/5"
+        className="border-border bg-muted flex aspect-video w-full items-center justify-center rounded-lg border"
         aria-hidden="true"
       >
-        <VideoOff className="size-6 text-blue-100/30" />
+        <VideoOff className="text-muted-foreground size-6" />
       </div>
     );
   }
 
   return (
     <img
-      src={stage === "reported" && reportedUrl ? reportedUrl : derivedThumbnailUrl(youtubeId)}
+      src={stage === "reported" && trustedReportedUrl ? trustedReportedUrl : derivedThumbnailUrl(youtubeId)}
       alt={title ?? "Video thumbnail"}
       loading="lazy"
       onError={() => {
         setStage((current) => (current === "reported" ? "derived" : "placeholder"));
       }}
-      className="aspect-video w-full rounded-lg border border-white/10 bg-white/5 object-cover"
+      className="border-border bg-muted aspect-video w-full rounded-lg border object-cover"
     />
   );
 }

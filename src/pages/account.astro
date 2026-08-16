@@ -1,32 +1,43 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import DeleteAccountDialog from "@/components/account/DeleteAccountDialog";
+import { TopUpAction } from "@/components/account/TopUpAction";
+import { copy } from "@/lib/copy";
 
-const { user } = Astro.locals;
+const { user, credits } = Astro.locals;
 ---
 
-<Layout title="Account">
-  <div class="bg-cosmic flex min-h-screen items-center justify-center p-4">
+<Layout title={copy.account.heading}>
+  <div class="flex min-h-[calc(100vh-3.5rem)] items-center justify-center p-4">
     <div class="w-full max-w-lg space-y-6">
-      <div class="rounded-2xl border border-white/10 bg-white/10 p-8 text-white backdrop-blur-xl">
-        <h1 class="bg-gradient-to-r from-blue-200 to-purple-200 bg-clip-text text-3xl font-bold text-transparent">
-          Account
-        </h1>
-        <p class="mt-2 text-sm text-blue-100/80">
-          Signed in as <span class="font-semibold text-white">{user?.email}</span>
+      <div class="bg-card text-card-foreground border-border rounded-2xl border p-8">
+        <h1 class="font-display text-foreground text-2xl font-semibold">{copy.account.heading}</h1>
+        <p class="text-muted-foreground mt-2 text-sm">
+          {copy.account.signedInAs(user?.email ?? "")}
         </p>
-        <a
-          href="/dashboard"
-          class="mt-4 inline-block text-sm text-blue-200 underline underline-offset-4 hover:text-white"
-        >
-          ← Back to dashboard
-        </a>
+
+        <div class="border-border mt-6 flex items-start justify-between border-t pt-6">
+          <div class="text-muted-foreground flex items-center gap-2 text-sm">
+            <span>{copy.account.creditsLabel}</span>
+            {
+              credits === null ? (
+                <>
+                  <span class="bg-muted h-4 w-8 animate-pulse rounded" aria-hidden="true" />
+                  <span class="sr-only">{copy.nav.creditsUnavailable}</span>
+                </>
+              ) : (
+                <span class="text-foreground font-medium">{credits}</span>
+              )
+            }
+          </div>
+          <TopUpAction client:load />
+        </div>
       </div>
 
-      <div class="rounded-2xl border border-red-500/30 bg-red-950/20 p-8 text-white backdrop-blur-xl">
-        <h2 class="text-xl font-bold text-red-300">Danger zone</h2>
-        <p class="mt-2 text-sm text-blue-100/70">
-          Permanently delete your account and all associated data. This cannot be undone.
+      <div class="border-destructive/30 bg-destructive/10 rounded-2xl border p-8">
+        <h2 class="text-destructive text-xl font-bold">{copy.account.dangerZone.heading}</h2>
+        <p class="text-foreground/80 mt-2 text-sm">
+          {copy.account.dangerZone.description}
         </p>
         <div class="mt-5">
           <DeleteAccountDialog client:load email={user?.email ?? ""} />

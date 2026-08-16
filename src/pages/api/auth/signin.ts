@@ -1,6 +1,8 @@
 import type { APIRoute } from "astro";
 import { createClient } from "@/lib/supabase";
 
+export const prerender = false;
+
 export const POST: APIRoute = async (context) => {
   const form = await context.request.formData();
   const email = form.get("email") as string;
@@ -16,5 +18,5 @@ export const POST: APIRoute = async (context) => {
     return context.redirect(`/auth/signin?error=${encodeURIComponent(error.message)}`);
   }
 
-  return context.redirect("/");
+  return context.redirect("/summaries");
 };

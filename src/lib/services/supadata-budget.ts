@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { RETRY_DELAY_MS } from "./metadata";
+import { reportEvent } from "./reporting";
 
 /**
  * Lever C — the Supadata budget breaker (S-09 D5).
@@ -224,16 +225,13 @@ const BUDGET_EVENT = "[supadata-budget]";
  * **Deliberately incomplete (D5b)**: nothing receives these events yet. Until a monitoring tool lands
  * the warn threshold is decorative, and budget exhaustion surfaces through the stop threshold — users
  * seeing an error, the worst channel and the one lever C exists to avoid.
+ *
+ * Delegates to the shared reporting seam (`src/lib/services/reporting.ts`) so this event family and
+ * the top-up notice reach the same receiver once one lands. `BUDGET_EVENT` and the severity rule are
+ * unchanged — this is a routing change, not a payload or wording change.
  */
 export function reportBudgetThreshold(event: BudgetThresholdEvent): void {
-  const payload = JSON.stringify(event);
-  if (event.threshold === "warn") {
-    // eslint-disable-next-line no-console
-    console.warn(`${BUDGET_EVENT} ${payload}`);
-    return;
-  }
-  // eslint-disable-next-line no-console
-  console.error(`${BUDGET_EVENT} ${payload}`);
+  reportEvent(BUDGET_EVENT, event.threshold, event);
 }
 
 /** Seconds since a reading was taken, or null when there is none. Never throws on a bad timestamp. */

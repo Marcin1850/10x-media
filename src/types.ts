@@ -44,6 +44,8 @@ export interface Video {
    */
   thumbnail_url_reported: string | null;
   channel_name: string | null;
+  /** The channel's stable YouTube identifier, if the vendor reported one — see `VideoMetadata.channelId`. */
+  channel_id: string | null;
   duration_seconds: number | null;
   published_at: string | null;
   /** Which caption track the transcript came from. Diagnostic only — NOT the video's spoken language. */
@@ -66,6 +68,13 @@ export interface VideoMetadata {
   title: string | null;
   thumbnailUrl: string | null;
   channelName: string | null;
+  /**
+   * The channel's stable YouTube identifier (Supadata `additionalData.channelId`), e.g.
+   * `"UCuAXFkgsw1L7xaCfnd5JJOw"` — used to build a direct `youtube.com/channel/<id>` link. Distinct
+   * from `channelName`, the display name, which is not a valid link target. NOT a handle: YouTube
+   * responses carry no `author.username`, unlike other platforms Supadata supports.
+   */
+  channelId: string | null;
   durationSeconds: number | null;
   publishedAt: string | null;
 }
@@ -95,6 +104,8 @@ export interface SummaryListItem {
   /** What Supadata last reported — may be null or 404. See `Video.thumbnail_url_reported`. */
   thumbnailUrlReported: string | null;
   channelName: string | null;
+  /** The channel's stable YouTube identifier, if the vendor reported one — see `VideoMetadata.channelId`. */
+  channelId: string | null;
   durationSeconds: number | null;
   publishedAt: string | null;
 }

@@ -60,5 +60,16 @@ export const POST: APIRoute = async (context) => {
     await supabase.auth.signOut().catch(() => undefined);
   }
 
+  // One-shot, server-issued proof of deletion for the landing page's toast —
+  // replaces trusting a client-set `?deleted=1` query param, which anyone
+  // could type into the URL bar regardless of whether their account still exists.
+  context.cookies.set("account_deleted", "1", {
+    path: "/",
+    httpOnly: true,
+    sameSite: "strict",
+    secure: import.meta.env.PROD,
+    maxAge: 60,
+  });
+
   return Response.json({ ok: true }, { status: 200 });
 };

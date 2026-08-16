@@ -3,73 +3,103 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* 10xMedia design tokens — direction 3b "Konsola", ported from
+   context/changes/app-design-system/ds-bundle/tokens.css.
+
+   Dark is the product's look; `Layout.astro` puts `class="dark"` on <html>. Light is complete but
+   UNVERIFIED and not shipped: see the AA note on --attention-text before exposing it.
+
+   --attention / --attention-foreground / --attention-text are OUTSIDE the shadcn contract. They carry
+   exactly one meaning: the app is waiting for your decision about spending credits (the long-video 409
+   cost gate). Nothing else may use them — every other cautionary state takes the neutral warning
+   treatment (--card ground, 1px --border, --foreground text).
+
+   Hex is deliberate, not converted to oklch: every contrast ratio in
+   visual-direction-outcome.md was computed on these exact values. */
+
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  /* light */
+  --radius: 0.25rem;
+
+  --background: #f4f4f5;
+  --foreground: #131316;
+  --card: #ffffff;
+  --card-foreground: #131316;
+  --popover: #ffffff;
+  --popover-foreground: #131316;
+  --primary: #2e5fd0;
+  --primary-foreground: #ffffff;
+  --secondary: #e7e7ea;
+  --secondary-foreground: #35353d;
+  --muted: #ececef;
+  --muted-foreground: #61616b;
+  --accent: #ececef;
+  --accent-foreground: #131316;
+  --destructive: #c62a2f;
+  --destructive-foreground: #ffffff;
+  --border: #e4e4e7;
+  --input: #d6d6db;
+  --ring: #2e5fd0;
+  /* outside the shadcn contract — the 409 cost gate only */
+  --attention: #9a6512;
+  --attention-foreground: #ffffff;
+  /* Gate text on the 12% attention tint. Dark uses a lightened variant; light has no
+     darkened counterpart yet and lands at 4.25:1, below AA — fix before shipping light. */
+  --attention-text: #9a6512;
+  --sidebar: #efeff1;
+  --sidebar-foreground: #131316;
+  --sidebar-primary: #2e5fd0;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #e7e7ea;
+  --sidebar-accent-foreground: #35353d;
+  --sidebar-border: #e4e4e7;
+  --sidebar-ring: #2e5fd0;
+  --chart-1: #2e5fd0;
+  --chart-2: #9a6512;
+  --chart-3: #3f7f6b;
+  --chart-4: #7a4fbf;
+  --chart-5: #61616b;
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  /* dark — default */
+  --background: #101013;
+  --foreground: #ededef;
+  --card: #17181c;
+  --card-foreground: #ededef;
+  --popover: #1c1d22;
+  --popover-foreground: #ededef;
+  --primary: #4c7df0;
+  --primary-foreground: #0b1020;
+  --secondary: #22232a;
+  --secondary-foreground: #d8d8dd;
+  --muted: #22232a;
+  --muted-foreground: #9a9aa3;
+  --accent: #22232a;
+  --accent-foreground: #ededef;
+  --destructive: #e5484d;
+  --destructive-foreground: #1a0a0b;
+  --border: #26272e;
+  --input: #2e2f37;
+  --ring: #4c7df0;
+  /* outside the shadcn contract — the 409 cost gate only */
+  --attention: #e0a24a;
+  --attention-foreground: #1a1305;
+  /* Gate text on the 12% attention tint — the lightened variant, 8.75:1. */
+  --attention-text: #ebc489;
+  --sidebar: #141518;
+  --sidebar-foreground: #ededef;
+  --sidebar-primary: #4c7df0;
+  --sidebar-primary-foreground: #0b1020;
+  --sidebar-accent: #22232a;
+  --sidebar-accent-foreground: #d8d8dd;
+  --sidebar-border: #26272e;
+  --sidebar-ring: #4c7df0;
+  --chart-1: #4c7df0;
+  --chart-2: #e0a24a;
+  --chart-3: #4fbf9b;
+  --chart-4: #a98bf5;
+  --chart-5: #9a9aa3;
 }
 
 @theme inline {
@@ -77,6 +107,11 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  /* The two families come from Astro's Fonts API (astro.config.mjs), not from literal stacks —
+     naming the faces here without registering them there would produce a page that asks for fonts
+     it never loads. */
+  --font-sans: var(--font-ibm-plex-sans);
+  --font-display: var(--font-space-grotesk);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -92,6 +127,12 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  /* Without these three entries Tailwind emits no bg-attention / text-attention utilities and the
+     custom token is unreachable from markup. */
+  --color-attention: var(--attention);
+  --color-attention-foreground: var(--attention-foreground);
+  --color-attention-text: var(--attention-text);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -110,15 +151,19 @@
   --color-sidebar-ring: var(--sidebar-ring);
 }
 
-@utility bg-cosmic {
-  background-image: linear-gradient(to bottom, #0a0e1a, #0f1529, #0a0e1a);
-}
-
 @layer base {
+  /* Radix's scroll-lock (DropdownMenu/Dialog, both default `modal: true`) hides the real scrollbar
+     and compensates with a margin sized for an `auto`-width body — but Layout.astro pins `body` to an
+     explicit `width: 100%`, so that compensation doesn't shrink to absorb it, and the freed scrollbar
+     width instead nudges centered/full-width content a few px right. Reserving the gutter permanently
+     removes the thing being compensated for in the first place, rather than patching the compensation. */
+  html {
+    scrollbar-gutter: stable;
+  }
   * {
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-sans;
   }
 }

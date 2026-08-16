@@ -1,0 +1,88 @@
+<!-- @dsCard group="States" -->
+<!doctype html>
+<meta charset="utf-8">
+<title>Semantic states — 10xMedia</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#101013;--card:#17181C;--fg:#EDEDEF;--muted:#22232A;--muted-fg:#9A9AA3;
+        --border:#26272E;--destructive:#E5484D;--attention:#E0A24A}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 "IBM Plex Sans",ui-sans-serif,system-ui,sans-serif}
+  .wrap{padding:24px}
+  h1{font:600 15px/1.2 "Space Grotesk",sans-serif;margin:0 0 4px}
+  .sub{color:var(--muted-fg);font-size:12px;margin:0 0 20px;max-width:70ch}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:14px}
+  .slot{display:flex;flex-direction:column;gap:7px}
+  .lbl{font:600 10.5px/1 "Space Grotesk",sans-serif;letter-spacing:.07em;text-transform:uppercase;color:var(--muted-fg)}
+  .box{border-radius:6px;padding:12px;min-height:74px;display:flex;flex-direction:column;justify-content:center;gap:5px}
+  .tok{font:11px/1.45 ui-monospace,Menlo,monospace;color:var(--muted-fg)}
+  .rest{background:var(--card);border:1px solid var(--border)}
+  .flight{background:var(--muted);border:1px dashed var(--border);position:relative;overflow:hidden}
+  .shim{position:absolute;inset:0;background:linear-gradient(105deg,transparent 0,rgba(255,255,255,.07) 45%,transparent 90%);background-size:180px 100%;background-repeat:no-repeat;animation:sh 1.3s linear infinite}
+  @keyframes sh{0%{background-position:-180px 0}100%{background-position:180px 0}}
+  .decide{background:rgba(224,162,74,.12);border:2px solid var(--attention)}
+  .decide .t{color:#EBC489;font-weight:500}
+  .err{background:rgba(229,72,77,.10);border:2px solid var(--destructive)}
+  .err .t{color:var(--destructive);font-weight:500}
+  .destr{background:var(--destructive);color:#1A0A0B;border:2px solid var(--destructive);font-weight:600}
+  .off{background:var(--bg);border:1px solid var(--border);color:var(--muted-fg)}
+  .unk{background:var(--muted);border:1px solid var(--border);position:relative;overflow:hidden}
+  .hover{background:#22232A;border:1px solid transparent}
+  .bar{height:7px;border-radius:4px;background:rgba(255,255,255,.10)}
+  .pill{display:inline-block;height:12px;width:44px;border-radius:6px;background:rgba(255,255,255,.10)}
+  .note{margin:20px 0 0;padding:11px 13px;border:1px solid var(--border);border-left:3px solid var(--attention);border-radius:5px;background:var(--card);font-size:12.5px;line-height:1.6;max-width:78ch}
+  .note b{color:var(--attention)}
+  code{font:11.5px ui-monospace,Menlo,monospace;color:#D8D8DD}
+</style>
+<div class="wrap">
+  <h1>Semantic states</h1>
+  <p class="sub">Seven slots plus the hover surface. Every state carries a second, non-color channel —
+  border weight and style — so none of them depends on hue alone.</p>
+
+  <div class="grid">
+    <div class="slot"><div class="lbl">At rest</div>
+      <div class="box rest"><div class="bar" style="width:70%"></div><div class="bar" style="width:45%"></div></div>
+      <div class="tok">--card / --card-foreground<br>1px solid --border</div></div>
+
+    <div class="slot"><div class="lbl">In flight</div>
+      <div class="box flight"><div class="shim"></div><div class="bar" style="width:66%"></div><div class="bar" style="width:40%"></div></div>
+      <div class="tok">--muted under shimmer<br>1px <b>dashed</b> --border</div></div>
+
+    <div class="slot"><div class="lbl">Needs your decision</div>
+      <div class="box decide"><div class="t">Długi film — 2 kredyty. Zostanie 10.</div>
+        <div style="font:600 11px 'Space Grotesk',sans-serif;color:#1A1305;background:var(--attention);display:inline-block;padding:4px 10px;border-radius:4px;align-self:flex-start">Za 2</div></div>
+      <div class="tok">--attention 2px + 12% fill<br>action: --attention-foreground on --attention</div></div>
+
+    <div class="slot"><div class="lbl">Recoverable error</div>
+      <div class="box err"><div class="t">Nie udało się wygenerować</div>
+        <div style="font-size:11.5px;color:var(--muted-fg)">Kredyt nie został pobrany.*</div></div>
+      <div class="tok">--destructive 2px border + text<br>10% fill</div></div>
+
+    <div class="slot"><div class="lbl">Destructive</div>
+      <div class="box destr" style="align-items:flex-start"><span style="font:600 12.5px 'Space Grotesk',sans-serif">Usuń konto</span></div>
+      <div class="tok">--destructive filled<br>+ --destructive-foreground</div></div>
+
+    <div class="slot"><div class="lbl">Disabled</div>
+      <div class="box off"><div style="font-size:12.5px">Brak kredytów — pasek nieaktywny</div></div>
+      <div class="tok">--background under control<br>+ --muted-foreground · layout unchanged</div></div>
+
+    <div class="slot"><div class="lbl">Unknown</div>
+      <div class="box unk"><div class="shim"></div>
+        <div style="display:flex;align-items:center;gap:8px;font-size:12.5px"><span style="color:var(--muted-fg)">Kredyty</span><span class="pill"></span></div></div>
+      <div class="tok">--muted + shimmer<br>never a number, never --destructive, never --attention</div></div>
+
+    <div class="slot"><div class="lbl">Hover (ghost / outline)</div>
+      <div class="box hover"><div style="font-size:12.5px;color:var(--fg)">Doładuj</div></div>
+      <div class="tok">--accent — a surface, <b>not</b> a state</div></div>
+  </div>
+
+  <p class="note"><b>Two slots that usually get skipped, and both sit on the money path.</b>
+  <em>Needs your decision</em> is neither an error nor a success — nothing failed and nothing was charged,
+  the app is asking. <em>Unknown</em> must read as neither <code>0</code> nor an error: showing zero credits
+  when the balance merely failed to load is a false statement about the user’s account.</p>
+
+  <p class="note">* <b>Failure copy must branch on the outcome.</b> A caption-less video <em>is</em> charged one
+  credit, so a blanket “no credit was taken” is sometimes a lie about the user’s money. The error card reports
+  the charge; it does not cause it.</p>
+</div>

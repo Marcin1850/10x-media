@@ -1,0 +1,46 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { createClient } from "@/lib/supabase";
+import { listSummaries } from "@/lib/services/summary-list";
+import { SummariesSurface } from "@/components/summaries/DashboardSummaries";
+import { copy } from "@/lib/copy";
+import type { SummaryListItem } from "@/types";
+
+const { user, credits } = Astro.locals;
+
+// The summary list, server-seeded into the island the same way `initialCredits` is. `listUnavailable`
+// starts true and is cleared only by a read that actually returned: an empty list must mean "you have
+// no summaries", never "we couldn't ask". Telling someone with 16 saved summaries that they have none
+// is a wrong statement about their data — worse than an error — so the unconfigured and failed cases
+// both keep it set.
+let summaries: SummaryListItem[] = [];
+let listUnavailable = true;
+if (user) {
+  const supabase = createClient(Astro.request.headers, Astro.cookies);
+  if (supabase) {
+    try {
+      // createClient returns supabase-js's default untyped client (no generated Database types yet),
+      // so passing it where the service expects its explicit shapes is an unavoidable `any` gap.
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+      summaries = await listSummaries(supabase, user.id);
+      listUnavailable = false;
+    } catch (err) {
+      // The list is not an enforcement gate either — a failed read logs and still renders the page,
+      // as its own distinct state rather than as an empty corpus.
+      // eslint-disable-next-line no-console
+      console.error("summaries: summary list read failed", err);
+    }
+  }
+}
+---
+
+<Layout title={copy.summaries.page.title}>
+  <div class="mx-auto w-full max-w-3xl space-y-6 p-4 py-8">
+    <SummariesSurface
+      client:load
+      initialSummaries={summaries}
+      initialCredits={credits}
+      listUnavailable={listUnavailable}
+    />
+  </div>
+</Layout>

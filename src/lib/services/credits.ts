@@ -198,14 +198,21 @@ export type RefusalReason = "unavailable" | "empty" | "whitespace";
  * - `insufficient` — the balance will not cover it. Nothing charged, and NOT an error: the 402 gate
  *                    upstream blocks a zero balance before any paid call, so reaching here short of
  *                    credit means the balance moved mid-request.
- * - `notCharged`   — the RPC could not be reached or answered. See `chargeFailedTranscript` for why
- *                    this is a resolution rather than a throw.
+ * - `notCharged`   — PostgREST returned a structured error for the RPC call. The reserve-and-settle
+ *                    statement raised inside its own transaction, which rolled back atomically — this
+ *                    is the one failure mode that PROVES nothing was charged.
+ * - `ambiguous`    — the outcome cannot be proven either way: the request promise rejected (a
+ *                    transport failure can happen after Postgres commits the debit but before the
+ *                    reply arrives), or PostgREST answered without an `error` yet the row was
+ *                    missing/malformed — which means the statement most likely ran to completion.
+ *                    Callers MUST NOT assert `charged: false` for this outcome.
  */
 export type ChargeFailedTranscriptResult =
   | { outcome: "charged"; balance: number }
   | { outcome: "replay"; balance: number }
   | { outcome: "insufficient"; balance: number }
-  | { outcome: "notCharged" };
+  | { outcome: "notCharged" }
+  | { outcome: "ambiguous" };
 
 export interface ChargeFailedTranscriptParams {
   userId: string;
@@ -222,10 +229,18 @@ export interface ChargeFailedTranscriptParams {
 }
 
 /**
- * Log marker for a refusal charge that did not land. The operator absorbed the Supadata credit for
- * this submission; the user was not billed. A cost signal, not a user-facing failure.
+ * Log marker for a refusal charge PROVEN not to land (a structured PostgREST error, whose transaction
+ * rolled back). The operator absorbed the Supadata credit for this submission; the user was not
+ * billed. A cost signal, not a user-facing failure.
  */
 const REFUSAL_NOT_CHARGED = "REFUSAL_NOT_CHARGED";
+
+/**
+ * Log marker for a refusal charge whose outcome is UNKNOWN — unlike `REFUSAL_NOT_CHARGED`, this does
+ * NOT mean the user was not billed. It flags a row worth checking against the ledger by hand (or via
+ * the reconciliation query) rather than assuming either direction.
+ */
+const REFUSAL_CHARGE_AMBIGUOUS = "REFUSAL_CHARGE_AMBIGUOUS";
 
 /**
  * Charges one app credit for a submission we refused and the operator paid for (D14).
@@ -237,7 +252,15 @@ const REFUSAL_NOT_CHARGED = "REFUSAL_NOT_CHARGED";
  * **It never throws, and the direction is the opposite of the debit on the success path.** There, a
  * throw protects the user from paying for work that did not happen. Here, a failure to charge costs
  * the OPERATOR one credit while the user still gets the 422 they were owed — and answering the
- * request matters more than collecting a fee on it. Every failure resolves as `notCharged`.
+ * request matters more than collecting a fee on it.
+ *
+ * Every failure resolves as `notCharged` or `ambiguous`, never a throw — but the two are NOT
+ * interchangeable. `notCharged` is reserved for the one case that proves the debit never landed: a
+ * structured PostgREST error, which means the single reserve-and-settle statement raised inside its
+ * own transaction and rolled back atomically. Every other failure — a rejected promise, or a
+ * successful-looking response with a missing or unrecognised row — cannot rule out that the
+ * statement actually committed and only the reply was lost, so it resolves as `ambiguous` instead of
+ * guessing `notCharged`.
  */
 export async function chargeFailedTranscript(
   admin: SupabaseClient,
@@ -245,7 +268,8 @@ export async function chargeFailedTranscript(
 ): Promise<ChargeFailedTranscriptResult> {
   // supabase-js resolves RPC errors into `error`, but a transport-level failure still REJECTS the
   // promise. The try/catch is what makes "never throws" true rather than aspirational — same reason
-  // refundReservation carries one.
+  // refundReservation carries one. A rejection here means we never learned whether the statement
+  // committed, so it resolves as `ambiguous`, not `notCharged`.
   try {
     // The admin client is supabase-js's untyped default (this repo has no generated Database types),
     // so narrow the RPC result at the boundary rather than destructuring `any` — same as
@@ -261,17 +285,20 @@ export async function chargeFailedTranscript(
     };
 
     if (error) {
+      // A structured error from PostgREST means the RPC's own statement raised and its transaction
+      // rolled back — the one outcome that PROVES no debit landed.
       // eslint-disable-next-line no-console
       console.error(`${REFUSAL_NOT_CHARGED}: ${refusalReason} for ${userId}/${requestId}: ${error.message}`);
       return { outcome: "notCharged" };
     }
 
     // `returns table(...)` arrives as a one-element array. An empty one means the RPC contract changed
-    // under us; report it as not charged rather than reading silence as a success.
+    // under us — but no `error` means the statement executed without raising, so the debit may well
+    // have landed. Report it as ambiguous rather than asserting the money was never taken.
     if (!data || data.length === 0) {
       // eslint-disable-next-line no-console
-      console.error(`${REFUSAL_NOT_CHARGED}: charge_failed_transcript returned no row for ${userId}/${requestId}`);
-      return { outcome: "notCharged" };
+      console.error(`${REFUSAL_CHARGE_AMBIGUOUS}: charge_failed_transcript returned no row for ${userId}/${requestId}`);
+      return { outcome: "ambiguous" };
     }
     const row = data[0];
 
@@ -282,14 +309,16 @@ export async function chargeFailedTranscript(
         // A missing credits row reads as zero, matching beginGeneration's `insufficient` branch.
         return { outcome: row.outcome, balance: row.new_balance ?? 0 };
       default:
+        // Same reasoning as the empty-row branch: the call succeeded, so an unrecognised outcome is a
+        // contract mismatch, not proof of no charge.
         // eslint-disable-next-line no-console
-        console.error(`${REFUSAL_NOT_CHARGED}: unknown outcome '${row.outcome}' for ${userId}/${requestId}`);
-        return { outcome: "notCharged" };
+        console.error(`${REFUSAL_CHARGE_AMBIGUOUS}: unknown outcome '${row.outcome}' for ${userId}/${requestId}`);
+        return { outcome: "ambiguous" };
     }
   } catch (cause) {
     // eslint-disable-next-line no-console
-    console.error(`${REFUSAL_NOT_CHARGED}: ${refusalReason} for ${userId}/${requestId}:`, cause);
-    return { outcome: "notCharged" };
+    console.error(`${REFUSAL_CHARGE_AMBIGUOUS}: ${refusalReason} for ${userId}/${requestId}:`, cause);
+    return { outcome: "ambiguous" };
   }
 }
 

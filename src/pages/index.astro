@@ -1,16 +1,23 @@
 ---
 import Welcome from "@/components/Welcome.astro";
 import Layout from "@/layouts/Layout.astro";
+import { copy } from "@/lib/copy";
 
-const deleted = Astro.url.searchParams.get("deleted") === "1";
+// Server-issued one-shot cookie, not the `?deleted=1` query param: the cookie
+// can only have been set by a successful `/api/account/delete` response, so
+// visiting this URL directly can no longer show a false success toast.
+const deleted = Astro.cookies.get("account_deleted")?.value === "1";
+if (deleted) {
+  Astro.cookies.delete("account_deleted", { path: "/" });
+}
 ---
 
 <Layout>
   {
     deleted ? (
-      <div role="status" class="fixed inset-x-0 top-0 z-50 flex justify-center px-4 py-3 text-sm text-emerald-100">
-        <div class="rounded-full border border-emerald-400/30 bg-emerald-900/60 px-4 py-2 backdrop-blur-xl">
-          Your account and all data were deleted.
+      <div role="status" class="fixed inset-x-0 top-0 z-50 flex justify-center px-4 py-3 text-sm">
+        <div class="bg-card text-card-foreground border-border rounded-full border px-4 py-2">
+          {copy.landing.deletedToast}
         </div>
       </div>
     ) : null

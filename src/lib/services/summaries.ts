@@ -10,6 +10,7 @@ interface VideoRow {
   /** What Supadata last reported, never repaired — may 404. Consumers fall back to the derived `hqdefault.jpg`. */
   thumbnail_url_reported: string | null;
   channel_name: string | null;
+  channel_id: string | null;
   duration_seconds: number | null;
   published_at: string | null;
   transcript_lang: string | null;
@@ -112,6 +113,7 @@ export interface AppDatabase {
           p_title: string | null;
           p_thumbnail_url_reported: string | null;
           p_channel_name: string | null;
+          p_channel_id: string | null;
           p_duration_seconds: number | null;
           p_published_at: string | null;
           p_transcript_lang: string | null;
@@ -295,6 +297,7 @@ export async function persistSummaryAndSettle(
     p_title: metadata?.title ?? null,
     p_thumbnail_url_reported: metadata?.thumbnailUrl ?? null,
     p_channel_name: metadata?.channelName ?? null,
+    p_channel_id: metadata?.channelId ?? null,
     p_duration_seconds: metadata?.durationSeconds ?? null,
     p_published_at: metadata?.publishedAt ?? null,
     p_transcript_lang: transcriptLang,

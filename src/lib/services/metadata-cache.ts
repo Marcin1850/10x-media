@@ -61,6 +61,7 @@ export async function getCachedMetadata(admin: SupabaseClient, youtubeId: string
             title: string | null;
             thumbnail_url_reported: string | null;
             channel_name: string | null;
+            channel_id: string | null;
             duration_seconds: number | null;
             published_at: string | null;
             fetched_at: string;
@@ -84,6 +85,7 @@ export async function getCachedMetadata(admin: SupabaseClient, youtubeId: string
       title: row.title,
       thumbnailUrl: row.thumbnail_url_reported,
       channelName: row.channel_name,
+      channelId: row.channel_id,
       durationSeconds: row.duration_seconds,
       publishedAt: row.published_at,
     };
@@ -119,6 +121,7 @@ export async function saveCachedMetadata(
       p_title: metadata.title,
       p_thumbnail_url_reported: metadata.thumbnailUrl,
       p_channel_name: metadata.channelName,
+      p_channel_id: metadata.channelId,
       p_duration_seconds: metadata.durationSeconds,
       p_published_at: metadata.publishedAt,
     })) as { error: { message: string } | null };

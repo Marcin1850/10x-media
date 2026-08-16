@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { copy } from "@/lib/copy";
 import type { ChannelCharacter } from "@/types";
 
 /**
@@ -70,6 +71,13 @@ export interface LastSuccess {
 export interface UseGenerateSummary {
   loading: boolean;
   error: string | null;
+  /**
+   * Whether the failure named by `error` took a credit — `null` when the endpoint sent no `charged`
+   * field or a non-boolean one, which degrades to silence rather than to `false` (S-09 phase 9 D1). A
+   * wrong statement about the user's money is worse than saying nothing. Cleared alongside `error` by
+   * the same `attemptId`-bound `clearAttempt`, so a stale charge line can never outlive its attempt.
+   */
+  charged: boolean | null;
   confirm: ConfirmState | null;
   result: SuccessState | null;
   credits: number | null;
@@ -85,7 +93,8 @@ export interface UseGenerateSummary {
    * The UI has consumed this attempt's terminal state and no longer needs to name it. Pass the
    * `GenerateAttempt.id` that was consumed to clear only that attempt; a newer one is left standing.
    * Called with no argument it clears whatever is current — for the user dismissing the card they
-   * can see, which is by definition the live one.
+   * can see, which is by definition the live one. Also clears `error` when the attempt it belongs to
+   * is the one being cleared, so a dismissed failure doesn't keep rendering elsewhere.
    */
   clearAttempt: (attemptId?: number) => void;
 }
@@ -100,35 +109,35 @@ function messageForStatus(status: number, serverError?: string): string {
       // Three distinct causes answer 429 (generation lease, idempotent in-progress replay, transcript
       // rate cap), each with its own server message. Prefer the server's so a cooldown doesn't
       // misreport as lock contention; the fallback covers a non-JSON 429.
-      return serverError ?? "A summary is already being generated. Wait for it to finish before starting another.";
+      return serverError ?? copy.errors.alreadyGenerating;
     case 413:
-      return "This video is too long to summarize.";
+      return copy.errors.tooLong;
     case 422:
       // Three distinct causes answer 422 (no caption track, a vendor success carrying no words, and
       // a transient fetch failure), each with its own server message. Prefer the server's so a video
       // that will NEVER be summarizable doesn't misreport as a retryable hiccup; the fallback covers
       // a non-JSON 422.
-      return serverError ?? "No transcript is available for this video.";
+      return serverError ?? copy.errors.noTranscript;
     case 502:
-      return "The transcript or summarization service failed. Please try again.";
+      return copy.errors.serviceFailed;
     case 503:
       // Two very different causes answer 503, and collapsing them into the configuration one is what
       // this used to do: a missing service-role or provider key (genuinely a configuration problem the
       // user cannot affect) and a tripped budget breaker (a temporary capacity problem that resolves
       // on its own). Prefer the server's string so "try again in a while" is not reported as "this is
       // broken"; the fallback covers a non-JSON 503.
-      return serverError ?? "Summary generation isn't configured.";
+      return serverError ?? copy.errors.notConfigured;
     case 500:
       // Several distinct server-side 500s exist (pre-save infrastructure failures vs. a persistence
       // failure), each with its own message. Prefer the server's so a lock/balance/reserve failure
       // doesn't misreport as a save failure; the generic fallback covers a non-JSON framework 500.
-      return serverError ?? "Something went wrong. Please try again.";
+      return serverError ?? copy.errors.generic;
     case 401:
-      return "Your session expired — sign in again.";
+      return copy.errors.sessionExpired;
     case 400:
-      return serverError ?? "Please check the video URL and try again.";
+      return serverError ?? copy.errors.checkUrl;
     default:
-      return serverError ?? "Something went wrong. Please try again.";
+      return serverError ?? copy.errors.generic;
   }
 }
 
@@ -142,9 +151,10 @@ function messageForStatus(status: number, serverError?: string): string {
  * a paid-path guarantee, and each fails silently (a double charge, a replayed wrong summary, a
  * result the user paid for but never sees) rather than loudly:
  *
- * 1. `pendingRequest` — the idempotency key — is held ONLY across a network error, and released by
- *    any HTTP response. Widening that lifetime replays a previous video's summary; narrowing it
- *    charges twice for one ambiguous retry.
+ * 1. `pendingRequest` — the idempotency key — is held ONLY across a network error or a server-flagged
+ *    ambiguous refusal charge (`ambiguousCharge: true`), and released by every other HTTP response.
+ *    Widening that lifetime replays a previous video's summary; narrowing it charges twice for one
+ *    ambiguous retry.
  * 2. `requestSeq` is bumped on submit AND on every quote-relevant input change.
  * 3. A successful response is applied BEFORE the staleness check, never after.
  */
@@ -166,6 +176,7 @@ export function useGenerateSummary({
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<SuccessState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [charged, setCharged] = useState<boolean | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [credits, setCredits] = useState<number | null>(initialCredits);
   const [attempt, setAttempt] = useState<GenerateAttempt | null>(null);
@@ -194,6 +205,7 @@ export function useGenerateSummary({
     const seq = (requestSeq.current += 1);
     setLoading(true);
     setError(null);
+    setCharged(null);
     setAttempt({ id: seq, url: submittedUrl, character: submittedCharacter });
     attemptSeq.current = seq;
 
@@ -223,15 +235,11 @@ export function useGenerateSummary({
       // Only surface the error if this is still the current request; a superseded one just clears
       // loading and retracts its own attempt — with no error to show, an attempt left behind names a
       // request that has no status at all.
-      if (seq === requestSeq.current) setError("Network error — please try again.");
+      if (seq === requestSeq.current) setError(copy.errors.network);
       else if (attemptSeq.current === seq) setAttempt(null);
       setLoading(false);
       return;
     }
-
-    // A response — of any status — means the server reached a decision, so there is nothing ambiguous
-    // left to deduplicate. Release the key before branching so every path below starts clean.
-    pendingRequest.current = null;
 
     const data: unknown = await response.json().catch(() => ({}));
 
@@ -243,7 +251,17 @@ export function useGenerateSummary({
       requiresConfirmation?: boolean;
       summaryId?: string;
       error?: string;
+      charged?: unknown;
+      ambiguousCharge?: unknown;
     };
+
+    // A response usually means the server reached a decision, so there is nothing left to deduplicate
+    // and the key releases. The one exception is this specific 422: the server itself could not prove
+    // whether the refusal fee landed, so the key must survive to let a resubmit of these SAME inputs
+    // replay that decision instead of risking a second charge for one ambiguous attempt.
+    if (!(response.status === 422 && payload.ambiguousCharge === true)) {
+      pendingRequest.current = null;
+    }
 
     // A successful response means the summary was already saved and the user was charged. Apply it even
     // if the form was edited while the request was in flight (seq is now stale): dropping paid work
@@ -258,7 +276,12 @@ export function useGenerateSummary({
       // The paid result and the new balance are applied above regardless. The success *event* needs
       // an id to be actionable, so a success answered without one — a contract the endpoint never
       // breaks today — raises no event rather than one no consumer can confirm the list against.
-      if (typeof payload.summaryId !== "string") return;
+      // Without a terminal error either, the pending card's status derivation has no success and no
+      // failure to read, so it falls back to "generating" forever — raise one so the card resolves.
+      if (typeof payload.summaryId !== "string") {
+        setError(copy.errors.savedResponseInvalid);
+        return;
+      }
       const success: LastSuccess = {
         seq: (successSeq.current += 1),
         attemptId: seq,
@@ -296,7 +319,7 @@ export function useGenerateSummary({
     }
 
     if (response.status === 402) {
-      setError(payload.error ?? "You don't have enough summary credits.");
+      setError(payload.error ?? copy.errors.noCredits);
       // A 402 can arrive with a fresh authoritative balance in the message; if the server also sent a
       // number, prefer it. The endpoint currently embeds the balance in `error`, so nothing to sync here.
       setConfirm(null);
@@ -304,6 +327,9 @@ export function useGenerateSummary({
       return;
     }
 
+    // Only the 422 bodies this endpoint sends actually carry `charged`; every other status leaves it
+    // `undefined`, which narrows to `null` here — silence about money rather than a guessed `false`.
+    setCharged(typeof payload.charged === "boolean" ? payload.charged : null);
     setError(messageForStatus(response.status, payload.error));
     setConfirm(null);
     setLoading(false);
@@ -312,6 +338,7 @@ export function useGenerateSummary({
   return {
     loading,
     error,
+    charged,
     confirm,
     result,
     credits,
@@ -335,12 +362,17 @@ export function useGenerateSummary({
       setConfirm(null);
     },
     clearAttempt: (attemptId) => {
-      // Functional update on purpose: the caller that has an id to check reaches this from inside
-      // async work whose closure was captured before a newer attempt could have been installed, so
-      // the comparison has to run against the live attempt, not the one that render saw.
+      // Guarded against `attemptSeq`, not the `attempt` state closure: the caller that has an id to
+      // check reaches this from inside async work whose closure was captured before a newer attempt
+      // could have been installed, so the comparison has to run against the live attempt, not the one
+      // that render saw. A stale id is a no-op — the error it would otherwise clear belongs to the
+      // newer, still-standing attempt.
+      if (attemptId !== undefined && attemptSeq.current !== attemptId) return;
       setAttempt((current) =>
         current === null || (attemptId !== undefined && current.id !== attemptId) ? current : null,
       );
+      setError(null);
+      setCharged(null);
     },
   };
 }
