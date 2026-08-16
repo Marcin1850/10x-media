@@ -360,7 +360,7 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
   - The free-consumption path must not touch S-05's credit ledger or S-09's Supadata budget breaker — the copy is a database read/insert of an already-generated summary, not a new generation, so neither guardrail should see it.
   - The link needs its own expiry enforcement independent of Supabase auth session lifetimes — a separate token/row with a `expires_at`, not a reuse of any existing session mechanism.
   - RLS: the copied row must end up owned by the viewer (`user_id` = viewer), not a shared reference to the sharer's row, to keep the existing per-user RLS model (`videos`/`summaries`, F-01) intact without adding a new access-grant concept.
-- **Status:** proposed — nice-to-have, deliberately deferred past MVP (user decision 2026-08-16, when this slice was first raised). Not yet planned; `/10x-plan` when ready.
+- **Status:** proposed — nice-to-have, deliberately deferred past MVP (user decision 2026-08-16, when this slice was first raised). Not yet planned; `/10x-plan` when ready. Tracked in Linear: MAR-18.
 
 ## Backlog Handoff
 
