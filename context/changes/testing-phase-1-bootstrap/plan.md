@@ -481,14 +481,14 @@ The only production code change in the whole phase is the schema extraction (Pha
 #### Automated
 
 - [ ] 4.1 A CI run on the branch passes with the new `npm test` step
-- [x] 4.2 `npx stryker run --mutate "src/lib/services/credits.ts"` completes and produces a report
-- [x] 4.3 `npm test` still green after assertions added in response to survivors
-- [x] 4.4 `npm run lint` passes over the changed test files
+- [x] 4.2 `npx stryker run --mutate "src/lib/services/credits.ts"` completes and produces a report — 879965d
+- [x] 4.3 `npm test` still green after assertions added in response to survivors — 879965d
+- [x] 4.4 `npm run lint` passes over the changed test files — 879965d
 
 #### Manual
 
-- [x] 4.5 Every survivor is killed or has a written reason for being ignored
-- [x] 4.6 No assertion was added purely to raise the score
+- [x] 4.5 Every survivor is killed or has a written reason for being ignored — 879965d
+- [x] 4.6 No assertion was added purely to raise the score — 879965d
 
 ### Phase 5: Cookbook and Status Sync
 
