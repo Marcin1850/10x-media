@@ -52,7 +52,7 @@ Each row is a discrete rollout phase that will open its own change folder via `/
 
 | # | Phase name | Goal (one line) | Risks covered | Test types | Status | Change folder |
 |---|---|---|---|---|---|---|
-| 1 | Test bootstrap + cost/credit rules | Stand up the runner and pin the pure rules that decide what a generation costs and whether it is allowed | #1, #5 | unit | change opened | `context/changes/testing-phase-1-bootstrap/` |
+| 1 | Test bootstrap + cost/credit rules | Stand up the runner and pin the pure rules that decide what a generation costs and whether it is allowed | #1, #5 | unit | researched | `context/changes/testing-phase-1-bootstrap/` |
 | 2 | Paid-path integration | Prove the charge-versus-delivery contract on every exit, and that derived spend reconciles against the vendor's counter | #1, #2, #3, #5 | integration | not started | — |
 | 3 | Data-boundary authorization | Prove one account cannot reach another's rows, including the user-agnostic shared caches | #4 | integration | not started | — |
 | 4 | Critical-flow e2e + gates wiring | Prove the flow works end to end and lock the floor in CI, including the missing typecheck gate | #6, cross-cutting | e2e, gates | not started | — |
@@ -61,6 +61,8 @@ Each row is a discrete rollout phase that will open its own change folder via `/
 **Status vocabulary** (fixed — parser literals): `not started` → `change opened` → `researched` → `planned` → `implementing` → `complete`.
 
 **Linear tracking** (project *10xMedia MVP*, label `test-rollout`): Phase 1 → MAR-19 · Phase 2 → MAR-20 · Phase 3 → MAR-21 · Phase 4 → MAR-22 · Phase 5 → MAR-23. Blocking chain 1 → 2 → 3 → 4, with Phase 5 blocked only by Phase 1 (it needs a runner, nothing else). Per `lessons.md`, a Status change here and the matching Linear state move in the same session.
+
+**Phase 1's research (2026-08-22) settled its own scope, and "unit" above means two layers, not one.** Pure functions alone leave risk #1 with almost no surface — the rules that decide *who pays* (`chargeFailedTranscript`, `beginGeneration`) are pure only with respect to an injected Supabase client. Phase 1 therefore includes **hermetic stub-client tests** as well as pure ones; both are still zero-infrastructure, and §4's "API mocking — see Phase 2" still holds, because the seam here is the injected client, not the paid vendor HTTP boundary. Two other decisions are recorded in the change folder rather than here: `allowLong: true` sent unprompted is **pre-authorization by design**, not a guard bypass; and `generateSchema` moves to `src/lib/schemas/` so the trust boundary is reachable from a test at all.
 
 **Phase 2 carries an open constraint that its research must settle.** Integration tests need clean state between runs. Per-user cleanup covers the per-account tables, but the transcript and metadata caches are user-agnostic (keyed by video id, no owner column), and the vendor budget state is a **singleton row** shared with the local development environment. Forcing the breaker into stop, stale-reading and unreadable-counter states therefore has no user to scope the cleanup to. Either that state is made injectable, or this group of tests needs its own database. `/10x-research` decides; the plan does not pre-empt it.
 
