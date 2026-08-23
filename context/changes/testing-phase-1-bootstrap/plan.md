@@ -437,16 +437,16 @@ The only production code change in the whole phase is the schema extraction (Pha
 
 #### Automated
 
-- [ ] 1.1 `npm test` runs and the suite is green
-- [ ] 1.2 `npm run lint` passes over `vitest.config.ts` and the new test file under `strictTypeChecked`
-- [ ] 1.3 `npm run test:coverage` produces a report without failing on a threshold
-- [ ] 1.4 `npm run build` still succeeds — colocated test files are not in the build graph
-- [ ] 1.5 The test imports resolve through `@/`
+- [x] 1.1 `npm test` runs and the suite is green
+- [x] 1.2 `npm run lint` passes over `vitest.config.ts` and the new test file under `strictTypeChecked`
+- [x] 1.3 `npm run test:coverage` produces a report without failing on a threshold
+- [x] 1.4 `npm run build` still succeeds — colocated test files are not in the build graph
+- [x] 1.5 The test imports resolve through `@/`
 
 #### Manual
 
-- [ ] 1.6 Suite runs without network access or workerd machinery; fallback applied and recorded if not
-- [ ] 1.7 Suite runtime is fast enough to run habitually
+- [x] 1.6 Suite runs without network access or workerd machinery; fallback applied and recorded if not
+- [x] 1.7 Suite runtime is fast enough to run habitually
 
 ### Phase 2: Risk #5 — The Trust Boundary
 

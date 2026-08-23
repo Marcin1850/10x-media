@@ -1,7 +1,7 @@
 ---
 change_id: testing-phase-1-bootstrap
 title: Test bootstrap + unit tests for the cost and credit decision rules
-status: planned
+status: implementing
 created: 2026-08-18
 updated: 2026-08-23
 archived_at: null
