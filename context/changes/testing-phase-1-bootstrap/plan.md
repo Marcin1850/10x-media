@@ -452,15 +452,15 @@ The only production code change in the whole phase is the schema extraction (Pha
 
 #### Automated
 
-- [ ] 2.1 `npm test` green with the new schema and URL suites
-- [ ] 2.2 `npm run lint` passes over the new schema module and both test files
-- [ ] 2.3 `npm run build` succeeds with the endpoint importing the extracted schema
-- [ ] 2.4 The endpoint's behaviour is unchanged — no field's shape, default, or optionality differs
+- [x] 2.1 `npm test` green with the new schema and URL suites
+- [x] 2.2 `npm run lint` passes over the new schema module and both test files
+- [x] 2.3 `npm run build` succeeds with the endpoint importing the extracted schema
+- [x] 2.4 The endpoint's behaviour is unchanged — no field's shape, default, or optionality differs
 
 #### Manual
 
-- [ ] 2.5 A generation request through the running app still succeeds end to end
-- [ ] 2.6 A hand-sent request with `requestId` omitted still returns 400
+- [x] 2.5 A generation request through the running app still succeeds end to end
+- [x] 2.6 A hand-sent request with `requestId` omitted still returns 400
 
 ### Phase 3: Risk #1 — The Ledger Truth Table
 

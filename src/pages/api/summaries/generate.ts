@@ -29,6 +29,7 @@ import {
   lookupRefusalReplay,
   type RefusalReason,
 } from "@/lib/services/credits";
+import { generateSchema } from "@/lib/schemas/generate-summary";
 import { acquireGenerationLease, releaseGenerationLease } from "@/lib/services/generation-lock";
 import {
   recordTranscriptAttempt,
@@ -104,20 +105,6 @@ const REFUSAL_CHARGE = 1;
  */
 const BUDGET_EXHAUSTED_ERROR =
   "We've reached our transcript service limit for now, so new videos can't be processed. Please try again in a while.";
-
-const generateSchema = z.object({
-  url: z.string().refine((url) => extractYoutubeId(url) !== null, {
-    message: "url must be a valid YouTube video URL",
-  }),
-  character: z.enum(["informational", "educational"]),
-  allowLong: z.boolean().optional().default(false),
-  // Identifies ONE user-initiated generation, repeated verbatim when the client retries after an
-  // ambiguous failure (request delivered, reply lost). REQUIRED at the boundary: `refuseAndCharge`
-  // skips the D14 fee when it has no key, so an optional field would let any caller opt out of the
-  // charge by omitting it. A cached pre-F22 client gets a 400 until it reloads — the correct trade,
-  // since the only first-party call site has always sent a UUID.
-  requestId: z.uuid(),
-});
 
 export const POST: APIRoute = async (context) => {
   if (!SUPADATA_API_KEY || !OPENROUTER_API_KEY) {
