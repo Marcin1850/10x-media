@@ -452,29 +452,29 @@ The only production code change in the whole phase is the schema extraction (Pha
 
 #### Automated
 
-- [x] 2.1 `npm test` green with the new schema and URL suites
-- [x] 2.2 `npm run lint` passes over the new schema module and both test files
-- [x] 2.3 `npm run build` succeeds with the endpoint importing the extracted schema
-- [x] 2.4 The endpoint's behaviour is unchanged — no field's shape, default, or optionality differs
+- [x] 2.1 `npm test` green with the new schema and URL suites — 381e31d
+- [x] 2.2 `npm run lint` passes over the new schema module and both test files — 381e31d
+- [x] 2.3 `npm run build` succeeds with the endpoint importing the extracted schema — 381e31d
+- [x] 2.4 The endpoint's behaviour is unchanged — no field's shape, default, or optionality differs — 381e31d
 
 #### Manual
 
-- [x] 2.5 A generation request through the running app still succeeds end to end
-- [x] 2.6 A hand-sent request with `requestId` omitted still returns 400
+- [x] 2.5 A generation request through the running app still succeeds end to end — 381e31d
+- [x] 2.6 A hand-sent request with `requestId` omitted still returns 400 — 381e31d
 
 ### Phase 3: Risk #1 — The Ledger Truth Table
 
 #### Automated
 
-- [ ] 3.1 `npm test` green with the credits suite
-- [ ] 3.2 `npm run lint` passes over the fixture helper and the credits test file
-- [ ] 3.3 All three functions' failure branches exercised, including the rejected-promise case
-- [ ] 3.4 No test asserts `ambiguous` as the negation of `notCharged`
+- [x] 3.1 `npm test` green with the credits suite
+- [x] 3.2 `npm run lint` passes over the fixture helper and the credits test file
+- [x] 3.3 All three functions' failure branches exercised, including the rejected-promise case
+- [x] 3.4 No test asserts `ambiguous` as the negation of `notCharged`
 
 #### Manual
 
-- [ ] 3.5 Each assertion traces to a doc contract or roadmap decision, not to the code it covers
-- [ ] 3.6 The `replay ⇒ charged: true` reasoning reads correctly to a fresh reader
+- [x] 3.5 Each assertion traces to a doc contract or roadmap decision, not to the code it covers
+- [x] 3.6 The `replay ⇒ charged: true` reasoning reads correctly to a fresh reader
 
 ### Phase 4: Gates and Mutation Check
 
