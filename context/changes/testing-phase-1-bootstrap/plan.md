@@ -466,29 +466,29 @@ The only production code change in the whole phase is the schema extraction (Pha
 
 #### Automated
 
-- [x] 3.1 `npm test` green with the credits suite
-- [x] 3.2 `npm run lint` passes over the fixture helper and the credits test file
-- [x] 3.3 All three functions' failure branches exercised, including the rejected-promise case
-- [x] 3.4 No test asserts `ambiguous` as the negation of `notCharged`
+- [x] 3.1 `npm test` green with the credits suite — 5ea4669
+- [x] 3.2 `npm run lint` passes over the fixture helper and the credits test file — 5ea4669
+- [x] 3.3 All three functions' failure branches exercised, including the rejected-promise case — 5ea4669
+- [x] 3.4 No test asserts `ambiguous` as the negation of `notCharged` — 5ea4669
 
 #### Manual
 
-- [x] 3.5 Each assertion traces to a doc contract or roadmap decision, not to the code it covers
-- [x] 3.6 The `replay ⇒ charged: true` reasoning reads correctly to a fresh reader
+- [x] 3.5 Each assertion traces to a doc contract or roadmap decision, not to the code it covers — 5ea4669
+- [x] 3.6 The `replay ⇒ charged: true` reasoning reads correctly to a fresh reader — 5ea4669
 
 ### Phase 4: Gates and Mutation Check
 
 #### Automated
 
 - [ ] 4.1 A CI run on the branch passes with the new `npm test` step
-- [ ] 4.2 `npx stryker run --mutate "src/lib/services/credits.ts"` completes and produces a report
-- [ ] 4.3 `npm test` still green after assertions added in response to survivors
-- [ ] 4.4 `npm run lint` passes over the changed test files
+- [x] 4.2 `npx stryker run --mutate "src/lib/services/credits.ts"` completes and produces a report
+- [x] 4.3 `npm test` still green after assertions added in response to survivors
+- [x] 4.4 `npm run lint` passes over the changed test files
 
 #### Manual
 
-- [ ] 4.5 Every survivor is killed or has a written reason for being ignored
-- [ ] 4.6 No assertion was added purely to raise the score
+- [x] 4.5 Every survivor is killed or has a written reason for being ignored
+- [x] 4.6 No assertion was added purely to raise the score
 
 ### Phase 5: Cookbook and Status Sync
 

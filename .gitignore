@@ -6,6 +6,8 @@ dist/
 
 # Test output
 coverage/
+reports/
+.stryker-tmp/
 
 # Environment variables
 .env

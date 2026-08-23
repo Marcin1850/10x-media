@@ -1,0 +1,12 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "_comment": "Selective quality gate, NOT a CI gate (test-plan §5). Coverage says a line ran; mutation score says a test would fail if the line were broken. Run it narrowly after a risk phase and resolve each survivor by asking whether the change would hurt a user or the business: npx stryker run --mutate \"src/lib/services/credits.ts\". `mutate` is deliberately left at Stryker's default glob, which already excludes *.test.ts, so colocated tests need no ignore entry.",
+  "packageManager": "npm",
+  "testRunner": "vitest",
+  "plugins": ["@stryker-mutator/vitest-runner"],
+  "vitest": {
+    "configFile": "vitest.config.ts"
+  },
+  "reporters": ["html", "clear-text", "progress"],
+  "coverageAnalysis": "perTest"
+}

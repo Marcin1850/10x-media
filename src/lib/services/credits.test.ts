@@ -22,6 +22,32 @@ import { stubFailing, stubRejecting, stubReturning } from "@/lib/services/__fixt
  * The four failure branches each `console.error` an operator marker. Those are silenced so a green run
  * stays readable, but the marker STRINGS are deliberately not asserted: they are log copy, not a
  * contract any consumer reads.
+ *
+ * **Mutation check** (`npx stryker run --mutate "src/lib/services/credits.ts"`, 2026-08-23): 98 killed,
+ * 26 survived, 25 not covered. Every survivor was put to the question "would this change hurt a user or
+ * the business?" and the answer was no on all three classes below — no assertion was added to raise a
+ * number. The one class that answered YES was the `replay` payload guard (`credits.ts:149`), whose five
+ * mutants are now killed by the one-field-at-a-time rows in "contract violations throw".
+ *
+ * Ignored, with the reason:
+ *
+ * 1. **Message and marker copy** (14 — every `console.error("")` / `throw new Error("")`, plus the
+ *    three marker constants). Same reason as the paragraph above: operator log text. Nothing branches
+ *    on it and no user sees it, so an assertion here would pin a string and nothing more.
+ * 2. **The `if (error)` guard emptied or short-circuited** (`:128`, `:353`). supabase-js resolves an
+ *    RPC error into `error` with `data` null, so the next guard catches the same shape and the caller
+ *    observes the identical result. Killing these needs a response carrying an error AND a valid row
+ *    at once — an input the client cannot produce, and inventing unreachable inputs is out of scope by
+ *    the plan's own rule.
+ * 3. **The `!data || data.length === 0` guard emptied or short-circuited** (`:134`, `:298`). Falling
+ *    through reads `data[0]` on a missing row, and the observable outcome is unchanged either way:
+ *    `beginGeneration` throws (a TypeError instead of its own Error, both landing the endpoint on the
+ *    failure path that refunds the debit) and `chargeFailedTranscript`'s catch-all resolves the same
+ *    `ambiguous`. The guards earn their place as documentation of a broken RPC contract, not as a
+ *    branch anything downstream can distinguish.
+ *
+ * The 25 uncovered mutants are all in `getBalance` and `refundReservation` — outside this rollout
+ * phase's scope, which names only the three functions below.
  */
 
 const CHARGE_PARAMS: ChargeFailedTranscriptParams = {
@@ -388,6 +414,60 @@ describe("beginGeneration — contract violations throw, and that is the guard",
       "a replay row with no summary",
       "there is nothing to return verbatim, so it is not a replay",
       [beginRow({ outcome: "replay", reservation_id: RESERVATION_ID, new_balance: 3 })],
+    ],
+    // One row per field the replay payload must carry, each missing exactly ONE of them. A replay
+    // answers the client with the original result instead of calling the paid LLM, so a payload with
+    // a hole is not a cheaper replay — it is a wrong answer to a request the user already paid for:
+    // no `summary_id` and the client cannot open or revisit the summary it is being handed; no
+    // `video_id` and the content is attributed to nothing; no `reservation_id` and the fee that was
+    // already collected has no row the endpoint can point at.
+    //
+    // Asserted one-at-a-time deliberately. The all-null row above passes ANY guard that still checks
+    // a single field, so on its own it cannot tell "all four are required" from "content is
+    // required" — which is exactly the degradation that would ship a holed replay.
+    [
+      "a replay row with no reservation id",
+      "the fee already collected has no ledger row behind it",
+      [beginRow({ outcome: "replay", new_balance: 3, summary_id: SUMMARY_ID, video_id: "dQw4w9WgXcQ", content: "#" })],
+    ],
+    [
+      "a replay row with no summary id",
+      "the client is handed a summary it cannot open or revisit",
+      [
+        beginRow({
+          outcome: "replay",
+          reservation_id: RESERVATION_ID,
+          new_balance: 3,
+          video_id: "dQw4w9WgXcQ",
+          content: "#",
+        }),
+      ],
+    ],
+    [
+      "a replay row with no video id",
+      "the replayed content is attributed to no video",
+      [
+        beginRow({
+          outcome: "replay",
+          reservation_id: RESERVATION_ID,
+          new_balance: 3,
+          summary_id: SUMMARY_ID,
+          content: "#",
+        }),
+      ],
+    ],
+    [
+      "a replay row with no content",
+      "there is nothing to replay with, whatever else the row carries",
+      [
+        beginRow({
+          outcome: "replay",
+          reservation_id: RESERVATION_ID,
+          new_balance: 3,
+          summary_id: SUMMARY_ID,
+          video_id: "dQw4w9WgXcQ",
+        }),
+      ],
     ],
     ["an empty row set", "the RPC contract changed and must not read as a silent success", []],
     ["an unrecognised outcome", "an outcome with no documented meaning", [beginRow({ outcome: "settled" })]],

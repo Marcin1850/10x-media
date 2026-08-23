@@ -19,6 +19,11 @@ jobs:
       - run: npx astro sync
       - run: npm run lint
       - run: npm run lint:tokens
+      # The unit gate (test-plan §5). Deliberately env-less: nothing in the suite reaches Supabase,
+      # Supadata or OpenRouter — the hermetic tests inject a stub client — which is what keeps it
+      # inside §7's rule that CI never holds paid keys. The `deploy` job needs no change; it already
+      # depends on `ci`, so the gate reaches production by inheritance.
+      - run: npm test
       - run: npm run build
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

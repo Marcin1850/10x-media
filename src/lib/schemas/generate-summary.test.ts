@@ -16,6 +16,12 @@ import { generateSchema } from "@/lib/schemas/generate-summary";
  * Why this matters at all: the form validates only the URL (`GenerateSummaryForm.tsx:67-76`).
  * `requestId`, `character` and `allowLong` have **no** client-side validation — they are merely
  * well-formed by construction — so for those three the schema is the only guard.
+ *
+ * **Mutation check** (`npx stryker run --mutate "src/lib/schemas/generate-summary.ts"`, 2026-08-23):
+ * 9 killed, 2 survived, both consciously ignored — they empty the `refine`'s `message` (`:16-18`).
+ * That is the same error copy the header above says is deliberately not asserted: a caller reads
+ * `success`, and a request accepted or refused does not change when the explanation does. Killing
+ * them means pinning a string, which is the vibe test this suite exists to avoid.
  */
 
 const VALID_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
