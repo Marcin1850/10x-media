@@ -480,7 +480,7 @@ The only production code change in the whole phase is the schema extraction (Pha
 
 #### Automated
 
-- [ ] 4.1 A CI run on the branch passes with the new `npm test` step
+- [x] 4.1 A CI run on the branch passes with the new `npm test` step — 879965d (run 32650782239 on `master` after fast-forward; `ci` green incl. `npm test`, `deploy` shipped)
 - [x] 4.2 `npx stryker run --mutate "src/lib/services/credits.ts"` completes and produces a report — 879965d
 - [x] 4.3 `npm test` still green after assertions added in response to survivors — 879965d
 - [x] 4.4 `npm run lint` passes over the changed test files — 879965d
