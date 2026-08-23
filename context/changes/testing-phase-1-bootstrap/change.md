@@ -53,4 +53,19 @@ Stryker's Vitest integration verified via Context7 on 2026-08-23: `@stryker-muta
 
 Phases 2 and 3 are `/10x-tdd`-eligible; 1, 4 and 5 are `/10x-implement`.
 
+## Implementation (2026-08-23) — all five phases
+
+Landed: `8dfa356` (p1 runner bootstrap + `summaryCost`) · `381e31d` (p2 trust boundary — `generateSchema` extracted to `src/lib/schemas/`, schema + URL suites) · `5ea4669` (p3 ledger truth table + `__fixtures__/supabase-stub.ts`) · `879965d` (p4 unit gate in CI + Stryker) · this phase (p5 cookbook and status sync).
+
+Two things the plan predicted as contingencies, resolved in opposite directions:
+
+1. **`getViteConfig()` was NOT usable** — `@astrojs/cloudflare`'s Vite plugin refuses the environment Vitest sets up (`"ssr" environment: resolve.external`). The plan's recorded `vitest/config` fallback applies, which makes the explicit `@/*` alias load-bearing. Recorded in `test-plan.md` §4 and §6.6; revisit at rollout Phase 4 (component rendering), not before.
+2. **Stryker's `related: false` contingency was not hit** — the Vitest runner matched tests to mutants on default settings.
+
+Mutation check over `credits.ts`: 98 killed, 26 survived, 25 uncovered (the latter in `getBalance`/`refundReservation`, outside this phase's named scope). The one survivor class that would hurt a user — the `replay` payload guard at `credits.ts:149` — is now killed; the rest are ignored with written reasons in the test file's header comment. No assertion was added to raise a number.
+
+Stated gaps handed to Phase 2 (MAR-20), deliberately: `refuseAndCharge`'s `REFUSAL_COPY` lookup and `ambiguousCharge: true` body shape stay uncovered; `readBillableCredits` stays blocked on the doc-vs-code conflict (`supadata-billable-requests.md:163-171` vs `supadata-ledger.ts:206`) — the doc must be corrected before either side can be asserted without writing a mirror test.
+
+`test-plan.md` §3 Phase 1 now reads `complete`; §5's unit gate reads wired; §6.1 carries the cookbook. No roadmap item carries this Change ID, so `roadmap.md` is untouched and the Backlog Handoff sync rule does not apply.
+
 No roadmap item carries this Change ID, so `roadmap.md` is untouched. MAR-19 moves to In Progress; per `lessons.md` it stays there until Phase 5 closes.

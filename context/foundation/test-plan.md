@@ -6,7 +6,7 @@
 >
 > Refresh: re-run `/10x-test-plan --refresh` when stale (see §8).
 >
-> Last updated: 2026-08-18
+> Last updated: 2026-08-23
 
 ## 1. Strategy
 
@@ -52,7 +52,7 @@ Each row is a discrete rollout phase that will open its own change folder via `/
 
 | # | Phase name | Goal (one line) | Risks covered | Test types | Status | Change folder |
 |---|---|---|---|---|---|---|
-| 1 | Test bootstrap + cost/credit rules | Stand up the runner and pin the pure rules that decide what a generation costs and whether it is allowed | #1, #5 | unit | planned | `context/changes/testing-phase-1-bootstrap/` |
+| 1 | Test bootstrap + cost/credit rules | Stand up the runner and pin the pure rules that decide what a generation costs and whether it is allowed | #1, #5 | unit | complete | `context/changes/testing-phase-1-bootstrap/` |
 | 2 | Paid-path integration | Prove the charge-versus-delivery contract on every exit, and that derived spend reconciles against the vendor's counter | #1, #2, #3, #5 | integration | not started | — |
 | 3 | Data-boundary authorization | Prove one account cannot reach another's rows, including the user-agnostic shared caches | #4 | integration | not started | — |
 | 4 | Critical-flow e2e + gates wiring | Prove the flow works end to end and lock the floor in CI, including the missing typecheck gate | #6, cross-cutting | e2e, gates | not started | — |
@@ -74,12 +74,13 @@ The classic test base for this project. AI-native tools carry a `checked:` date 
 
 | Layer | Tool | Version | Notes |
 |---|---|---|---|
-| unit + integration | none yet — see §3 Phase 1 | — | Vitest is the fit: Astro ships `getViteConfig()` from `astro/config` for exactly this. **Astro 6 requires `environment: 'node'`** for tests that render Astro components; the client environments were disallowed in v6. |
+| unit + integration | Vitest (+ `@vitest/coverage-v8`) | 4.1.11 | Wired in Phase 1. `environment: 'node'`, colocated `src/**/*.test.ts`, globals off. **`getViteConfig()` was NOT used** — the recorded fallback (a plain `defineConfig` from `vitest/config`) applies, because the Cloudflare adapter's Vite plugin refuses the environment Vitest sets up; see §6.6. Its cost is the `@/*` alias, which the fallback must declare itself. Revisit at §3 Phase 4, where Astro component rendering makes `getViteConfig()` non-negotiable. |
 | Astro component rendering | none yet — see §3 Phase 4 | — | Container API is still `experimental_AstroContainer`. Treat as unstable; prefer testing behaviour through the request boundary where possible. |
 | API mocking | none yet — see §3 Phase 2 | — | The seam is the **paid vendor HTTP boundary only** (transcript provider, LLM gateway). Internal services are never mocked. |
 | database | local Supabase stack (Docker) | CLI ^2.107.0 | Already available via `npx supabase start`. Real RLS, real credit RPCs. See the Phase 2 constraint in §3 and the cleanup exception in §7. |
 | e2e | none yet — see §3 Phase 4 | — | Playwright is Astro's documented e2e path. Scope to one or two critical flows, not a page sweep. |
 | accessibility | none yet | — | No rollout phase claims this. Listed as a known gap, not a plan. |
+| mutation testing | Stryker (`@stryker-mutator/core` + `@stryker-mutator/vitest-runner`) | 10.0.0 | **Selective ad-hoc check, explicitly NOT a CI gate** (§5 lists no mutation row). Run narrowly after a risk phase — `npx stryker run --mutate "<file>"` — and resolve each survivor by asking whether the change would hurt a user or the business. No threshold is configured and none should be; a score is not a target. See §6.1. |
 | (optional) AI-native quality | LLM-as-judge over a fixed golden set — checked: 2026-08-18 | n/a | **When NOT to use:** never as a merge gate, never in CI, and never before the judge has been calibrated once against the user's own ratings — an uncalibrated judge takes its oracle from a model rather than from the requirement, and then measures model-to-model agreement. |
 
 **Stack grounding tools (current session):**
@@ -99,7 +100,7 @@ The full set of gates that must pass before a change reaches production. "Requir
 | design-token lint | CI | required — wired today | token drift in the design system |
 | build | CI | required — wired today | build-breaking errors |
 | typecheck | CI | required after §3 Phase 4 | type drift — `@astrojs/check` is installed but never invoked; Phase 4 wires it |
-| unit | local + CI | required after §3 Phase 1 | cost and credit rule regressions |
+| unit | local + CI | required — wired today (`npm test`, in the `ci` job between `lint:tokens` and `build`) | cost and credit rule regressions |
 | integration | local + CI | required after §3 Phase 2 | charge-versus-delivery regressions, breaker behaviour, authorization |
 | e2e on critical flows | CI on PR | required after §3 Phase 4 | broken generate-and-see-it flow |
 | summary-quality golden set | scheduled, outside CI | optional after §3 Phase 5 | prompt regressions and provider-side model drift |
@@ -111,7 +112,58 @@ How to add new tests in this project. Each sub-section is filled in once the rel
 
 ### 6.1 Adding a unit test
 
-- TBD — see §3 Phase 1. Will cover the cost and credit decision rules: given a transcript size and a request, what is owed and whether it is allowed.
+**Where the file goes.** Colocated next to the module it covers, named `<module>.test.ts` — `src/lib/services/summaries.test.ts` covers `src/lib/services/summaries.ts`. No separate `tests/` tree: `tsconfig.json` and `eslint.config.js` already apply to `src/**`, so a colocated test is type-checked-linted under `strictTypeChecked` the moment it lands, and the build ignores it (Astro only pulls what pages import). The runner picks it up through `include: ["src/**/*.test.ts"]` in `vitest.config.ts`.
+
+**Imports are explicit — globals are off.** Start every file with `import { describe, expect, it } from "vitest";` (add `vi`, `beforeEach`, `afterEach` as needed). Enabling `globals: true` would require a `types` entry in `tsconfig.json`, which is shared with the app build; explicit imports keep the runner out of the application's type configuration. Import the module under test through the `@/` alias (`@/lib/services/summaries`) — the alias is declared in `vitest.config.ts` and nowhere else, so exercising it is part of what the suite proves.
+
+**Two layers. Pick the cheaper one that still gives a signal.**
+
+| Layer | What it covers | How |
+|---|---|---|
+| Pure | Functions with no dependencies — `summaryCost`, `extractYoutubeId`, `generateSchema`. | Call directly, assert the return value. |
+| Hermetic | Functions pure *with respect to an injected client* — `beginGeneration`, `chargeFailedTranscript`, `lookupRefusalReplay`. | Pass a stub client from `src/lib/services/__fixtures__/supabase-stub.ts`. |
+
+The hermetic seam is the **injected client**, not the paid vendor HTTP boundary — nothing here mocks `fetch` or Supabase's transport. API mocking is still Phase 2's (§6.2).
+
+**Reaching a hermetic function.** `__fixtures__/supabase-stub.ts` builds a bare object exposing only `rpc`, cast to `SupabaseClient` at the boundary (production signatures take supabase-js's untyped default client, so no production type changes for a test). Three factories, because the ledger distinguishes three failure worlds and conflating them is the bug these tests exist to catch:
+
+```ts
+import { stubReturning, stubFailing, stubRejecting } from "@/lib/services/__fixtures__/supabase-stub";
+
+// PostgREST answered: { data, error: null }
+const ok = stubReturning([{ outcome: "charged", new_balance: 4 }]);
+const result = await chargeFailedTranscript(ok.client, PARAMS);
+expect(result).toEqual({ outcome: "charged", balance: 4 });
+expect(ok.rpc).toHaveBeenCalledWith("charge_failed_transcript", { /* … */ }); // assert what reached the ledger
+
+// Structured error: the statement rolled back — the one shape that PROVES nothing was written.
+await expect(chargeFailedTranscript(stubFailing().client, PARAMS)).resolves.toEqual({ outcome: "notCharged" });
+
+// Rejected promise: transport died, possibly AFTER Postgres committed — proves nothing either way.
+await expect(chargeFailedTranscript(stubRejecting().client, PARAMS)).resolves.toEqual({ outcome: "ambiguous" });
+```
+
+Assert each outcome **by its own shape**, never as the negation of another (`ambiguous` is not "not `notCharged`") — collapsing the two is precisely the regression being guarded. Services that `console.error` an operator marker on a failure branch: silence the console with `vi.spyOn(console, "error")` in `beforeEach` so a green run stays readable, but **do not assert the marker strings** — they are log copy, not a contract any consumer reads.
+
+**The oracle rule — non-negotiable.** What the code *should* do comes from the PRD, the README's credit rules, roadmap decisions, or a function's own documented contract. It never comes from reading the implementation. A test that recomputes the expected value the way the code does passes against the bug. In practice: write the threshold as the literal `40_000` the documents state, and pin the exported constant separately, so a silent retune goes red. Where the sources do not resolve a value unambiguously, **stop and ask** — do not assert it. Head each `describe` block with a comment naming the source (`Oracle: README §Summary credits and roadmap S-01`), so a future reader can re-derive the assertion without re-reading the code.
+
+**One `it.each` per property, not six near-identical cases.** Each row is a table entry with a third column saying what that row proves; each row must catch a different regression. Include at least one edge case per risk — the boundary value, `null`/empty, a dependency error, an invalid input — and do **not** invent inputs the caller cannot produce (`summaryCost` receives `content.length`, so negative and `NaN` are unreachable and untested).
+
+**Running it.**
+
+```
+npm test            # single run — the CI entry point
+npm run test:watch  # while writing
+npm run test:coverage  # v8 report into coverage/, no thresholds by design
+```
+
+**Mutation check — narrow and deliberate, never a CI gate.** After a risk phase's tests are green, ask the question coverage cannot: would a test fail if this rule were broken?
+
+```
+npx stryker run --mutate "src/lib/services/credits.ts"
+```
+
+Scope it to the module you just covered (the default `mutate` glob already excludes `*.test.ts`). Open `reports/mutation/mutation.html` and put every survivor to one question: **would this change hurt a user or the business?** Yes ⇒ add the assertion that kills it. No (equivalent or cosmetic) ⇒ ignore it consciously and write the reason down in the test file's header comment. Do not chase a score — a test that pins an implementation detail purely to kill a cosmetic mutant is itself a vibe test.
 
 ### 6.2 Adding an integration test
 
@@ -133,6 +185,15 @@ How to add new tests in this project. Each sub-section is filled in once the rel
 
 (Filled in as phases land — anything surprising a phase taught that the next phase should not rediscover.)
 
+**Phase 1 — Test bootstrap + cost/credit rules (2026-08-23, `testing-phase-1-bootstrap`).**
+
+- **`getViteConfig()` does not work here, and the fallback was used.** Loading `astro.config.mjs` brings in `@astrojs/cloudflare`, whose Vite plugin rejects the environment Vitest sets up: *"The following environment options are incompatible with the Cloudflare Vite plugin: 'ssr' environment: `resolve.external`"*. That is the adapter-failure trigger the plan recorded, so `vitest.config.ts` is a plain `defineConfig` from `vitest/config`. Legitimate at this layer because no unit target imports `astro:env`, a `.astro` file, or `@supadata/js` — the three things the full Astro config exists to make resolvable. Phase 4 (component rendering, e2e) will need `getViteConfig()` or an environment split, and will have to solve the adapter conflict rather than inherit this shortcut.
+- **The `@/*` alias is the fallback's price, and it is load-bearing.** `astro.config.mjs` never declares it either — Astro reads it from `tsconfig.json` during its own build. Vite alone does not. Without the explicit `resolve.alias` in `vitest.config.ts`, every test importing `@/lib/…` fails at *import* time with a resolution error, which reads nothing like an assertion failure. Any future config (including a `getViteConfig()` one) must carry it.
+- **A module that imports `astro:env/server` is unreachable from a unit test.** That is why `generateSchema` moved out of `src/pages/api/summaries/generate.ts` into `src/lib/schemas/generate-summary.ts` — a pure move, same fields and defaults. Expect the same constraint on anything else worth testing that currently lives inside an endpoint; Phase 2's request-boundary tests need a different answer, since they exercise the endpoint itself.
+- **Stryker's Vitest runner worked on the default settings.** The documented `"vitest": { "related": false }` contingency was **not** needed, and `mutate` was left at the default glob (which already excludes `*.test.ts`). Reports land in `reports/mutation/mutation.html`; `reports/` and `.stryker-tmp/` are gitignored. Note that `.gitignore` feeds ESLint via `includeIgnoreFile`, so anything ignored there is also unlinted — that is the reason `coverage/` had to be added there and not only to the runner config.
+- **Zod 4's `z.uuid()` accepts any RFC 9562/4122 version, v1–v8** (verified via Context7, 2026-08-22). The roadmap's phrasing "rejects a hand-typed non-v4 key" is loose; a test asserting a valid v1 UUID is rejected would fail. The field's contract is stable idempotency identity, which any RFC UUID satisfies.
+- **Known gap handed to Phase 2, deliberately.** `refuseAndCharge` / `refusalResponse` were not extracted from the endpoint, so the `REFUSAL_COPY` lookup and the `ambiguousCharge: true` body shape stay uncovered. The request-boundary integration tests cover both without any refactor. Also still open: `readBillableCredits` is blocked on a doc-vs-code conflict (`supadata-billable-requests.md:163-171` prescribes `Number.parseInt`; `supadata-ledger.ts:206` rejects anything not `/^\d+$/`) — asserting either side today is a mirror test, so the **doc must be corrected first**.
+
 ## 7. What We Deliberately Don't Test
 
 Exclusions agreed during the rollout. Future contributors should respect these unless the underlying assumption changes.
@@ -149,7 +210,7 @@ Exclusions agreed during the rollout. Future contributors should respect these u
 ## 8. Freshness Ledger
 
 - Strategy (§1–§5) last reviewed: 2026-08-18
-- Stack versions last verified: 2026-08-18
+- Stack versions last verified: 2026-08-23 (Vitest 4.1.11 and Stryker 10.0.0 installed and running as of rollout Phase 1; the unwired rows are unchanged since 2026-08-18)
 - AI-native tool references last verified: 2026-08-18
 
 Refresh (`/10x-test-plan --refresh`) when:
