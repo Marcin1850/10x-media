@@ -3,7 +3,7 @@ project: "10xMedia"
 version: 1
 status: draft
 created: 2026-06-11
-updated: 2026-08-16
+updated: 2026-08-23
 prd_version: 1
 main_goal: speed
 top_blocker: external
@@ -43,6 +43,14 @@ Watching YouTube videos is time-consuming — when regularly following informati
 | S-10 | transcript-injection-guardrail | (guardrail) a transcript that fails — or cannot pass — an injection check never reaches the LLM | S-01, S-09    | — (integrity guardrail)       | proposed |
 | S-11 | concurrent-generation | start generating a second video while an earlier generation is still in progress | S-01          | — (throughput nice-to-have)   | proposed — deferred past MVP |
 | S-12 | share-summary-link | share a summary via a time-limited link; free for whoever opens it, and a saved copy appears in their own list marked "added via link" | S-01, S-02    | — (nice-to-have; conflicts with PRD Non-Goal "sharing summaries between users" — see Risk) | proposed — nice-to-have, deferred past MVP |
+
+> **The test rollout is tracked elsewhere — this table is product slices only.**
+> Testing work has its own register in `context/foundation/test-plan.md` §3: five phases
+> `T-1`…`T-5`, mirrored in Linear as MAR-19…MAR-23 under the `test-rollout` label, with its
+> own status vocabulary (`not started` → `change opened` → `researched` → `planned` →
+> `implementing` → `complete`). Deliberately **not** duplicated here — a copy would be a
+> fourth surface to keep in sync and would carry nothing Linear does not already join.
+> This is a pointer, so it needs no updating when a phase moves.
 
 ## Streams
 

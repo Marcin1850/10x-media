@@ -52,7 +52,7 @@ Each row is a discrete rollout phase that will open its own change folder via `/
 
 | # | Phase name | Goal (one line) | Risks covered | Test types | Status | Change folder |
 |---|---|---|---|---|---|---|
-| 1 | Test bootstrap + cost/credit rules | Stand up the runner and pin the pure rules that decide what a generation costs and whether it is allowed | #1, #5 | unit | researched | `context/changes/testing-phase-1-bootstrap/` |
+| 1 | Test bootstrap + cost/credit rules | Stand up the runner and pin the pure rules that decide what a generation costs and whether it is allowed | #1, #5 | unit | planned | `context/changes/testing-phase-1-bootstrap/` |
 | 2 | Paid-path integration | Prove the charge-versus-delivery contract on every exit, and that derived spend reconciles against the vendor's counter | #1, #2, #3, #5 | integration | not started | — |
 | 3 | Data-boundary authorization | Prove one account cannot reach another's rows, including the user-agnostic shared caches | #4 | integration | not started | — |
 | 4 | Critical-flow e2e + gates wiring | Prove the flow works end to end and lock the floor in CI, including the missing typecheck gate | #6, cross-cutting | e2e, gates | not started | — |
