@@ -1,7 +1,7 @@
 ---
 change_id: testing-phase-1-bootstrap
 title: Test bootstrap + unit tests for the cost and credit decision rules
-status: implementing
+status: implemented
 created: 2026-08-18
 updated: 2026-08-23
 archived_at: null
@@ -66,6 +66,4 @@ Mutation check over `credits.ts`: 98 killed, 26 survived, 25 uncovered (the latt
 
 Stated gaps handed to Phase 2 (MAR-20), deliberately: `refuseAndCharge`'s `REFUSAL_COPY` lookup and `ambiguousCharge: true` body shape stay uncovered; `readBillableCredits` stays blocked on the doc-vs-code conflict (`supadata-billable-requests.md:163-171` vs `supadata-ledger.ts:206`) — the doc must be corrected before either side can be asserted without writing a mirror test.
 
-`test-plan.md` §3 Phase 1 now reads `complete`; §5's unit gate reads wired; §6.1 carries the cookbook. No roadmap item carries this Change ID, so `roadmap.md` is untouched and the Backlog Handoff sync rule does not apply.
-
-No roadmap item carries this Change ID, so `roadmap.md` is untouched. MAR-19 moves to In Progress; per `lessons.md` it stays there until Phase 5 closes.
+`test-plan.md` §3 Phase 1 now reads `complete`; §5's unit gate reads wired; §6.1 carries the cookbook. No roadmap item carries this Change ID, so `roadmap.md` is untouched and the Backlog Handoff sync rule does not apply. MAR-19 is **Done** with a closing comment (moved at the user's call before `/10x-impl-review` rather than after, so the comment records the verdict as still outstanding); it unblocks MAR-20 and MAR-23.

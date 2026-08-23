@@ -494,12 +494,12 @@ The only production code change in the whole phase is the schema extraction (Pha
 
 #### Automated
 
-- [x] 5.1 `test-plan.md` §6.1 contains no "TBD" text
-- [x] 5.2 §3 Phase 1 Status reads `complete`; §5's unit row reads as wired
-- [x] 5.3 `change.md` frontmatter carries the current status and date
+- [x] 5.1 `test-plan.md` §6.1 contains no "TBD" text — 852bfe6
+- [x] 5.2 §3 Phase 1 Status reads `complete`; §5's unit row reads as wired — 852bfe6
+- [x] 5.3 `change.md` frontmatter carries the current status and date — 852bfe6
 
 #### Manual
 
-- [x] 5.4 §6.1 is followable cold when starting Phase 2
-- [x] 5.5 MAR-19 shows the completion state, a comment, and no stale `Next:` pointer
-- [x] 5.6 No account identifiers from a manual pass reached a committed file
+- [x] 5.4 §6.1 is followable cold when starting Phase 2 — 852bfe6
+- [x] 5.5 MAR-19 shows the completion state, a comment, and no stale `Next:` pointer — 852bfe6
+- [x] 5.6 No account identifiers from a manual pass reached a committed file — 852bfe6
