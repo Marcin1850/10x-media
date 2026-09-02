@@ -1,7 +1,16 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ChannelCharacter, MetadataVia, TranscriptResolvedVia, VideoMetadata } from "@/types";
 
-interface VideoRow {
+/**
+ * The table Row/Insert shapes below are `type` aliases, not interfaces, deliberately.
+ * supabase-js's `GenericTable` requires each `Row`/`Insert`/`Update` to be assignable to
+ * `Record<string, unknown>`. TypeScript gives a type alias an implicit index signature but
+ * never gives one to an interface, so declaring these as interfaces makes `AppDatabase["public"]`
+ * fail the `GenericSchema` constraint — which collapses the fourth `SupabaseClient` generic to
+ * `never` and surfaces as TS2344 on `AppSupabaseClient` below. Keep them as `type`.
+ */
+/* eslint-disable @typescript-eslint/consistent-type-definitions -- see the note above; compilation wins over the style rule */
+type VideoRow = {
   id: string;
   user_id: string;
   url: string;
@@ -16,15 +25,15 @@ interface VideoRow {
   transcript_lang: string | null;
   transcript_available_langs: string[] | null;
   created_at: string;
-}
+};
 
-interface VideoInsert {
+type VideoInsert = {
   user_id: string;
   url: string;
   youtube_id: string;
-}
+};
 
-interface SummaryRow {
+type SummaryRow = {
   id: string;
   user_id: string;
   video_id: string;
@@ -45,9 +54,9 @@ interface SummaryRow {
   /** How the metadata was obtained (S-09). Null on rows predating the column. */
   metadata_via: MetadataVia | null;
   created_at: string;
-}
+};
 
-interface SummaryInsert {
+type SummaryInsert = {
   user_id: string;
   video_id: string;
   character: ChannelCharacter;
@@ -55,18 +64,19 @@ interface SummaryInsert {
   model: string | null;
   resolved_via: TranscriptResolvedVia | null;
   reservation_id: string | null;
-}
+};
 
-interface UserCreditsRow {
+type UserCreditsRow = {
   user_id: string;
   balance: number;
   updated_at: string;
-}
+};
 
-interface UserCreditsInsert {
+type UserCreditsInsert = {
   user_id: string;
   balance?: number;
-}
+};
+/* eslint-enable @typescript-eslint/consistent-type-definitions */
 
 /** Minimal local schema shape for the tables/functions this service touches — this codebase has no generated Database types yet. */
 export interface AppDatabase {

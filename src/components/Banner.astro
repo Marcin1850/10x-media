@@ -11,7 +11,7 @@ const { variant = "info" } = Astro.props;
 ---
 
 <div class:list={["banner", `banner--${variant}`]} role={variant === "error" ? "alert" : "status"}>
-  {variant === "warning" && <AlertTriangleIcon aria-hidden="true" class="banner__icon" width="16" height="16" />}
+  {variant === "warning" && <AlertTriangleIcon aria-hidden="true" className="banner__icon" width="16" height="16" />}
   <slot />
 </div>
 
