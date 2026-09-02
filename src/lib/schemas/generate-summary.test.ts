@@ -107,7 +107,8 @@ describe("generateSchema — allowLong", () => {
   // Pre-authorization BY DESIGN (user decision, 2026-08-22) — not a bypass, so the obvious-looking
   // test here would be a refusal assertion and it would be wrong. The 409 exists to inform a client
   // that does not yet know the price; a client that already consents may say so up front. There is no
-  // free ride either way: the atomic debit at `generate.ts:804` is the authoritative cost gate.
+  // free ride either way: the atomic debit at `generate.ts:791` (`beginGeneration`) is the
+  // authoritative cost gate.
   it("accepts allowLong: true on a first request — pre-authorization, not a bypass", () => {
     const result = generateSchema.safeParse({
       url: VALID_URL,

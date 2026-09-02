@@ -156,13 +156,19 @@ export function summaryCost(transcriptLength: number): number {
 
 const YOUTUBE_ID_PATTERN = /^[a-zA-Z0-9_-]{11}$/;
 const YOUTUBE_HOSTS = new Set(["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"]);
+/** Only web schemes are YouTube video URLs; `new URL()` happily parses `ftp:`, `data:` and friends. */
+const YOUTUBE_PROTOCOLS = new Set(["http:", "https:"]);
 
-/** Extracts the 11-char YouTube video ID from watch/shorts/embed/live/youtu.be URLs, or null if not a YouTube video URL. */
+/** Extracts the 11-char YouTube video ID from http(s) watch/shorts/embed/live/youtu.be URLs, or null if not a YouTube video URL. */
 export function extractYoutubeId(url: string): string | null {
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
+    return null;
+  }
+
+  if (!YOUTUBE_PROTOCOLS.has(parsed.protocol)) {
     return null;
   }
 

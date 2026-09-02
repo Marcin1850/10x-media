@@ -3,7 +3,7 @@ change_id: testing-phase-1-bootstrap
 title: Test bootstrap + unit tests for the cost and credit decision rules
 status: impl_reviewed
 created: 2026-08-18
-updated: 2026-08-31
+updated: 2026-09-02
 archived_at: null
 ---
 
@@ -66,4 +66,16 @@ Mutation check over `credits.ts`: 98 killed, 26 survived, 25 uncovered (the latt
 
 Stated gaps handed to Phase 2 (MAR-20), deliberately: `refuseAndCharge`'s `REFUSAL_COPY` lookup and `ambiguousCharge: true` body shape stay uncovered; `readBillableCredits` stays blocked on the doc-vs-code conflict (`supadata-billable-requests.md:163-171` vs `supadata-ledger.ts:206`) — the doc must be corrected before either side can be asserted without writing a mirror test.
 
-`test-plan.md` §3 Phase 1 now reads `complete`; §5's unit gate reads wired; §6.1 carries the cookbook. No roadmap item carries this Change ID, so `roadmap.md` is untouched and the Backlog Handoff sync rule does not apply. MAR-19 is **Done** with a closing comment (moved at the user's call before `/10x-impl-review` rather than after, so the comment records the verdict as still outstanding); it unblocks MAR-20 and MAR-23.
+`test-plan.md` §3 Phase 1 now reads `complete`; §5's unit gate reads wired; §6.1 carries the cookbook. No roadmap item carries this Change ID, so the Backlog Handoff sync rule does not apply and no roadmap *slice* changed.
+
+**Addendum — `roadmap.md` did get one edit (`650fa33`), deliberately.** The plan says `roadmap.md` is untouched; that guardrail was about not writing rollout status into a product-slice register, and it holds. What `650fa33` added under `At a glance` is a one-line *pointer* to `test-plan.md` §3, because nothing connected the two and a roadmap reader could not tell the rollout existed. It duplicates no phase and no status, so it needs no update when a phase moves — which is why it is not a fourth surface to keep in sync. Recorded here (impl review F4) so the plan's scope note and the commit history agree. MAR-19 is **Done** with a closing comment (moved at the user's call before `/10x-impl-review` rather than after, so the comment recorded the verdict as still outstanding); it unblocks MAR-20 and MAR-23.
+
+## Implementation review (2026-08-31, triaged 2026-09-02) — `reviews/impl-review.md`
+
+Verdict **NEEDS ATTENTION**: 0 critical, 2 warnings, 2 observations, all four fixed in triage — none skipped or accepted as risk.
+
+The one that changed shipped code: **F1** — `extractYoutubeId` checked host, path and id shape but never `URL.protocol`, so `ftp://youtube.com/watch?v=…` cleared `generateSchema` and the original URL could reach the paid transcript boundary. An `http:`/`https:` guard now closes it, with one rejection row proven red without the guard. Two further rows drafted for `javascript:` and `file:` were dropped rather than kept for symmetry: both already fail on the empty hostname, so they would have been redundant copies, not new regressions.
+
+The rest were documentation truth: stale `generate.ts` pointers and the `@`-alias claim in `test-plan.md` §6.1 (**F3**), the `650fa33` addendum above (**F4**), and the MAR-19 verdict comment the closing comment had left outstanding (**F2**, posted 2026-09-02).
+
+Post-fix gates: `npm test` 87 passing (was 86), `npm run lint` clean. Stryker was not re-run — no mutated module changed.

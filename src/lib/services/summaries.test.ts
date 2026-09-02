@@ -23,8 +23,9 @@ describe("summaryCost", () => {
     [40_001, 2, "the first length above the threshold costs the long-video price"],
     [200_000, 2, "the hard maximum is priced long"],
     // Derived from the rule as written ("long ⇒ 2, else 1"): there is no zero tier, so an empty
-    // transcript prices at 1. This DOCUMENTS the hazard at `generate.ts:732-737` — it does not
-    // protect against it. The protection is the whitespace guard at `generate.ts:743`, which refuses
+    // transcript prices at 1. This DOCUMENTS the hazard at `generate.ts:734-735` (`transcriptLength`
+    // → `summaryCost`) — it does not protect against it. The protection is the whitespace guard at
+    // `generate.ts:730` (`content.trim().length === 0`), which refuses
     // an empty transcript before anything is priced or debited.
     [0, 1, "an empty transcript still prices at the base credit — the whitespace guard is the protection"],
   ])("charges %i-char transcript %i credit(s): %s", (transcriptLength, credits) => {
@@ -35,7 +36,9 @@ describe("summaryCost", () => {
 /**
  * Oracle: PRD **FR-003** (a video is added by pasting a YouTube URL) plus PRD Open Question 3, which
  * assigns the concrete validation rule to implementation — so the documented rule is this function's
- * own contract: the host must be exactly `youtu.be`, `youtube.com`, `www.youtube.com`,
+ * own contract: the scheme must be `http:` or `https:` (a YouTube video is fetched over the web —
+ * README §"Supadata Configuration" — and `new URL()` parses far more than that); the host must be
+ * exactly `youtu.be`, `youtube.com`, `www.youtube.com`,
  * `m.youtube.com` or `music.youtube.com`; `/watch` reads `?v=`, `/shorts|embed|live/…` read the first
  * path segment, `youtu.be` reads the first non-empty segment; the extracted id must be 11 characters
  * of `[a-zA-Z0-9_-]`; anything `new URL()` cannot parse is not a URL.
@@ -60,7 +63,7 @@ describe("extractYoutubeId — accepted URL shapes", () => {
     ["https://music.youtube.com/watch?v=dQw4w9WgXcQ", "the music host"],
     [
       "http://www.youtube.com/watch?v=dQw4w9WgXcQ",
-      "http is accepted equally with https — the rule is the host, not the scheme",
+      "http is accepted equally with https — both web schemes count, unlike the non-web ones below",
     ],
     ["https://www.youtube.com/shorts/dQw4w9WgXcQ", "a short"],
     ["https://www.youtube.com/embed/dQw4w9WgXcQ", "an embed"],
@@ -89,6 +92,10 @@ describe("extractYoutubeId — rejected URLs", () => {
     ["https://www.youtube.com/watch?v=short", "an id below 11 characters"],
     ["https://www.youtube.com/watch?v=dQw4w9WgXcQextra", "an id above 11 characters"],
     ["https://www.youtube.com/watch?v=dQw4w9WgXc!", "an id of the right length carrying an out-of-charset character"],
+    [
+      "ftp://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      "a non-web scheme on a real YouTube host: host and id are right, but the URL is not fetchable over the web",
+    ],
     ["not a url at all", "a string `new URL()` cannot parse"],
     ["", "an empty string"],
   ])("returns null for %s: %s", (url) => {
