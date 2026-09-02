@@ -19,6 +19,12 @@ jobs:
       - run: npx astro sync
       - run: npm run lint
       - run: npm run lint:tokens
+      # The type gate. `npm run build` does NOT typecheck — Vite strips types without checking
+      # them — so without these two steps a type error reaches production silently. They are
+      # split because neither covers the other: tsc cannot parse .astro files, and astro check
+      # is the only thing that does. Both rely on the `astro sync` step above for generated types.
+      - run: npm run typecheck
+      - run: npm run typecheck:astro
       # The unit gate (test-plan §5). Deliberately env-less: nothing in the suite reaches Supabase,
       # Supadata or OpenRouter — the hermetic tests inject a stub client — which is what keeps it
       # inside §7's rule that CI never holds paid keys. The `deploy` job needs no change; it already

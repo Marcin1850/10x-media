@@ -1,0 +1,5 @@
+set -e
+
+# The only check that covers .astro files — tsc cannot parse them. ~20s, too slow for pre-commit,
+# so it guards the push instead: the last local layer before CI.
+npm run typecheck:astro

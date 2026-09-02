@@ -3,6 +3,7 @@
   "type": "module",
   "version": "0.0.1",
   "scripts": {
+    "prepare": "husky",
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
@@ -10,6 +11,8 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "lint:tokens": "node scripts/check-tokens.mjs",
+    "typecheck": "tsc --noEmit",
+    "typecheck:astro": "astro check",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

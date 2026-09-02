@@ -1,1 +1,10 @@
+# Abort on the first failing check. Without this, sh returns only the LAST command's status,
+# so a lint-staged failure followed by a passing typecheck would let the commit through.
+set -e
+
+# Formats and lints only what is staged, and re-stages what it fixed.
 npx lint-staged
+
+# Whole-project, because types are not a per-file property: editing one file can break another.
+# `npm run build` does not typecheck (Vite strips types), so this is the first gate that does.
+npm run typecheck

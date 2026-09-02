@@ -76,6 +76,9 @@ The app is served at **http://localhost:4321**.
 - `npm run lint` - Run ESLint with type-checked rules
 - `npm run lint:fix` - Auto-fix ESLint issues
 - `npm run format` - Run Prettier
+- `npm run typecheck` - Type-check `.ts`/`.tsx` (`tsc --noEmit`); the build does **not** do this
+- `npm run typecheck:astro` - Type-check `.astro` files (`astro check`); nothing else covers them
+- `npm test` - Run the unit suite once (Vitest)
 - `npm run grant-credits` - Grant summary credits to a user (operator-only, see [Summary credits](#summary-credits))
 - `npm run db:sync-from-prod` - Copy production data into the local Supabase stack
 
@@ -102,12 +105,12 @@ The app is served at **http://localhost:4321**.
 
 All variables are declared via Astro's `astro:env` schema (`astro.config.mjs`) and are treated as **server-only secrets** — they are never exposed to the client.
 
-| Variable                    | Purpose                                                          |
-| --------------------------- | ---------------------------------------------------------------- |
-| `SUPABASE_URL`              | Supabase project URL                                             |
-| `SUPABASE_KEY`              | Supabase `anon` public key                                       |
-| `SUPADATA_API_KEY`          | Supadata API key (transcripts)                                   |
-| `OPENROUTER_API_KEY`        | OpenRouter API key (summarization)                               |
+| Variable                    | Purpose                                                                               |
+| --------------------------- | ------------------------------------------------------------------------------------- |
+| `SUPABASE_URL`              | Supabase project URL                                                                  |
+| `SUPABASE_KEY`              | Supabase `anon` public key                                                            |
+| `SUPADATA_API_KEY`          | Supadata API key (transcripts)                                                        |
+| `OPENROUTER_API_KEY`        | OpenRouter API key (summarization)                                                    |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service-role key — account deletion, summary generation, and offline operator scripts |
 
 Copy `.env.example` to both `.env` and `.dev.vars` and fill in the values.
@@ -116,7 +119,7 @@ Copy `.env.example` to both `.env` and `.dev.vars` and fill in the values.
 
 - **`POST /api/account/delete`** (Worker runtime) — deleting an `auth.users` record requires the service-role key; the anon SSR client cannot do it. Without this secret the endpoint returns `503` and account deletion is unavailable.
 - **`npm run grant-credits`** (offline, your machine) — reads it from `.env`.
-- **`POST /api/summaries/generate`** (Worker runtime) — generation *reserves* credits in a durable ledger *before* the paid LLM call, and only the admin client can settle or refund that reservation once the work succeeds or fails. The endpoint refuses with `503` when the key is unset rather than risk charging a user for failed work.
+- **`POST /api/summaries/generate`** (Worker runtime) — generation _reserves_ credits in a durable ledger _before_ the paid LLM call, and only the admin client can settle or refund that reservation once the work succeeds or fails. The endpoint refuses with `503` when the key is unset rather than risk charging a user for failed work.
 
 All three need it, so it must be set locally **and** as a Worker secret in production.
 
@@ -293,7 +296,9 @@ Worker secrets are configured on Cloudflare, not injected by the deploy pipeline
 
 ## CI
 
-GitHub Actions (`.github/workflows/ci.yml`) runs lint + build on every push and PR to `master`, then deploys to Cloudflare Workers on pushes to `master`.
+GitHub Actions (`.github/workflows/ci.yml`) runs lint, token check, both type-checks, the unit suite and the build on every push and PR to `master`, then deploys to Cloudflare Workers on pushes to `master`.
+
+Locally, git hooks catch most of this earlier: **pre-commit** runs lint-staged plus `npm run typecheck`, and **pre-push** runs `npm run typecheck:astro`. They are wired by husky via the `prepare` script, so a fresh `npm install` installs them — no manual step.
 
 Required repository secrets:
 
@@ -314,7 +319,7 @@ What that means in practice:
 
 - **Scope is deliberately narrow** — one flow: paste YouTube links → get Polish summaries.
 - **No self-serve billing** — summary credits are granted manually by an operator.
-- **Not fully production-hardened** — no automated test suite yet, limited error recovery.
+- **Not fully production-hardened** — the unit suite covers risk-critical modules rather than the whole app, and error recovery is limited.
 - **Breaking changes are expected** — migrations may be rewritten rather than layered.
 
 ## License
