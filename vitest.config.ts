@@ -1,5 +1,14 @@
 import { fileURLToPath } from "node:url";
+import process from "node:process";
 import { defineConfig } from "vitest/config";
+
+/**
+ * `AI_AGENT=1` switches the reporter to `dot`: one character per test, with detail printed only
+ * for failures. A passing run then costs a few lines of an agent's context instead of a screen of
+ * per-file output, while a failing run still carries everything needed to act on it. Humans get
+ * the `default` reporter unchanged — the flag is opt-in and set by the caller, never by the config.
+ */
+const terseReporter = process.env.AI_AGENT === "1";
 
 /**
  * Plain Vite config, NOT Astro's `getViteConfig()` — this is the fallback the plan records, and it
@@ -29,6 +38,7 @@ export default defineConfig({
   test: {
     // The stack decision (test-plan §4): Node, not jsdom — nothing in the unit layer touches a DOM.
     environment: "node",
+    reporters: terseReporter ? ["dot"] : ["default"],
     // Tests are colocated next to the module they cover; `tsconfig` and ESLint already cover `src/**`.
     include: ["src/**/*.test.ts"],
     coverage: {
