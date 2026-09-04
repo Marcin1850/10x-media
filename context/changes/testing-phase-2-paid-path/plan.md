@@ -411,28 +411,28 @@ One new migration, comment-only. It changes no structure and touches no data, so
 
 #### Automated
 
-- [x] 1.1 Migration applies cleanly via `npx supabase migration up`
-- [x] 1.2 Formatting passes: `npm run format`
-- [x] 1.3 Existing suite still green: `npm test`
+- [x] 1.1 Migration applies cleanly via `npx supabase migration up` — 0607f68
+- [x] 1.2 Formatting passes: `npm run format` — 0607f68
+- [x] 1.3 Existing suite still green: `npm test` — 0607f68
 
 #### Manual
 
-- [ ] 1.4 README's credit section leads to the correct invariant when read cold
-- [ ] 1.5 D14 and S-05 read as superseded, not as rewritten history
+- [x] 1.4 README's credit section leads to the correct invariant when read cold — 0607f68
+- [x] 1.5 D14 and S-05 read as superseded, not as rewritten history — 0607f68
 
 ### Phase 2: Runner split and guards
 
 #### Automated
 
-- [ ] 2.1 Unit project unchanged in scope and green: `npm test`
-- [ ] 2.2 Integration project runs, smoke test passes: `npm run test:integration`
-- [ ] 2.3 Guard aborts on a non-loopback `SUPABASE_URL`
-- [ ] 2.4 Types and lint pass
+- [x] 2.1 Unit project unchanged in scope and green: `npm test`
+- [x] 2.2 Integration project runs, smoke test passes: `npm run test:integration`
+- [x] 2.3 Guard aborts on a non-loopback `SUPABASE_URL`
+- [x] 2.4 Types and lint pass
 
 #### Manual
 
-- [ ] 2.5 `npm test` runtime has not visibly regressed
-- [ ] 2.6 Stryker runs against a unit module without picking up integration files
+- [x] 2.5 `npm test` runtime has not visibly regressed
+- [x] 2.6 Stryker runs against a unit module without picking up integration files
 
 ### Phase 3: Vendor fixtures and the `llm.ts` unit test
 
