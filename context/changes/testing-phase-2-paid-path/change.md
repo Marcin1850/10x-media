@@ -1,9 +1,9 @@
 ---
 change_id: testing-phase-2-paid-path
 title: Paid-path integration tests — charge-versus-delivery and spend reconciliation
-status: implemented
+status: impl_reviewed
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-05
 archived_at: null
 ---
 
