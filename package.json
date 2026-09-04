@@ -14,9 +14,9 @@
     "typecheck": "tsc --noEmit",
     "typecheck:astro": "astro check",
     "test": "vitest run --project unit",
-    "test:watch": "vitest",
+    "test:watch": "vitest --project unit",
     "test:integration": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run --project integration",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "vitest run --project unit --coverage",
     "format": "prettier --write .",
     "db:sync-from-prod": "node scripts/sync-prod-to-local.mjs",
     "grant-credits": "node --env-file=.env scripts/grant-credits.mjs"

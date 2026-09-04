@@ -314,6 +314,15 @@ export interface LoadEndpointOptions {
    * transcript scenario goes through `stubSupadataFetch` against the real `transcript.ts`.
    */
   fetchTranscript?: ReturnType<typeof vi.fn>;
+  /**
+   * Leaves `@/lib/supabase-admin` UNMOCKED so the endpoint calls the REAL `createAdminClient()`, which
+   * reads `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` through the `astro:env/server` stub (impl-review.md
+   * F8). Passing `admin: null` only proves `generate.ts`'s null branch; this proves the wiring that
+   * PRODUCES the null — an unset service-role secret flowing through the real constructor to that
+   * branch, which is what a deploy missing the Worker secret actually looks like. `admin` is ignored
+   * when this is set. `@/lib/supabase` stays mocked, so nothing else reaches a live client.
+   */
+  realAdminModule?: boolean;
 }
 
 /**
@@ -331,7 +340,12 @@ export async function loadEndpoint(
   const supabase = options.supabase ?? null;
   const summarize = options.summarize ?? vi.fn().mockResolvedValue(defaultSummarizeResult());
 
-  vi.doMock("@/lib/supabase-admin", () => ({ createAdminClient: () => admin }));
+  // `doMock` registrations outlive `resetModules()` — only the module cache is cleared, not the mock
+  // factory — so a previous call's mock would keep standing in here. Unmock first, every time.
+  vi.doUnmock("@/lib/supabase-admin");
+  if (!options.realAdminModule) {
+    vi.doMock("@/lib/supabase-admin", () => ({ createAdminClient: () => admin }));
+  }
   vi.doMock("@/lib/supabase", () => ({ createClient: () => supabase }));
   vi.doMock("@/lib/services/llm", () => ({ summarize }));
   if (options.fetchTranscript) {

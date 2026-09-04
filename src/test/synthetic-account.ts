@@ -36,6 +36,9 @@ export interface SyntheticAccount {
    * per-user (`user_credits`, `credit_reservations`, `videos`, `summaries`, generation locks/limits).
    * The `supadata_calls` delete goes through the table-owner connection (`db-owner.ts`), not
    * `service_role` — that table deliberately grants `service_role` no direct privileges (impl-review.md F2).
+   *
+   * **Throws on any cleanup failure** rather than returning quietly (impl-review.md F3), so a leak is
+   * attributed to the test that caused it instead of surfacing as an unrelated abort on the next run.
    */
   dispose: (youtubeIds?: readonly string[]) => Promise<void>;
 }
@@ -107,7 +110,17 @@ export async function createSyntheticAccount(admin: SupabaseClient): Promise<Syn
         const ids = [...youtubeIds];
         await sql`delete from supadata_calls where youtube_id in ${sql(ids)}`;
       }
-      await admin.auth.admin.deleteUser(userId);
+      // Propagate, never swallow (impl-review.md F3). A silently-failed delete leaves an `auth.users`
+      // row that only the NEXT run's `assertNoStaleSyntheticAccounts` guard notices — by which point the
+      // run that caused it is long gone. Throwing here surfaces it against the test that actually leaked.
+      const { error: deleteError } = await admin.auth.admin.deleteUser(userId);
+      if (deleteError) {
+        throw new Error(
+          `synthetic-account: failed to delete user ${userId} (${email}): ${deleteError.message}. The row ` +
+            "survives and will abort the next integration run's stale-account guard — delete it manually " +
+            "(Supabase Studio's Auth panel) if this repeats.",
+        );
+      }
     },
   };
 }

@@ -4,19 +4,33 @@
 - **Plan**: `context/changes/testing-phase-2-paid-path/plan.md`
 - **Scope**: Phases 1-6 of 6 (full slice)
 - **Date**: 2026-09-05
-- **Verdict**: REJECTED
-- **Findings**: 1 critical, 8 warnings, 1 observation
+- **Verdict**: REJECTED at review → **APPROVED after triage** (all 10 findings fixed; see per-finding `Decision` fields)
+- **Findings**: 1 critical, 8 warnings, 1 observation — **10 fixed, 0 skipped, 0 accepted**
 
 ## Verdicts
 
-| Dimension | Verdict |
-|-----------|---------|
-| Plan Adherence | FAIL |
-| Scope Discipline | FAIL |
-| Safety & Quality | FAIL |
-| Architecture | FAIL |
-| Pattern Consistency | WARNING |
-| Success Criteria | FAIL |
+| Dimension | At review | After triage |
+|-----------|-----------|--------------|
+| Plan Adherence | FAIL | PASS — F4 oracle resolved from the RPC contract, F7 contract completed, F8 wiring proven end-to-end |
+| Scope Discipline | FAIL | PASS — F2 production grants removed; the one production change that remains (F4) was a deliberate, reviewed decision |
+| Safety & Quality | FAIL | PASS — F1 fetch firewall, F3 cleanup propagation, F10 loopback coverage |
+| Architecture | FAIL | PASS — test harness reaches definer-only tables via a table-owner connection instead of widening `service_role` |
+| Pattern Consistency | WARNING | PASS — F9 project pinning |
+| Success Criteria | FAIL | PASS — F5 cookbook corrected, F6 fail-open branches covered |
+
+## Post-triage verification (2026-09-05)
+
+| Check | Result |
+|---|---|
+| `npm test` | PASS — 4 files, 99 tests |
+| `npm run test:integration` | PASS — 5 files, **63 tests** (was 51) |
+| `npm run lint` | PASS |
+| `npm run typecheck` | PASS |
+| `npm run typecheck:astro` | PASS — 0 errors, 0 warnings, 5 pre-existing hints |
+| `npx prettier --check .` | PASS |
+| Local residue after the full run | PASS — 0 rows in `transcript_cache`, `metadata_cache`, `supadata_calls`; 0 synthetic accounts; 0 `reserved` reservations; `supadata_budget` untouched (nulls) |
+
+**One production behavior change was made during triage** (F4, explicitly decided by the user): `generate.ts` now reads the persisted row back on the `already_persisted` path so the 200 body is internally coherent. The plan's original "no production code changes" boundary was relaxed for this one case because the plan's own oracle was wrong and the test could not be made honest without it.
 
 ## Verification
 
@@ -80,7 +94,8 @@
   - Tradeoff: Teardown needs structured error aggregation so later safe cleanup steps are still attempted.
   - Confidence: HIGH - PostgreSQL rejected the exact filtered DELETE plan under the migrated role.
   - Blind spot: No synthetic ledger row was inserted during review because review actions were kept non-destructive.
-- **Decision**: PENDING
+- **Rescoped at triage**: the F2 fix already resolved the privilege half. Cache deletes and the `supadata_calls` delete now run through the `postgres` owner connection, which rejects on error, so those failures propagate; the `permission denied` filtered-DELETE problem is gone with the grants.
+- **Decision**: FIXED — `synthetic-account.ts`'s `dispose()` now checks `deleteUser`'s `{ error }` and throws a named message (naming the surviving row and how to remove it) instead of discarding it, so a leak is attributed to the test that caused it rather than surfacing as an unrelated abort on the next run; the `dispose` doc comment records that it throws. Plan progress item 5.4 narrowed to what the code actually guarantees: a *controlled* failure cleans up via `try/finally`, while a hard kill (SIGKILL) leaves rows and is covered by **detection** (`integration-setup.ts` aborts the next run with manual repair instructions), not cleanup. Verified: unit 99, integration 51, typecheck clean.
 
 ### F4 - `already_persisted` test mirrors current code instead of the plan oracle
 
@@ -94,7 +109,8 @@
   - Tradeoff: Expands beyond the original test-only scope and requires a production behavior decision.
   - Confidence: HIGH - the test itself demonstrates the mismatched text/IDs.
   - Blind spot: Callers' preferred behavior for a concurrent already-persisted result has not been validated with product stakeholders.
-- **Decision**: PENDING
+- **Investigated at triage**: the plan's 500 oracle was itself wrong. `persist_summary`'s documented contract reads *"'already_persisted' — this reservation already produced a summary; ids replayed, nothing written"* (`20260723120000_atomic_persist_summary.sql:42`), so a success status is what the source calls for. The branch is only reachable when an earlier call on the **same reservation** already persisted and settled — so the charge is correct and exactly one summary exists. The genuine defect was narrower than "wrong status": the response body's `summary` was this request's freshly-generated text under the earlier row's `videoId`/`summaryId`.
+- **Decision**: FIXED via a rescoped Fix A (contract resolved from the RPC's own documentation, not from the branch under test). `PersistSummaryResult` now carries `replayed: boolean` distinguishing the RPC's two success outcomes; `readStoredSummary()` (new, in `summaries.ts`) reads the persisted row's `content`/`model`; `generate.ts` uses those for the response body on the replayed path (and answers 500 without refunding if that read fails — the work is saved and the charge settled, only the body can't be built). The plan's exit-#34 table and intro were corrected to the real oracle. The test now asserts coherence positively (`json.summary` **is** the out-of-band content, `model` is its model) *and* against the discarded text, so a regression to shipping `summary.text` fails rather than passing by omission. Verified: unit 99, integration 51, typecheck clean.
 
 ### F5 - The integration cookbook teaches the wrong real-DB pattern
 
@@ -108,7 +124,7 @@
   - Tradeoff: Must be updated again if F1/F2 change the harness channel.
   - Confidence: HIGH - the contradictions are direct file-to-doc mismatches.
   - Blind spot: Final wording should follow the implementation selected during F1/F2 triage.
-- **Decision**: PENDING
+- **Decision**: FIXED — §6.2 rewritten against the current tree. The real-DB row now states what is actually faked (`llm.ts` only; Supadata is *never called* because both checkpoints are pre-seeded cache hits) and a new paragraph explains why seeding through the production `save_*_cache` RPCs is deliberate. Two previously undocumented mechanisms added: the `fetch` firewall (`setupFiles`, what it blocks, how a stub-layer test opts in, and that `afterEach` restores the firewall rather than the native `fetch`) and the table-owner connection (`db-owner.ts` — which tables grant `service_role` nothing and why, and when to use `admin` instead). The cleanup recipe replaced with the real **two-step** sequence as a runnable `withAccount` snippet (`cleanupCaches` then `dispose`), plus the fixture-id registration rule and an explicit "a hard kill is *detected*, not cleaned" paragraph. The stale line-83 stack row now names the actual tools and versions. Also corrected the "Two projects" paragraph (both `globalSetup` **and** `setupFiles`) and the vendor-fixtures note (`llm.ts` is mocked in both layers).
 
 ### F6 - Documented budget fail-open branches are missing
 
@@ -122,7 +138,7 @@
   - Tradeoff: Adds several queue-based cases and must account for the retry-delay timer.
   - Confidence: HIGH - the missing switch outcomes are enumerated in `research.md:167` and `supadata-budget.ts:475-508`.
   - Blind spot: Timing assertions should remain behavioral and avoid pinning internal sleep implementation.
-- **Decision**: PENDING
+- **Decision**: FIXED — five cases added to `supadata-budget.int.test.ts` as two `it.each` tables. `save_supadata_budget` errors and reports `claim-lost`; the second reserve pass returns `refresh_required` again, `uninitialized`, or an RPC error. Each asserts `untracked`, **no** `reservationId`, the expected reserve-pass count, and **exactly one `/v1/me` call** — the behavioral proof that the `default` arm at `supadata-budget.ts:508` stops the refresh from recursing, with no assertion on the internal sleep. That file is now 20 tests (was 15); the describe block's "every fail-open path" claim is true as written.
 
 ### F7 - Ledger tests do not complete the planned reconciliation contract
 
@@ -136,7 +152,7 @@
   - Tradeoff: Producing genuinely mixed outcomes may require a meter-level seam if one endpoint request cannot emit the intended combination naturally.
   - Confidence: HIGH - current assertions and fixture call sites were exhaustively enumerated.
   - Blind spot: The plan does not define the precise ordering of rows, so exact comparison may need order normalization.
-- **Decision**: PENDING
+- **Decision**: FIXED (both halves). The malformed-header test is now an `it.each` over all three fixture kinds — `non-numeric`, `fractional`, and `out-of-range` (the int4-ceiling value whose acceptance would fail the whole batch INSERT and silently discard sibling rows). The second describe was rebuilt around the plan's actual contract: the `FlushedRow` type now covers all eight columns (`youtube_id` and `resolved_via` were missing), a `byOperation` helper normalizes the undefined row order, and two batches are asserted with `toEqual` rather than field-subset `toMatchObject` — a fully-reported batch summing to 2, and a genuinely **mixed** batch (a measured `1` beside an unmeasurable `null`) summing to `null`, asserted as its own value rather than as `not.toBe(1)`.
 
 ### F8 - The second 503 does not prove missing service-role-key wiring
 
@@ -146,7 +162,7 @@
 - **Location**: `src/pages/api/summaries/generate.int.test.ts:63`
 - **Detail**: The plan requires the two 503 preflights to differ by message and by the missing key. The first unsets `SUPADATA_API_KEY`; the second injects `admin: null`, while the harness always mocks `createAdminClient`. It therefore proves the endpoint's null branch but not that a missing `SUPABASE_SERVICE_ROLE_KEY` flows through the env stub and real constructor to that branch.
 - **Fix**: Add a harness mode that leaves `@/lib/supabase-admin` unmocked, unset `SUPABASE_SERVICE_ROLE_KEY`, and assert the second 503 body.
-- **Decision**: PENDING
+- **Decision**: FIXED — `loadEndpoint` gained a `realAdminModule` option that skips the `@/lib/supabase-admin` mock (and a `doUnmock` so a prior test's registration cannot leak into it, since `doMock` outlives `resetModules`). Two tests, not one: the 503 with `SUPABASE_SERVICE_ROLE_KEY` unset, running the real `astro:env/server` → `createAdminClient()` → 503 chain; **and** a companion asserting the endpoint reaches 401 instead when the key *is* set. The companion is what makes the pair non-vacuous — `admin` defaults to `null`, so a `realAdminModule` that silently did nothing would still produce the 503 and look green.
 
 ### F9 - Watch and coverage silently run the integration project
 
@@ -156,7 +172,7 @@
 - **Location**: `package.json:17`; `package.json:19`
 - **Detail**: After introducing Vitest projects, plain `vitest` and `vitest run --coverage` select both projects. The existing `test:watch` and `test:coverage` scripts therefore now require Docker/local Supabase and create/delete synthetic accounts, contradicting AGENTS.md's fast unit-watch guidance and the documented ordinary coverage workflow.
 - **Fix**: Add `--project unit` to `test:watch` and `test:coverage`; add separately named integration variants only if they are actually needed.
-- **Decision**: PENDING
+- **Decision**: FIXED — both scripts pinned to `--project unit`; no integration variants added (none was needed). `CLAUDE.md`'s command list now records that both are unit-only and that a bare `vitest` selects both projects, so the next person to edit these scripts sees why the flag is there.
 
 ### F10 - IPv6 loopback is rejected despite being advertised
 
@@ -166,4 +182,4 @@
 - **Location**: `src/test/integration-setup.ts:47`
 - **Detail**: WHATWG `new URL("http://[::1]:54321").hostname` returns `[::1]`, but the guard compares it with `::1`. Node behavior was verified during review, so the documented IPv6 loopback path always aborts.
 - **Fix**: Normalize brackets or accept `[::1]`, and add that URL to the smoke-test table.
-- **Decision**: PENDING
+- **Decision**: FIXED — the code half was already resolved by the F1 work, which extracted `isLoopbackHostname()` (now shared with `fetch-firewall.ts`) accepting both `::1` and `[::1]`; re-verified this session that Node returns `"[::1]"`. The missing half is now done: `harness.int.test.ts`'s accept case is an `it.each` over `localhost` / `127.0.0.1` / `[::1]`, so dropping the bracketed form goes red. That matters more than at first review — the same predicate now gates the fetch firewall, where a false negative would **block** legitimate loopback Supabase traffic mid-test rather than merely refusing to start.

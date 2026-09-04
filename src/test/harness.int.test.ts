@@ -25,9 +25,18 @@ describe("integration harness", () => {
     }).toThrow(/is unset/);
   });
 
-  it("accepts a loopback SUPABASE_URL", () => {
+  /**
+   * Every form the guard's error message advertises, `[::1]` included (impl-review.md F10). That one is
+   * the regression-prone row: WHATWG `new URL(...).hostname` reports an IPv6 literal WITH its brackets,
+   * so a predicate comparing against a bare `"::1"` rejects the very URL the message tells you to use.
+   * It matters beyond a refused start now that `isLoopbackHostname` also gates `fetch-firewall.ts` —
+   * there a false negative BLOCKS legitimate loopback Supabase traffic mid-test.
+   */
+  const loopbackUrls = ["http://localhost:54321", "http://127.0.0.1:54321", "http://[::1]:54321"];
+
+  it.each(loopbackUrls)("accepts the loopback SUPABASE_URL %s", (url) => {
     expect(() => {
-      assertLoopbackSupabaseUrl("http://127.0.0.1:54321");
+      assertLoopbackSupabaseUrl(url);
     }).not.toThrow();
   });
 });

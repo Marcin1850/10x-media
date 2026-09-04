@@ -27,14 +27,14 @@ import { defaultSummarizeResult, generateRequestBody, readJson } from "./__fixtu
  * `20260722120000_link_summary_to_reservation.sql` / `20260723120000_atomic_persist_summary.sql` —
  * cross-checked against the live database (`pg_get_functiondef`), not read off the branch under test.
  *
- * **A plan/reality mismatch, discovered and pinned rather than assumed.** The plan's exit-#34 table
- * describes an `already_persisted` branch answering 500 "while the work succeeded". That is NOT what
- * `persistSummaryAndSettle` does (`summaries.ts:353`): `already_persisted` is treated exactly like
- * `persisted` (`ok: true`), so forcing it produces a 200 whose `summary` text is THIS request's own
- * (freshly mocked) content while `videoId`/`summaryId` point at the EARLIER, out-of-band row — a
- * mismatched-response bug, not a false-negative 500. The test below (`exit34AlreadyPersisted`) pins
- * the ACTUAL behaviour and says so; it does not endorse it. Confirmed against the live
- * `persist_summary` function body, not just the migration file.
+ * **A plan/reality mismatch, resolved from the source rather than pinned (impl-review.md F4).** The
+ * plan's exit-#34 table claimed `already_persisted` answers 500. The RPC's own documented contract
+ * says otherwise — "'already_persisted' — this reservation already produced a summary; **ids replayed**,
+ * nothing written" (`20260723120000_atomic_persist_summary.sql:42`) — so a success status is what the
+ * source calls for, and the plan's oracle was wrong. The genuine defect it exposed was narrower and is
+ * now fixed: the endpoint used to ship THIS request's freshly-generated text under the EARLIER row's
+ * `videoId`/`summaryId`. `generate.ts` now reads the replayed row back (`readStoredSummary`) so the
+ * body is internally coherent. The test below asserts that coherence, which is the actual contract.
  */
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -396,7 +396,7 @@ describe("exit #34 — persistSummaryAndSettle's ok:false fork, pinned by outcom
     });
   });
 
-  it("already_persisted (a summary already cites this reservation): PINS THE ACTUAL 200, not the plan's claimed 500 — see file header", async () => {
+  it("already_persisted (a summary already cites this reservation): 200 replaying THAT row — ids and text agree", async () => {
     const youtubeId = DB_LAYER_YOUTUBE_IDS.exit34AlreadyPersisted;
     await withAccount(youtubeId, async (account) => {
       await seedCaches(youtubeId, "a short synthetic transcript for the already-persisted case");
@@ -448,18 +448,22 @@ describe("exit #34 — persistSummaryAndSettle's ok:false fork, pinned by outcom
       const response = await POST(
         makeDbContext(account, generateRequestBody({ url: youtubeUrl(youtubeId), requestId: crypto.randomUUID() })),
       );
-      const json = (await readJson(response)) as { summary: string; videoId: string; summaryId: string };
+      const json = (await readJson(response)) as { summary: string; model: string; videoId: string; summaryId: string };
 
-      // ACTUAL behaviour, not the plan's claimed 500: already_persisted maps to ok:true in
-      // persistSummaryAndSettle, so the endpoint answers 200.
+      // The RPC replays the existing row's ids and writes nothing, so this is a success, not a failure
+      // (`20260723120000_atomic_persist_summary.sql:42`) — the plan's claimed 500 contradicted its own
+      // source. See the file header.
       expect(response.status).toBe(200);
       // The ids in the response are the EARLIER, out-of-band row's — not a fresh one.
       expect(json.videoId).toBe(outOfBandVideoId);
       expect(json.summaryId).toBe(outOfBandSummaryId);
-      // The mismatch: this request's OWN (mocked) summary text ships in a body whose ids point at
-      // different, already-persisted content. A real reader would receive text that does not match
-      // what `videoId`/`summaryId` actually reference.
-      expect(json.summary).not.toBe(outOfBandContent);
+      // THE POINT OF THIS TEST (impl-review.md F4): the body is internally coherent. `summary` is the
+      // content of the row `summaryId` names — not this request's own freshly-generated text, which
+      // belongs to no row at all. Asserted positively AND against the discarded text, so a regression
+      // that reverts to shipping `summary.text` fails here rather than passing by omission.
+      expect(json.summary).toBe(outOfBandContent);
+      expect(json.summary).not.toBe(defaultSummarizeResult().text);
+      expect(json.model).toBe("synthetic-out-of-band-model");
       // Only the ONE debit from begin_generation ever happened — the out-of-band persist_summary call
       // does not touch the balance.
       await expect(readBalance(account.userId)).resolves.toBe(4);

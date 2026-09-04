@@ -12,6 +12,7 @@ import {
   createFakeAdmin,
   createFakeSupabase,
   defaultAdminScript,
+  fail,
   generateRequestBody,
   loadEndpoint,
   makeContext,
@@ -147,6 +148,74 @@ describe("reserveBudget — every fail-open path proceeds with NO reservation (r
     const result = await reserveBudget(stub.client, API_KEY, TRANSCRIPT_BUDGET_CREDITS);
 
     expect(result.outcome).toBe("untracked");
+  });
+
+  /**
+   * The reading came back fine; STORING it is what went wrong (`supadata-budget.ts:477-486`). Both
+   * arms fail open with no second reserve — a refresh is spent once per call, never retried into a
+   * loop. `claim-lost` is deliberately NOT a failure of the stored state (a successor already saved a
+   * reading at least as fresh); it still ends the call, because this caller has burned its one refresh.
+   */
+  const saveOutcomes: [string, ReturnType<typeof ok>][] = [
+    ["errors", fail("save_supadata_budget: connection refused")],
+    ["reports claim-lost (a successor stored a fresher reading first)", ok(false)],
+  ];
+
+  it.each(saveOutcomes)("fails open when save_supadata_budget %s", async (_label, saveResult) => {
+    const admin = createFakeAdmin({
+      reserve_supadata_credits: [ok([reserveRow({ outcome: "refresh_required", refresh_claim_id: "claim-3" })])],
+      save_supadata_budget: [saveResult],
+    });
+    const fetchMock = stubSupadataFetch({ me: () => supadataMeOk({ maxCredits: 100, usedCredits: 18 }) });
+
+    const result = await reserveBudget(admin.client, API_KEY, TRANSCRIPT_BUDGET_CREDITS);
+
+    expect(result.outcome).toBe("untracked");
+    // No reservation to settle — the caller proceeds unmetered rather than holding a phantom one.
+    expect(result).not.toHaveProperty("reservationId");
+    // The refresh ends here: no SECOND reserve pass, and exactly one /v1/me for the whole call. The
+    // fake admin throws on an unscripted call, so a second reserve would fail loudly — this asserts it
+    // positively anyway, because that is the bound the module documents ("one refresh per call").
+    expect(admin.callsTo("reserve_supadata_credits")).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The second reserve pass ran but did not terminate (`supadata-budget.ts:499-509`). Its `default`
+   * arm is the guard against accidental recursion: re-entering the refresh from here would fetch
+   * `/v1/me` again, once per pass, against a vendor that is already unhappy. Each row is a distinct
+   * regression — remove the arm and one of them recurses, remove the fail-open and one of them refuses
+   * a request the breaker was never able to evaluate.
+   */
+  const nonTerminalSecondPass: [string, ReturnType<typeof ok>][] = [
+    [
+      "refresh_required again (the recursion the `default` arm exists to stop)",
+      ok([reserveRow({ outcome: "refresh_required", refresh_claim_id: "claim-5" })]),
+    ],
+    [
+      "uninitialized (the saved reading vanished under a concurrent prune)",
+      ok([reserveRow({ outcome: "uninitialized" })]),
+    ],
+    ["an RPC error", fail("reserve_supadata_credits: connection reset")],
+  ];
+
+  it.each(nonTerminalSecondPass)("fails open when the second reserve pass returns %s", async (_label, secondPass) => {
+    const admin = createFakeAdmin({
+      reserve_supadata_credits: [
+        ok([reserveRow({ outcome: "refresh_required", refresh_claim_id: "claim-4" })]),
+        secondPass,
+      ],
+      save_supadata_budget: [ok(true)],
+    });
+    const fetchMock = stubSupadataFetch({ me: () => supadataMeOk({ maxCredits: 100, usedCredits: 18 }) });
+
+    const result = await reserveBudget(admin.client, API_KEY, TRANSCRIPT_BUDGET_CREDITS);
+
+    expect(result.outcome).toBe("untracked");
+    expect(result).not.toHaveProperty("reservationId");
+    // Exactly two reserve passes and ONE /v1/me — the refresh is not re-entered from the second pass.
+    expect(admin.callsTo("reserve_supadata_credits")).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

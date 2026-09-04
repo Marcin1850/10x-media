@@ -69,6 +69,35 @@ describe("trust boundary — preflight exits (research.md §2.3, both 503s land 
     await expect(readJson(response)).resolves.toEqual({ error: "Summary generation is not configured" });
   });
 
+  it("reaches that SAME 503 from a missing SUPABASE_SERVICE_ROLE_KEY, through the real createAdminClient", async () => {
+    // The test above hands the endpoint `admin: null` outright, which proves generate.ts's null branch
+    // but not what produces the null. This one leaves `@/lib/supabase-admin` unmocked and unsets the
+    // secret, so the assertion runs the whole documented chain — `astro:env/server` → the REAL
+    // `createAdminClient()` (`supabase-admin.ts:15`) → the 503 (impl-review.md F8). It is the wiring a
+    // deploy missing the Worker secret actually exercises, and the README's stated consequence
+    // ("skip it and both endpoints return 503") is the oracle.
+    const { POST } = await loadEndpoint({ realAdminModule: true, env: { SUPABASE_SERVICE_ROLE_KEY: null } });
+
+    const response = await POST(makeContext({ body: generateRequestBody() }));
+
+    expect(response.status).toBe(503);
+    await expect(readJson(response)).resolves.toEqual({ error: "Summary generation is not configured" });
+  });
+
+  it("and does NOT 503 through that real constructor once the service-role key IS set", async () => {
+    // The companion to the test above, and the reason it isn't vacuous: `admin` defaults to null, so a
+    // `realAdminModule` that silently did nothing would still produce the 503 and look green. Here the
+    // secret is present, so the REAL createAdminClient must return a client and the endpoint must move
+    // past both preflights — reaching the 401 for the unauthenticated caller instead. If the real
+    // module were still being mocked away, this would 503 and fail.
+    const { POST } = await loadEndpoint({ realAdminModule: true });
+
+    const response = await POST(makeContext({ user: null, body: generateRequestBody() }));
+
+    expect(response.status).toBe(401);
+    await expect(readJson(response)).resolves.toEqual({ error: "Unauthorized" });
+  });
+
   it("401s an unauthenticated caller once both preflights pass", async () => {
     const admin = createFakeAdmin();
     const { POST } = await loadEndpoint({ admin: admin.client });

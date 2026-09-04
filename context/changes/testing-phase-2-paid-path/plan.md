@@ -2,7 +2,7 @@
 
 ## Overview
 
-Build the two-layer test net for the summary-generation request path: a **real local Supabase** layer that proves the money invariants (a failed generation leaves the user whole), and a **stubbed-client** layer that proves everything the ledger's arithmetic is not needed for (refusal exits, the vendor budget breaker, spend reconciliation). Paid vendors are faked at the `fetch` boundary and at the `llm.ts` module boundary. **No production code changes.**
+Build the two-layer test net for the summary-generation request path: a **real local Supabase** layer that proves the money invariants (a failed generation leaves the user whole), and a **stubbed-client** layer that proves everything the ledger's arithmetic is not needed for (refusal exits, the vendor budget breaker, spend reconciliation). Paid vendors are faked at the `fetch` boundary and at the `llm.ts` module boundary. **No production code changes** — with one deliberate exception decided at implementation review (impl-review.md F4); see "What We're NOT Doing".
 
 Covers test-plan risks #1 (credits spent without delivery), #2 (derived spend drifts from the vendor's), #3 (budget exhaustion degrades instead of refusing cleanly), #5 (a crafted request drives the paid pipeline for free).
 
@@ -10,7 +10,7 @@ Covers test-plan risks #1 (credits spent without delivery), #2 (derived spend dr
 
 `npm test` is the CI entry point and is deliberately env-less — its own comment in `.github/workflows/ci.yml` records that "nothing in the suite reaches Supabase, Supadata or OpenRouter." Three unit test files exist (`generate-summary.test.ts`, `credits.test.ts`, `summaries.test.ts`), all pure or hermetic against `__fixtures__/supabase-stub.ts`. There is **no test infrastructure for the paid-vendor HTTP boundary at all**, and no test touches an HTTP endpoint.
 
-The generation endpoint has 35 terminating exits. Six charge, two charge-then-refund, one 422 deliberately does not charge, and one — exit #34 — returns 500 without touching the balance in three materially different situations that the code cannot tell apart.
+The generation endpoint has 35 terminating exits. Six charge, two charge-then-refund, one 422 deliberately does not charge, and one — exit #34 — returns 500 without touching the balance in three materially different situations that the code cannot tell apart. (Revised during implementation review: the third of those, `already_persisted`, turned out not to reach exit #34 at all — see the exit-#34 table below and impl-review.md F4.)
 
 `research.md` established the enabling fact empirically: `generate.ts` is reachable from Vitest under the existing plain `vitest/config` once `astro:env/server` resolves to a stub module. `vi.mock` on the two client-constructor modules reaches the RPC layer. Neither requires `getViteConfig()` nor a production refactor.
 
@@ -33,9 +33,10 @@ Verified by: both suites green locally and in CI; the `globalSetup` guard aborti
 
 ## What We're NOT Doing
 
-- **No production code changes.** Not extracting `runGeneration`, not adding `fetchImpl` parameters, not changing `summarize`'s signature. The spike proved none of it is needed for reachability.
+- **No production code changes *for reachability*.** Not extracting `runGeneration`, not adding `fetchImpl` parameters, not changing `summarize`'s signature. The spike proved none of it is needed to reach the code under test.
+  - **Relaxed once, deliberately, at implementation review** (impl-review.md F4): the `already_persisted` path in `generate.ts`/`summaries.ts` was fixed, because the plan's oracle for it was wrong and the test could not be made honest without the fix. That is a *correctness* change the tests surfaced — still not a testability seam, so the rule above stands for everything else.
 - **No live vendor contact, ever** — including the free `GET /v1/me`. Reconciliation runs against recorded fixtures, with the cost of that stated in §7.
-- **Not fixing exit #34.** All three branches are pinned, not endorsed. A fix would have to branch on `persisted.reason` — an unconditional refund would double-refund the branch the sweep already reimbursed.
+- **Not fixing exit #34.** Its two genuine branches (sweep-refunded, operator-settled) are pinned, not endorsed. A fix would have to branch on `persisted.reason` — an unconditional refund would double-refund the branch the sweep already reimbursed. *(Revised at implementation review: the third case, `already_persisted`, was never an exit-#34 branch at all — see impl-review.md F4.)*
 - **No fresh-fetch path against the real database.** Fresh fetches are exercised on the stub layer only, so `transcript_cache` and the budget singleton are out of reach by construction.
 - **No second Supabase stack**, locally or in CI.
 - **Not covering the Whisper job path** — unreachable under `TRANSCRIPT_MODE = "native"`, and already excluded by test-plan §7.
@@ -306,9 +307,9 @@ The claims that only a real balance can settle: after a failed generation, the u
 | --- | --- | --- |
 | Sweep refunded | `reconcile_reservation` on a row with no linked summary | 500, and the balance is **back at its starting value** — the user is whole |
 | Operator settled | `settle_reservation()` by hand | 500, and the balance stays **down** — the genuine charge-without-delivery |
-| `already_persisted` | a summary already citing the reservation | 500 **while the work succeeded** — a false failure report, not a lost credit |
+| `already_persisted` | a summary already citing the reservation | ~~500 **while the work succeeded**~~ — **corrected oracle (impl-review.md F4)**: this is not an `ok:false` branch at all. `persist_summary`'s own contract is *"'already_persisted' — this reservation already produced a summary; ids replayed, nothing written"* (`20260723120000_atomic_persist_summary.sql:42`), so **200** is what the source calls for; the plan's 500 contradicted it. The real defect this exposed was the response body: the endpoint shipped THIS request's freshly-generated text under the EARLIER row's `videoId`/`summaryId`. Fixed — `generate.ts` reads the replayed row back (`readStoredSummary`). Assert **200 whose `summary`/`model` are the row `summaryId` names**, and one debit only |
 
-Head the test with a note that this **describes** current behaviour rather than endorsing it, and that an unconditional refund here would double-refund the first branch — which is why any fix must branch on `persisted.reason` and is a product decision, not a patch.
+Head the test with a note that the first two branches **describe** current behaviour rather than endorsing it, and that an unconditional refund there would double-refund the sweep-refunded branch — which is why any fix must branch on `persisted.reason` and is a product decision, not a patch. The third branch is no longer in that category: its oracle was resolved from the RPC's documented contract and the response-identity bug it exposed was fixed (impl-review.md F4).
 
 ### Success Criteria:
 
@@ -469,7 +470,7 @@ One new migration, comment-only. It changes no structure and touches no data, so
 
 #### Manual
 
-- [x] 5.4 An interrupted run leaves no synthetic account or cache row behind — d8f37f1
+- [x] 5.4 A run interrupted by a *controlled* failure (a thrown assertion, an RPC error) leaves no synthetic account or cache row behind — the `try/finally` `dispose()` runs, and now throws rather than swallowing a failed delete. A **hard kill** (SIGKILL) skips `finally` entirely and *does* leave rows; that case is covered by detection, not cleanup — `integration-setup.ts` aborts the next run with named manual repair instructions — d8f37f1, impl-review.md F3
 - [x] 5.5 The 13 paid transcript rows and the 100/18 budget row verified untouched — d8f37f1
 
 ### Phase 6: CI wiring and the cookbook
