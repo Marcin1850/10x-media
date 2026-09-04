@@ -5,7 +5,7 @@
   "testRunner": "vitest",
   "plugins": ["@stryker-mutator/vitest-runner"],
   "vitest": {
-    "configFile": "vitest.config.ts"
+    "configFile": "vitest.unit.config.ts"
   },
   "reporters": ["html", "clear-text", "progress"],
   "coverageAnalysis": "perTest"

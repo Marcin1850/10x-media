@@ -189,11 +189,12 @@ export async function flushSupadataCalls(
  * Parses `x-billable-requests` off a response. `null` when the header is absent or unparseable —
  * never a throw, and never a guess.
  *
- * The header's UNIT is still open: the name says requests, the only documentation sentence describing
- * it says credits, and the two diverge exactly on the Whisper `job` path (1 request vs 2 credits per
- * minute). Phase 5 run 3 settles it. The value is stored verbatim either way, so the answer changes
- * the column's name, not its contents. See
- * `context/changes/persist-time-and-cost/docs/supadata-billable-requests.md`.
+ * The header's UNIT is CREDITS, despite the name saying requests — settled 2026-07-29 by spot probe:
+ * one `mode=generate` request returned `x-billable-requests: 2` and moved `usedCredits` by exactly 2,
+ * and a single HTTP call can never be two requests. Six measurements agreed, none contradicted, so
+ * `billable_credits` is correctly named. See
+ * `context/changes/persist-time-and-cost/docs/supadata-billable-requests.md` (§Resolved, §Measured),
+ * whose §Parsing contract is this function's contract.
  */
 export function readBillableCredits(response: Response): number | null {
   const raw = response.headers.get("x-billable-requests");

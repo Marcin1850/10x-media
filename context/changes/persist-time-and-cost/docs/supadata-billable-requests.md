@@ -160,15 +160,22 @@ Error semantics to preserve when replacing the SDK call in `transcript.ts`:
 
 ## Parsing contract
 
-The header value is a request count/credit figure as a string. Parse defensively — this is telemetry attached to work already paid for, and a malformed header must never fail a generation:
+The header value is a credit figure as a decimal string (§Resolved settles the unit). Parse defensively — this is telemetry attached to work already paid for, and a malformed header must never fail a generation. `src/lib/services/supadata-ledger.ts` (`readBillableCredits`) is the implementation; it is stricter than a plain `parseInt`, deliberately:
 
 ```ts
 const raw = response.headers.get("x-billable-requests");
-const parsed = raw === null ? null : Number.parseInt(raw, 10);
-const billableCredits = parsed !== null && Number.isFinite(parsed) ? parsed : null;
+if (raw === null) return null;
+if (!/^\d+$/.test(raw.trim())) return null;
+const parsed = Number(raw);
+return Number.isSafeInteger(parsed) && parsed <= 2_147_483_647 ? parsed : null;
 ```
 
-`null` means "not reported"; `0` means "reported free". Keeping them distinct is what makes the Phase 5 reconciliation diagnosable.
+Two rules the shorter `Number.parseInt(raw, 10)` form gets wrong, and why each is load-bearing:
+
+- **Whole-string match, not a prefix.** `parseInt` reads a valid prefix and discards the rest, turning `"1oops"` and `"1.5"` into `1` — inventing a precise-looking measurement out of a value the vendor did not send. This ledger's whole claim is that the figure is *measured* rather than inferred, so a header we cannot read in full has to become `null` — honestly unreported — not a plausible guess.
+- **Range-check against PostgreSQL `integer`.** The column is an `int4`. An out-of-range value fails the cast inside `record_supadata_calls`, and because the flush is ONE batch insert, that failure would discard every other row for the request — losing good measurements to one bad header.
+
+`null` means "not reported"; `0` means "reported free". Keeping them distinct is what makes the reconciliation diagnosable — §Measured Finding 2 is the payoff: the billable `206` reports nothing, and its `null` localised the gap to one known call shape instead of leaving an unexplained discrepancy.
 
 ## Related
 

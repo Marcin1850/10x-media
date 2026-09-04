@@ -79,6 +79,7 @@ The app is served at **http://localhost:4321**.
 - `npm run typecheck` - Type-check `.ts`/`.tsx` (`tsc --noEmit`); the build does **not** do this
 - `npm run typecheck:astro` - Type-check `.astro` files (`astro check`); nothing else covers them
 - `npm test` - Run the unit suite once (Vitest)
+- `npm run test:integration` - Run the integration suite once (Vitest); needs a local Supabase stack (`npx supabase start`) and all five env keys set — see [CI](#ci)
 - `npm run grant-credits` - Grant summary credits to a user (operator-only, see [Summary credits](#summary-credits))
 - `npm run db:sync-from-prod` - Copy production data into the local Supabase stack
 
@@ -253,7 +254,9 @@ The model is pinned in `src/lib/services/llm.ts` (`anthropic/claude-sonnet-5`). 
 
 ## Summary credits
 
-Each user has a small credit budget that guards the paid transcript/LLM pipeline. Every account starts with **5 credits**; a successful summary spends **1 credit**, or **2 credits** for a long video generated after the confirmation prompt. Generation is blocked server-side at **0 credits** before any paid call is made. Refills are **manual-only** — there is no self-serve top-up.
+Each user has a small credit budget that guards the paid transcript/LLM pipeline. Every account starts with **5 credits**; a successful summary spends **1 credit**, or **2 credits** for a long video generated after the confirmation prompt. Generation is blocked server-side whenever the balance is below the cost of the request — so a 1-credit balance still covers a short video, but is refused against a long one. Refills are **manual-only** — there is no self-serve top-up.
+
+A submission that produces no summary can still cost a credit. Most refusals (a missing field, an unsupported URL, being out of credits) are free, but four specific 422 exits reached only after a transcript lookup — a cached or freshly-fetched video with no usable transcript, or an empty transcript — charge 1 credit, because the transcript API has already billed the app by the time the app can tell the submission won't produce a summary. The one exception is a transient fetch failure (an outage, ours or the vendor's): that exit does not charge, because the cost in that case is unknown rather than zero. The response body reports the outcome (`charged: true`/`false`, or `ambiguousCharge: true` when a retry cannot tell) and the UI shows it — the charge is never silent.
 
 To grant credits to a user by email (operator-only, offline):
 
@@ -296,9 +299,14 @@ Worker secrets are configured on Cloudflare, not injected by the deploy pipeline
 
 ## CI
 
-GitHub Actions (`.github/workflows/ci.yml`) runs lint, token check, both type-checks, the unit suite and the build on every push and PR to `master`, then deploys to Cloudflare Workers on pushes to `master`.
+GitHub Actions (`.github/workflows/ci.yml`) runs two jobs in parallel on every push and PR to `master`:
 
-Locally, git hooks catch most of this earlier: **pre-commit** runs lint-staged plus `npm run typecheck`, and **pre-push** runs `npm run typecheck:astro`. They are wired by husky via the `prepare` script, so a fresh `npm install` installs them — no manual step.
+- **`ci`** — lint, token check, both type-checks, the unit suite (`npm test`), and the build.
+- **`integration`** — starts a throwaway local Supabase stack (`npx supabase start`, non-essential services excluded) and runs the integration suite (`npm run test:integration`) against it. This job never touches `secrets.SUPABASE_URL` (that's production); it uses the Supabase CLI's fixed, publicly documented local-dev demo keys instead, plus literal placeholder values for the Supadata/OpenRouter keys — safe because every paid vendor call in that suite is faked at the `fetch`/module boundary. See [Summary credits](#summary-credits) and `context/foundation/test-plan.md` §6.2 for what the suite covers.
+
+`deploy` (Cloudflare Workers, on pushes to `master`) needs **both** jobs to pass.
+
+Locally, git hooks catch most of the `ci` job's checks earlier: **pre-commit** runs lint-staged plus `npm run typecheck`, and **pre-push** runs `npm run typecheck:astro`. They are wired by husky via the `prepare` script, so a fresh `npm install` installs them — no manual step. The integration suite is **not** wired into any local git hook (it needs Docker and takes minutes) — pre-commit/pre-push only lint and typecheck `*.int.test.ts` files as plain TypeScript; run `npm run test:integration` yourself before pushing changes that touch the paid path, or rely on the CI job to catch it.
 
 Required repository secrets:
 
@@ -309,7 +317,7 @@ Required repository secrets:
 | `CLOUDFLARE_API_TOKEN`  | Deploy step |
 | `CLOUDFLARE_ACCOUNT_ID` | Deploy step |
 
-The build does not need the Supadata or OpenRouter keys — every variable in the `astro:env` schema is declared `optional`, so the build succeeds without them.
+The build does not need the Supadata or OpenRouter keys — every variable in the `astro:env` schema is declared `optional`, so the build succeeds without them. The `integration` job needs none of these repository secrets at all.
 
 ## Project status
 

@@ -253,8 +253,16 @@ export interface PersistSummaryParams {
  * Discriminated on `ok` so a successful persist always carries both ids. `ok: false` is not an error:
  * it means the reservation was no longer open (a reconciliation sweep resolved it while the LLM call
  * ran), so nothing was written and the caller must fail closed rather than return an unsaved summary.
+ *
+ * `replayed` distinguishes the RPC's two success outcomes (impl-review.md F4). `already_persisted`
+ * means this reservation had ALREADY produced a summary — the RPC replays that row's ids and writes
+ * nothing (`20260723120000_atomic_persist_summary.sql:42`), so the caller's own freshly-generated text
+ * belongs to no row and must NOT be shipped alongside those ids. Ignoring the distinction is what made
+ * the 200 body internally inconsistent: this request's text under an earlier row's identifiers.
  */
-export type PersistSummaryResult = { ok: true; videoId: string; summaryId: string } | { ok: false; reason: string };
+export type PersistSummaryResult =
+  | { ok: true; videoId: string; summaryId: string; replayed: boolean }
+  | { ok: false; reason: string };
 
 /**
  * Writes the video + summary and settles the paying reservation in ONE transaction, via the
@@ -358,5 +366,39 @@ export async function persistSummaryAndSettle(
     throw new Error(`Failed to persist summary: outcome '${row.outcome}' returned without ids`);
   }
 
-  return { ok: true, videoId: row.video_id, summaryId: row.summary_id };
+  return { ok: true, videoId: row.video_id, summaryId: row.summary_id, replayed: row.outcome === "already_persisted" };
+}
+
+/** What a replayed (`already_persisted`) response must ship instead of this request's own generated text. */
+export interface StoredSummary {
+  content: string;
+  model: string | null;
+}
+
+/**
+ * Reads back a persisted summary's own content and model (impl-review.md F4).
+ *
+ * Only the `already_persisted` fork needs this: the row it names was written by an earlier call on the
+ * SAME reservation, so its text — not the caller's — is what the returned ids actually reference.
+ * Service-role, matching `persistSummaryAndSettle`: this runs on the endpoint's admin path, where no
+ * `auth.uid()` is in scope for the RLS-scoped policy to match. Throws on a genuine DB error or a
+ * missing row; the caller decides how to answer, since by this point the work IS saved and charged.
+ */
+export async function readStoredSummary(admin: SupabaseClient, summaryId: string): Promise<StoredSummary> {
+  const { data, error } = (await admin
+    .from("summaries")
+    .select("content, model")
+    .eq("id", summaryId)
+    .maybeSingle()) as {
+    data: { content: string; model: string | null } | null;
+    error: { message: string } | null;
+  };
+
+  if (error) {
+    throw new Error(`Failed to read stored summary ${summaryId}: ${error.message}`);
+  }
+  if (!data) {
+    throw new Error(`Failed to read stored summary ${summaryId}: no row`);
+  }
+  return { content: data.content, model: data.model };
 }

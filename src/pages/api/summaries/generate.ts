@@ -18,6 +18,7 @@ import { summarize } from "@/lib/services/llm";
 import {
   extractYoutubeId,
   persistSummaryAndSettle,
+  readStoredSummary,
   summaryCost,
   HARD_MAX_TRANSCRIPT_CHARS,
 } from "@/lib/services/summaries";
@@ -972,6 +973,28 @@ async function runGeneration({
     return Response.json({ error: "Something went wrong saving your summary. Please try again." }, { status: 500 });
   }
 
+  // `already_persisted`: an earlier call on THIS SAME reservation had already written the summary and
+  // settled the charge, so `persist_summary` replayed that row's ids and wrote nothing. The text this
+  // request just generated therefore belongs to no row — shipping it under those ids hands the caller a
+  // body whose `summary` and `summaryId` disagree, so opening the summary shows different content
+  // (impl-review.md F4). Answer with what the ids actually reference. Charging is unaffected: the one
+  // debit was already settled by that earlier call. Unreachable in practice outside a same-`requestId`
+  // race that beats the `replay` check above; `summarize()`'s deadline is what keeps the window shut.
+  let responseText = summary.text;
+  let responseModel: string | null = summary.model;
+  if (persisted.replayed) {
+    try {
+      const stored = await readStoredSummary(admin, persisted.summaryId);
+      responseText = stored.content;
+      responseModel = stored.model;
+    } catch (error) {
+      // No refund: the work IS saved and the charge IS settled — only this response can't be built.
+      // eslint-disable-next-line no-console
+      console.error(`replayed summary ${persisted.summaryId} could not be read back:`, error);
+      return Response.json({ error: "Something went wrong saving your summary. Please try again." }, { status: 500 });
+    }
+  }
+
   // Link this request's ledger rows to the summary they helped produce. Only the success path can do
   // this — rows from a request that returned 422/413/409/502 stay unlinked BY DESIGN, since there is
   // no summary to point at and their spend is exactly what this ledger exists to surface.
@@ -987,8 +1010,8 @@ async function runGeneration({
   }
 
   return Response.json({
-    summary: summary.text,
-    model: summary.model,
+    summary: responseText,
+    model: responseModel,
     videoId: persisted.videoId,
     summaryId: persisted.summaryId,
     creditsRemaining,
