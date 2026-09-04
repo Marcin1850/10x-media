@@ -79,6 +79,7 @@ The app is served at **http://localhost:4321**.
 - `npm run typecheck` - Type-check `.ts`/`.tsx` (`tsc --noEmit`); the build does **not** do this
 - `npm run typecheck:astro` - Type-check `.astro` files (`astro check`); nothing else covers them
 - `npm test` - Run the unit suite once (Vitest)
+- `npm run test:integration` - Run the integration suite once (Vitest); needs a local Supabase stack (`npx supabase start`) and all five env keys set — see [CI](#ci)
 - `npm run grant-credits` - Grant summary credits to a user (operator-only, see [Summary credits](#summary-credits))
 - `npm run db:sync-from-prod` - Copy production data into the local Supabase stack
 
@@ -298,9 +299,14 @@ Worker secrets are configured on Cloudflare, not injected by the deploy pipeline
 
 ## CI
 
-GitHub Actions (`.github/workflows/ci.yml`) runs lint, token check, both type-checks, the unit suite and the build on every push and PR to `master`, then deploys to Cloudflare Workers on pushes to `master`.
+GitHub Actions (`.github/workflows/ci.yml`) runs two jobs in parallel on every push and PR to `master`:
 
-Locally, git hooks catch most of this earlier: **pre-commit** runs lint-staged plus `npm run typecheck`, and **pre-push** runs `npm run typecheck:astro`. They are wired by husky via the `prepare` script, so a fresh `npm install` installs them — no manual step.
+- **`ci`** — lint, token check, both type-checks, the unit suite (`npm test`), and the build.
+- **`integration`** — starts a throwaway local Supabase stack (`npx supabase start`, non-essential services excluded) and runs the integration suite (`npm run test:integration`) against it. This job never touches `secrets.SUPABASE_URL` (that's production); it uses the Supabase CLI's fixed, publicly documented local-dev demo keys instead, plus literal placeholder values for the Supadata/OpenRouter keys — safe because every paid vendor call in that suite is faked at the `fetch`/module boundary. See [Summary credits](#summary-credits) and `context/foundation/test-plan.md` §6.2 for what the suite covers.
+
+`deploy` (Cloudflare Workers, on pushes to `master`) needs **both** jobs to pass.
+
+Locally, git hooks catch most of the `ci` job's checks earlier: **pre-commit** runs lint-staged plus `npm run typecheck`, and **pre-push** runs `npm run typecheck:astro`. They are wired by husky via the `prepare` script, so a fresh `npm install` installs them — no manual step. The integration suite is **not** wired into any local git hook (it needs Docker and takes minutes) — pre-commit/pre-push only lint and typecheck `*.int.test.ts` files as plain TypeScript; run `npm run test:integration` yourself before pushing changes that touch the paid path, or rely on the CI job to catch it.
 
 Required repository secrets:
 
@@ -311,7 +317,7 @@ Required repository secrets:
 | `CLOUDFLARE_API_TOKEN`  | Deploy step |
 | `CLOUDFLARE_ACCOUNT_ID` | Deploy step |
 
-The build does not need the Supadata or OpenRouter keys — every variable in the `astro:env` schema is declared `optional`, so the build succeeds without them.
+The build does not need the Supadata or OpenRouter keys — every variable in the `astro:env` schema is declared `optional`, so the build succeeds without them. The `integration` job needs none of these repository secrets at all.
 
 ## Project status
 
