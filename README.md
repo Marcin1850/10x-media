@@ -79,7 +79,9 @@ The app is served at **http://localhost:4321**.
 - `npm run typecheck` - Type-check `.ts`/`.tsx` (`tsc --noEmit`); the build does **not** do this
 - `npm run typecheck:astro` - Type-check `.astro` files (`astro check`); nothing else covers them
 - `npm test` - Run the unit suite once (Vitest)
+- `npm run test:watch` - Run the unit suite in watch mode while writing tests
 - `npm run test:integration` - Run the integration suite once (Vitest); needs a local Supabase stack (`npx supabase start`) and all five env keys set — see [CI](#ci)
+- `npm run test:coverage` - v8 coverage report for the unit suite into `coverage/`; no thresholds, by design
 - `npm run grant-credits` - Grant summary credits to a user (operator-only, see [Summary credits](#summary-credits))
 - `npm run db:sync-from-prod` - Copy production data into the local Supabase stack
 
@@ -305,6 +307,8 @@ GitHub Actions (`.github/workflows/ci.yml`) runs two jobs in parallel on every p
 - **`integration`** — starts a throwaway local Supabase stack (`npx supabase start`, non-essential services excluded) and runs the integration suite (`npm run test:integration`) against it. This job never touches `secrets.SUPABASE_URL` (that's production); it uses the Supabase CLI's fixed, publicly documented local-dev demo keys instead, plus literal placeholder values for the Supadata/OpenRouter keys — safe because every paid vendor call in that suite is faked at the `fetch`/module boundary. See [Summary credits](#summary-credits) and `context/foundation/test-plan.md` §6.2 for what the suite covers.
 
 `deploy` (Cloudflare Workers, on pushes to `master`) needs **both** jobs to pass.
+
+The two suites are separate Vitest **projects** (`vitest.config.ts`), and every script names the one it means: `test`, `test:watch` and `test:coverage` all pass `--project unit`, `test:integration` passes `--project integration`. Keep that flag when editing these scripts — a bare `vitest` selects **both** projects, which would quietly make the unit watch and the coverage report require Docker and create real synthetic `auth.users` rows on every run.
 
 Locally, git hooks catch most of the `ci` job's checks earlier: **pre-commit** runs lint-staged plus `npm run typecheck`, and **pre-push** runs `npm run typecheck:astro`. They are wired by husky via the `prepare` script, so a fresh `npm install` installs them — no manual step. The integration suite is **not** wired into any local git hook (it needs Docker and takes minutes) — pre-commit/pre-push only lint and typecheck `*.int.test.ts` files as plain TypeScript; run `npm run test:integration` yourself before pushing changes that touch the paid path, or rely on the CI job to catch it.
 
