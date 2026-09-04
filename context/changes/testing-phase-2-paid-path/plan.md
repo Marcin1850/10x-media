@@ -424,26 +424,26 @@ One new migration, comment-only. It changes no structure and touches no data, so
 
 #### Automated
 
-- [x] 2.1 Unit project unchanged in scope and green: `npm test`
-- [x] 2.2 Integration project runs, smoke test passes: `npm run test:integration`
-- [x] 2.3 Guard aborts on a non-loopback `SUPABASE_URL`
-- [x] 2.4 Types and lint pass
+- [x] 2.1 Unit project unchanged in scope and green: `npm test` — 6b1d374
+- [x] 2.2 Integration project runs, smoke test passes: `npm run test:integration` — 6b1d374
+- [x] 2.3 Guard aborts on a non-loopback `SUPABASE_URL` — 6b1d374
+- [x] 2.4 Types and lint pass — 6b1d374
 
 #### Manual
 
-- [x] 2.5 `npm test` runtime has not visibly regressed
-- [x] 2.6 Stryker runs against a unit module without picking up integration files
+- [x] 2.5 `npm test` runtime has not visibly regressed — 6b1d374
+- [x] 2.6 Stryker runs against a unit module without picking up integration files — 6b1d374
 
 ### Phase 3: Vendor fixtures and the `llm.ts` unit test
 
 #### Automated
 
-- [ ] 3.1 `npm test` green including `llm.test.ts`
-- [ ] 3.2 Lint and types pass
+- [x] 3.1 `npm test` green including `llm.test.ts`
+- [x] 3.2 Lint and types pass
 
 #### Manual
 
-- [ ] 3.3 Each fixture's comment lets a reader re-derive the shape from the vendor doc
+- [x] 3.3 Each fixture's comment lets a reader re-derive the shape from the vendor doc
 
 ### Phase 4: Stub layer — exits, refusals, breaker, reconciliation
 
