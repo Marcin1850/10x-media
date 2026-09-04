@@ -438,21 +438,21 @@ One new migration, comment-only. It changes no structure and touches no data, so
 
 #### Automated
 
-- [x] 3.1 `npm test` green including `llm.test.ts`
-- [x] 3.2 Lint and types pass
+- [x] 3.1 `npm test` green including `llm.test.ts` — 4842ca6
+- [x] 3.2 Lint and types pass — 4842ca6
 
 #### Manual
 
-- [x] 3.3 Each fixture's comment lets a reader re-derive the shape from the vendor doc
+- [x] 3.3 Each fixture's comment lets a reader re-derive the shape from the vendor doc — 4842ca6
 
 ### Phase 4: Stub layer — exits, refusals, breaker, reconciliation
 
 #### Automated
 
-- [ ] 4.1 `npm run test:integration` green
-- [ ] 4.2 No test in this phase opens a database connection
-- [ ] 4.3 Every Phase 3 fixture factory is referenced
-- [ ] 4.4 Lint and types pass
+- [x] 4.1 `npm run test:integration` green
+- [x] 4.2 No test in this phase opens a database connection
+- [x] 4.3 Every Phase 3 fixture factory is referenced
+- [x] 4.4 Lint and types pass
 
 #### Manual
 
