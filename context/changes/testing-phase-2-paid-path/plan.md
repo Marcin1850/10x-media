@@ -411,9 +411,9 @@ One new migration, comment-only. It changes no structure and touches no data, so
 
 #### Automated
 
-- [ ] 1.1 Migration applies cleanly via `npx supabase migration up`
-- [ ] 1.2 Formatting passes: `npm run format`
-- [ ] 1.3 Existing suite still green: `npm test`
+- [x] 1.1 Migration applies cleanly via `npx supabase migration up`
+- [x] 1.2 Formatting passes: `npm run format`
+- [x] 1.3 Existing suite still green: `npm test`
 
 #### Manual
 

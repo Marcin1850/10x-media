@@ -253,7 +253,9 @@ The model is pinned in `src/lib/services/llm.ts` (`anthropic/claude-sonnet-5`). 
 
 ## Summary credits
 
-Each user has a small credit budget that guards the paid transcript/LLM pipeline. Every account starts with **5 credits**; a successful summary spends **1 credit**, or **2 credits** for a long video generated after the confirmation prompt. Generation is blocked server-side at **0 credits** before any paid call is made. Refills are **manual-only** — there is no self-serve top-up.
+Each user has a small credit budget that guards the paid transcript/LLM pipeline. Every account starts with **5 credits**; a successful summary spends **1 credit**, or **2 credits** for a long video generated after the confirmation prompt. Generation is blocked server-side whenever the balance is below the cost of the request — so a 1-credit balance still covers a short video, but is refused against a long one. Refills are **manual-only** — there is no self-serve top-up.
+
+A submission that produces no summary can still cost a credit. Most refusals (a missing field, an unsupported URL, being out of credits) are free, but four specific 422 exits reached only after a transcript lookup — a cached or freshly-fetched video with no usable transcript, or an empty transcript — charge 1 credit, because the transcript API has already billed the app by the time the app can tell the submission won't produce a summary. The one exception is a transient fetch failure (an outage, ours or the vendor's): that exit does not charge, because the cost in that case is unknown rather than zero. The response body reports the outcome (`charged: true`/`false`, or `ambiguousCharge: true` when a retry cannot tell) and the UI shows it — the charge is never silent.
 
 To grant credits to a user by email (operator-only, offline):
 
