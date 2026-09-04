@@ -55,10 +55,13 @@ jobs:
       - uses: supabase/setup-cli@v1
         with:
           version: latest
-      # Only db, auth, rest, and kong (the API gateway SUPABASE_URL points at) are needed; auth and
-      # kong aren't excludable by design. Everything else (analytics, edge-runtime, functions,
-      # imgproxy, inbucket, meta, realtime, storage, studio, vector) is skipped to keep startup fast.
-      - run: npx supabase start -x analytics,edge-runtime,functions,imgproxy,inbucket,meta,realtime,storage,studio,vector
+      # Only db, gotrue (auth), kong (the API gateway SUPABASE_URL points at), and postgrest (rest)
+      # are needed; db isn't excludable at all, and kong/postgrest/gotrue are kept deliberately.
+      # `--exclude`'s valid names are the container keys, not the config.toml section names — verified
+      # against this action's own runtime error the first time this job ran with the wrong list
+      # (config-style names like `rest`/`meta`/`inbucket`/`storage` don't match and are silently
+      # skipped with a warning, which would have left every "excluded" service running anyway).
+      - run: npx supabase start -x edge-runtime,imgproxy,logflare,mailpit,postgres-meta,realtime,storage-api,studio,supavisor,vector
       - run: npm run test:integration
         env:
           SUPABASE_URL: http://127.0.0.1:54321
