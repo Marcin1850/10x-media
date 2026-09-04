@@ -36,7 +36,7 @@ Five findings, in order of how much they change the plan.
 1. **The endpoint is already reachable from Vitest. No production refactor is needed, and no database.** The recorded assumption that `generate.ts` is untestable because it imports `astro:env/server` is **false as stated** — it is untestable _under the current config_, which is a different claim with a one-line fix. A `resolve.alias` mapping `astro:env/server` to a stub module makes the endpoint import cleanly under the existing plain `vitest/config` setup. `getViteConfig()` is not needed and the Cloudflare adapter conflict never arises. Verified empirically, §2.
 2. **`vi.mock` on the two client-constructor modules reaches deep into the request path.** With `@/lib/supabase` and `@/lib/supabase-admin` mocked, a synthetic `APIContext` drove the handler to exit #8 (429, lease held) and the stub recorded the RPC it received. Every RPC-driven exit is therefore scriptable by sequencing `rpc` return values. **This dissolves the §3 Phase 2 open constraint** — the shared caches and the singleton budget row are never touched, so there is nothing to clean up between runs. §2.4.
 3. **The open constraint was real but is now moot, and the chosen remedy is no longer the cheapest one.** The decision taken this session was "injectable seam in code". The spike shows a third option neither of the two considered: **no production change at all**. This is a decision to re-take with the evidence, not for research to take unilaterally — see Open Questions.
-4. **35 terminating exits, and one of them charges without delivering, by design.** Exit #34 (`generate.ts:972`): `persistSummaryAndSettle` resolves `ok:false` because a reconciliation sweep already closed the reservation — the user is charged, gets no summary, and no refund is attempted. The code's own comment calls it unreachable in practice. It is the single highest-value target in this phase. §3.
+4. **35 terminating exits, and exit #34 is a three-way fork, not one outcome.** `persistSummaryAndSettle` resolves `ok:false` (`generate.ts:972`) whenever the reservation was no longer `reserved` by the time `persist_summary` locked it, and the endpoint then does nothing in every case. What that costs the user depends entirely on *how* the row was resolved — see §3. Worth testing precisely because the three branches diverge and the code cannot tell them apart.
 5. **Four doc-vs-code conflicts, one of which poisons the oracle.** README documents the credit system without ever mentioning that a _refused_ submission can charge a credit. A test written from README alone would assert "credits are only spent on delivered summaries" — which is false of the shipped product. §7.
 
 **A methodological note that earned its keep.** The prompt sent to the ledger sub-agent asserted a stop threshold "around 40000", taken from `test-plan.md` §6.1. That is wrong, and the agent refused it against the sources: `40_000` is `LONG_TRANSCRIPT_CHARS`, the 1→2 app-credit pricing boundary. The vendor breaker's threshold is `BUDGET_STOP_RESERVE = 3` Supadata credits. Two independent budgets, two unrelated numbers. Conflating them in a test would have produced a green suite asserting nothing.
@@ -113,13 +113,30 @@ Full table produced during research; the rows that matter for risk #1 are the on
 | 23     | 422     | fresh fetch `unavailable`                  | 1 credit — "the 206 we just paid a Supadata credit for"   | `generate.ts:670`      |
 | 26     | 422     | whitespace-only transcript                 | 1 credit, reason `whitespace`                             | `generate.ts:731`      |
 | 35     | 200     | success                                    | charged and settled                                       | `generate.ts:989`      |
-| **34** | **500** | **`persistSummaryAndSettle` → `ok:false`** | **charged, no summary, no refund attempted**              | **`generate.ts:972`**  |
+
+**The exit that does none of the above:**
+
+| #      | Status  | Trigger                                    | Credit effect                                             | file:line              |
+| ------ | ------- | ------------------------------------------ | --------------------------------------------------------- | ---------------------- |
+| **34** | **500** | **`persistSummaryAndSettle` → `ok:false`** | **depends on how the row was resolved — see the fork below** | **`generate.ts:972`**  |
 
 **Exits that charge then refund:** #32 (502, `summarize()` threw) and #33 (500, `persistSummaryAndSettle` threw) both call `refundReservation` before responding.
 
 **The one 422 that does not charge:** #24, fresh fetch with reason `failed`/`timeout` (`generate.ts:677`) — hardcoded `charged: false`, never calls `chargeFailedTranscript`. D14's stated reason: an outage plus a null header means the cost is unknown, "so charging would resolve our own ambiguity against the user."
 
-**Exit #34 is the phase's headline target.** The reservation was resolved out-of-band by the operator reconciliation sweep while generation was in flight; the code declines to refund on the theory that `summarize()`'s deadline makes the window unreachable. Forcing `persistSummaryAndSettle` to resolve `ok:false` and asserting both the 500 body and the ledger state is the single test that most directly addresses risk #1's framing.
+**Exit #34, correctly stated.** An earlier draft of this document described it as "charged, no summary, no refund attempted". That is wrong for the main branch, and the correction matters because it changes what a test must assert.
+
+`persistSummaryAndSettle` resolves `ok:false` when the reservation was no longer `reserved` at lock time. The endpoint logs and returns 500 without touching the balance, in every case. Three ways the row can get there, with three different outcomes:
+
+| How the row was resolved | Balance | What the user gets |
+| --- | --- | --- |
+| Reconciliation sweep, no linked summary | **restored** — `reconcile_reservation` refunds (`20260722120000:81-88`) | 500, but whole. Correct behaviour |
+| Operator ran `settle_reservation()` by hand | **not restored** | 500 and a lost credit — the genuine charge-without-delivery |
+| `already_persisted` — a summary already cites this reservation | charged, and rightly so | 500 reporting failure while the work **succeeded** — a false negative, not a lost credit |
+
+The code's own comment (`generate.ts:965-969`) is accurate for the first row and says so explicitly: *"the debit is reversed and nothing was written… refundReservation would be a no-op."* It simply does not distinguish the other two.
+
+This is therefore **not a single bug with an obvious fix**. Adding an unconditional refund here would pay a credit back twice on the first row. Any fix would have to branch on `persisted.reason`, which is a product decision, not a patch. The test's job is to pin all three branches separately so the fork stops being invisible.
 
 ### 4. The refusal machinery
 
@@ -193,7 +210,8 @@ Full table produced during research; the rows that matter for risk #1 are the on
 - `src/pages/api/summaries/generate.ts:110-125` — the two 503 preflights, both before the 401
 - `src/pages/api/summaries/generate.ts:231-237` — `refusalResponse`, the `ambiguousCharge` shape
 - `src/pages/api/summaries/generate.ts:274-294` — `refuseAndCharge` outcome mapping
-- `src/pages/api/summaries/generate.ts:965-972` — exit #34, charge without delivery, with the comment claiming unreachability
+- `src/pages/api/summaries/generate.ts:965-972` — exit #34, the three-way fork; the comment is accurate for the sweep branch only
+- `supabase/migrations/20260722120000_link_summary_to_reservation.sql:81-88` — `reconcile_reservation` refunds a row with no linked summary, which is why the sweep branch leaves the user whole
 - `src/lib/services/credits.ts:102,265,343,391` — the four injected-client ledger functions
 - `src/lib/services/supadata-budget.ts:73` — `BUDGET_STOP_RESERVE = 3`
 - `src/lib/services/supadata-budget.ts:436-510` — every fail-open `untracked` exit
@@ -224,4 +242,4 @@ Full table produced during research; the rows that matter for risk #1 are the on
 1. **Does the chosen "injectable seam" decision still stand?** The spike shows the phase needs no production change. Re-decide with the evidence before planning.
 2. **Does `@openrouter/ai-sdk-provider` honour a global `fetch` swap,** or must the fake sit at the `ai` module boundary? Unverified; cheap to settle with a second spike.
 3. **Should the four stale documents be corrected before or alongside the tests?** §7.4 in particular changes what a correct test asserts.
-4. **Is exit #34 worth a code fix, not just a test?** The test can pin current behaviour, but "charged, no summary, no refund, deliberately" is a product decision that predates the reconciliation sweep being operator-run rather than scheduled.
+4. **Does exit #34's operator-settle branch deserve a fix?** Only that branch loses the user a credit; the sweep branch is already correct and the `already_persisted` branch misreports success as failure instead. A fix would have to branch on `persisted.reason` — a product decision, not a patch, and out of scope for a test phase.
