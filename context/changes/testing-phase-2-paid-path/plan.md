@@ -456,8 +456,8 @@ One new migration, comment-only. It changes no structure and touches no data, so
 
 #### Manual
 
-- [ ] 4.5 Each `describe` block names its oracle source
-- [ ] 4.6 Breaking one refusal exit's `charged` value turns exactly one test red
+- [x] 4.5 Each `describe` block names its oracle source
+- [x] 4.6 Breaking one refusal exit's `charged` value turns exactly one test red
 
 ### Phase 5: Real-database layer — balance invariants
 
@@ -476,11 +476,11 @@ One new migration, comment-only. It changes no structure and touches no data, so
 
 #### Automated
 
-- [ ] 6.1 A PR against `master` runs both jobs and both pass
-- [ ] 6.2 `deploy` does not start when `integration` fails
-- [ ] 6.3 `supabase start` succeeds on a clean runner and migrations apply
+- [x] 6.1 A PR against `master` runs both jobs and both pass
+- [x] 6.2 `deploy` does not start when `integration` fails
+- [x] 6.3 `supabase start` succeeds on a clean runner and migrations apply
 
 #### Manual
 
-- [ ] 6.4 PR wall-clock time has not meaningfully increased
-- [ ] 6.5 §6.2 read cold is enough to add a new integration test
+- [x] 6.4 PR wall-clock time has not meaningfully increased
+- [x] 6.5 §6.2 read cold is enough to add a new integration test
