@@ -15,8 +15,14 @@ import { configDefaults, defineConfig } from "vitest/config";
  */
 export default defineConfig({
   resolve: {
+    // Both aliases the root `vitest.config.ts` declares, kept identical on purpose. `@` is load-bearing
+    // today; `astro:env/server` is not reached by any current unit test, and is mirrored anyway because
+    // a diverging alias between entry points fails at IMPORT time with an error that reads nothing like
+    // an assertion failure (test-plan §6.6) — here it would surface only under Stryker, long after
+    // `npm test` went green.
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
+      "astro:env/server": fileURLToPath(new URL("./src/test/astro-env-server-stub.ts", import.meta.url)),
     },
   },
   test: {
