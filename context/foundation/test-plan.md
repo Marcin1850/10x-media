@@ -53,7 +53,7 @@ Each row is a discrete rollout phase that will open its own change folder via `/
 | # | Phase name | Goal (one line) | Risks covered | Test types | Status | Change folder |
 |---|---|---|---|---|---|---|
 | 1 | Test bootstrap + cost/credit rules | Stand up the runner and pin the pure rules that decide what a generation costs and whether it is allowed | #1, #5 | unit | complete | `context/changes/testing-phase-1-bootstrap/` |
-| 2 | Paid-path integration | Prove the charge-versus-delivery contract on every exit, and that derived spend reconciles against the vendor's counter | #1, #2, #3, #5 | integration | researched | `context/changes/testing-phase-2-paid-path/` |
+| 2 | Paid-path integration | Prove the charge-versus-delivery contract on every exit, and that derived spend reconciles against the vendor's counter | #1, #2, #3, #5 | integration | complete | `context/changes/testing-phase-2-paid-path/` |
 | 3 | Data-boundary authorization | Prove one account cannot reach another's rows, including the user-agnostic shared caches | #4 | integration | not started | — |
 | 4 | Critical-flow e2e | Prove the flow works end to end. The CI floor this phase was to lock is already in place — see the note below | #6, cross-cutting | e2e | not started | — |
 | 5 | AI-native summary-quality golden set | Make the PRD's only success metric measurable on a schedule instead of by impression | PRD Open Question 2 | LLM-as-judge, scheduled | not started | — |
@@ -106,7 +106,7 @@ The full set of gates that must pass before a change reaches production. "Requir
 | typecheck | local (pre-commit) + CI | required — wired today | type drift in `.ts`/`.tsx` (`tsc --noEmit`). Neither the build nor ESLint catches this class of error |
 | typecheck (`.astro`) | local (pre-push) + CI | required — wired today | type drift in `.astro` files (`astro check`) — `tsc` cannot parse them, so nothing else covers this |
 | unit | local (manual) + CI | required — wired today (`npm test`, in the `ci` job after the typecheck steps and before `build`) | cost and credit rule regressions |
-| integration | local + CI | required after §3 Phase 2 | charge-versus-delivery regressions, breaker behaviour, authorization |
+| integration | local + CI | required — wired today (`npm run test:integration`, `integration` job in `.github/workflows/ci.yml`; `deploy` needs both `ci` and `integration`) | charge-versus-delivery regressions, breaker behaviour; authorization is still §3 Phase 3 |
 | e2e on critical flows | CI on PR | required after §3 Phase 4 | broken generate-and-see-it flow |
 | summary-quality golden set | scheduled, outside CI | optional after §3 Phase 5 | prompt regressions and provider-side model drift |
 | pre-prod smoke | between merge and prod | optional | environment-specific failures; already practised manually per slice |
@@ -172,7 +172,33 @@ Scope it to the module you just covered (the default `mutate` glob already exclu
 
 ### 6.2 Adding an integration test
 
-- TBD — see §3 Phase 2. Will cover the charge-versus-delivery contract at the request boundary, with the paid vendor boundary faked and everything below it real.
+**Two projects, one runner.** `vitest.config.ts` defines `unit` (`npm test`, colocated `*.test.ts`) and `integration` (`npm run test:integration`, colocated `*.int.test.ts`). Both inherit the same `@/*` and `astro:env/server` aliases from the root config; only the integration project carries `globalSetup: ["./src/test/integration-setup.ts"]`. Name a new integration file `<module>.int.test.ts` next to what it covers, same colocation rule as §6.1.
+
+**Which layer, decided by one question: does the assertion need a real balance?**
+
+| Layer | Answers | Fakes | Cleanup |
+|---|---|---|---|
+| Stub | Refusal exits and their `charged` signal, the budget breaker's trip and every fail-open branch, ledger-payload reconciliation, trust-boundary/schema rejections. | `vi.stubGlobal("fetch", …)` for Supadata (factories in `src/lib/services/__fixtures__/supadata-responses.ts`), `vi.mock` for `llm.ts` and the two Supabase client constructors. | None — no database connection opens. |
+| Real database | Anything where the assertion IS a balance read before/after: success debits the documented cost, a failure refunds, `insufficient` at the threshold, replay-on-`requestId`, exit #34's three branches. | Only the paid vendor boundary (same fixtures) — the database, RLS and credit RPCs are real. | `src/test/synthetic-account.ts`'s `dispose()`, called from the test's `try/finally`. |
+
+Never add a second local database or a fresh-fetch path against the real one (`transcript_cache`/`metadata_cache` stay reachable only from the stub layer, by construction — see §7).
+
+**Vendor fixtures.** Every Supadata response shape used anywhere in the suite lives in `src/lib/services/__fixtures__/supadata-responses.ts`, one factory per shape, each with a comment citing the measured value and its date in `context/changes/persist-time-and-cost/docs/supadata-billable-requests.md` (or, for a shape that exercises the code's own defensive contract rather than a vendor measurement, the source file that documents that contract instead). Add a new factory there — never inline a hand-built `Response` in a test — and cite your source the same way. `llm.ts` and the two Supabase client constructors are `vi.mock`ed directly in the stub-layer test file; there is no fixture file for them because there is no shape to measure, only a return value to control.
+
+**Real-database cleanup, in this order — reversing it orphans rows.** `supadata_calls` is `on delete set null`, so it survives account deletion. `createSyntheticAccount(admin)` returns a `dispose(youtubeIds)` that deletes those rows by `youtube_id` **first**, then the `auth.users` row, whose cascade removes everything else per-user. Every identifier is synthetic (`SYNTHETIC_ACCOUNT_EMAIL_PREFIX`, a fresh UUID per account) — never write a real address or id to a test file (`lessons.md`). `integration-setup.ts` also sweeps for accounts and cache rows left behind by a hard-killed prior run and aborts with a named fix rather than silently reusing stale state.
+
+**The loopback guard is not optional context — it is why this layer is safe to run at all.** `assertLoopbackSupabaseUrl` in `integration-setup.ts` refuses to run unless `SUPABASE_URL` resolves to `localhost`/`127.0.0.1`/`::1`. Never bypass it, and never wire a new integration entry point that skips `globalSetup`.
+
+**The oracle rule from §6.1 applies unchanged** — README credit rules, roadmap decisions, `supadata-billable-requests.md`'s measurements, never the implementation. Head each `describe` block with the source, same convention as a unit test.
+
+**Running it.**
+
+```
+npx supabase start          # once, local stack up (requires Docker)
+npm run test:integration    # single run against that stack
+```
+
+CI runs the same command in the `integration` job (`.github/workflows/ci.yml`), against a throwaway stack started with `supabase start -x <non-essential services>`, using the Supabase CLI's fixed local demo keys and literal placeholder vendor keys (safe — every paid vendor call is faked). `deploy` needs both `ci` and `integration` to pass.
 
 ### 6.3 Adding a test for a data-access policy
 
@@ -199,6 +225,14 @@ Scope it to the module you just covered (the default `mutate` glob already exclu
 - **Zod 4's `z.uuid()` accepts any RFC 9562/4122 version, v1–v8** (verified via Context7, 2026-08-22). The roadmap's phrasing "rejects a hand-typed non-v4 key" is loose; a test asserting a valid v1 UUID is rejected would fail. The field's contract is stable idempotency identity, which any RFC UUID satisfies.
 - **Known gap handed to Phase 2, deliberately.** `refuseAndCharge` / `refusalResponse` were not extracted from the endpoint, so the `REFUSAL_COPY` lookup and the `ambiguousCharge: true` body shape stay uncovered. The request-boundary integration tests cover both without any refactor. `readBillableCredits` was also handed over blocked on a doc-vs-code conflict (the doc prescribed `Number.parseInt`; the code rejects anything not `/^\d+$/`) — **unblocked 2026-09-04**: the doc's §Parsing contract now states the strict rule and says why prefix-parsing would fabricate a measurement, so the oracle is a source rather than a mirror. The same pass corrected the function's own JSDoc, which still called the header's unit open after the doc had settled it as credits on 2026-07-29.
 
+**Phase 2 — Paid-path integration (2026-09-04, `testing-phase-2-paid-path`).**
+
+- **Correction to Phase 1's claim above: "unreachable from a unit test" is narrower than it reads.** The constraint is real for the plain `unit` project (no test there imports `astro:env/server`, and none should), but the endpoint itself — `generate.ts`, `supabase.ts`, `supabase-admin.ts`, `config-status.ts` — is reachable from the **integration** project without any production refactor, by aliasing the virtual `astro:env/server` specifier to a plain module (`src/test/astro-env-server-stub.ts`) that re-exports the five schema keys off `process.env`, declared once at the config root and inherited by both projects (`extends: true`) so the two can never diverge (a divergent alias fails at import time with an error that reads nothing like an assertion failure — confirmed the hard way during this phase). `getViteConfig()` was still not needed; the adapter only enters through `astro.config.mjs`, which a plain `vitest/config` never loads.
+- **A real Supabase session reaches a test handler as a `Cookie` header string, not an `AstroCookies` object.** `src/lib/supabase.ts`'s `createClient` reads the raw header. The real-database layer's `synthetic-account.ts` therefore signs in through the same `createServerClient` the app uses, against an in-memory cookie jar, and joins the jar into a `name=value; …` string for the request — this is what makes the layer prove the app's real cookie parsing, not a stand-in for it.
+- **`transcript_cache` / `metadata_cache` are user-agnostic, and the vendor budget row is a shared singleton.** Neither carries an owner column, so per-account cleanup cannot reach them. The real-database layer avoids the hazard by construction — it only ever seeds a cache row to bypass the breaker, never forces a fresh fetch or a breaker trip — and `integration-setup.ts` sweeps for a stale cache row or a stale synthetic account left by a hard-killed prior run before any test in either layer starts.
+- **`supadata_calls` survives account deletion (`on delete set null`) — cleanup order is load-bearing.** Delete by `youtube_id` **before** deleting the `auth.users` row; reversed, the rows silently orphan into the exact ledger risk #2 sums.
+- **CI wiring needed no `secrets.SUPABASE_URL`.** The `integration` job (`.github/workflows/ci.yml`) sets all five env keys inline: the Supabase CLI's fixed, publicly documented local-dev demo keys for the three Supabase values, and literal placeholder strings for the two vendor keys — safe because `fetch` is stubbed and `llm.ts` is `vi.mock`ed, so nothing reaches a real vendor. `supabase start -x <services>` excludes everything the tests don't touch (analytics, edge-runtime, functions, imgproxy, inbucket, meta, realtime, storage, studio, vector); `auth` and `kong` cannot be excluded and were never meant to be — `kong` is the gateway `SUPABASE_URL` points at.
+
 ## 7. What We Deliberately Don't Test
 
 Exclusions agreed during the rollout. Future contributors should respect these unless the underlying assumption changes.
@@ -209,12 +243,13 @@ Exclusions agreed during the rollout. Future contributors should respect these u
 - **Snapshot tests on summary cards** — they break on every design tweak and catch none of the risks in §2. Re-evaluate never; use behavioural assertions instead.
 - **Prompt injection through transcript content** — the guardrail does not exist yet (roadmap S-10 is `proposed`). Testing it now would mean building the safeguard first. S-10 brings its own test when it lands, following §6.
 - **The Whisper job transcript path** — unreachable by construction under roadmap S-09 D1. Re-evaluate only if that decision is reversed.
+- **Live vendor contact of any kind in the paid-path integration layer, including the free `GET /v1/me`** (§3 Phase 2, decided at plan time). Reconciliation (risk #2) runs entirely against recorded response fixtures (`supadata-responses.ts`), each pinned to a measured value and date. **What this buys**: the mapping from a vendor outcome to a ledger figure is proven — a `206` really does record `billable_credits: null`, not `0`. **What it cannot catch**: the vendor changing its own pricing, silently dropping the `x-billable-requests` header, or `/v1/me`'s figures drifting from actual billing — none of that reaches the suite until a fixture is re-measured by hand. Re-evaluate if a free-tier sandbox becomes safe to call from CI (same condition as the first bullet above), or if a production billing surprise traces back to a vendor-side change a fixture didn't reflect.
 
 **Scoped exception to the "never wipe the local database" lesson.** `lessons.md` forbids destructive operations against the local database because its data was bought with real credits. Rollout phases may delete rows **scoped to synthetic test accounts and synthetic video identifiers only**. A full reset, a truncate, or any deletion that is not key-scoped remains forbidden and still requires explicit consent. The singleton budget row is not covered by this exception — see the §3 Phase 2 constraint.
 
 ## 8. Freshness Ledger
 
-- Strategy (§1–§5) last reviewed: 2026-09-04 (§5's typecheck row moved from *planned* to *wired*, and split in two once it was clear `tsc` and `astro check` cover disjoint file sets; see the Phase 4 note in §3)
+- Strategy (§1–§5) last reviewed: 2026-09-04 (§5's typecheck row moved from *planned* to *wired*, and split in two once it was clear `tsc` and `astro check` cover disjoint file sets, see the Phase 4 note in §3; §5's integration row moved from *required after §3 Phase 2* to *wired*, and §3 Phase 2's Status moved to `complete`, once the `integration` CI job landed — see the Phase 2 note in §6.6)
 - Stack versions last verified: 2026-08-23 (Vitest 4.1.11 and Stryker 10.0.0 installed and running as of rollout Phase 1; the unwired rows are unchanged since 2026-08-18)
 - AI-native tool references last verified: 2026-08-18
 

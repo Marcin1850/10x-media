@@ -463,14 +463,14 @@ One new migration, comment-only. It changes no structure and touches no data, so
 
 #### Automated
 
-- [x] 5.1 `npm run test:integration` green against a running local stack
-- [x] 5.2 Row counts in the five shared tables identical before and after a full run
-- [x] 5.3 Lint and types pass
+- [x] 5.1 `npm run test:integration` green against a running local stack — d8f37f1
+- [x] 5.2 Row counts in the five shared tables identical before and after a full run — d8f37f1
+- [x] 5.3 Lint and types pass — d8f37f1
 
 #### Manual
 
-- [x] 5.4 An interrupted run leaves no synthetic account or cache row behind
-- [x] 5.5 The 13 paid transcript rows and the 100/18 budget row verified untouched
+- [x] 5.4 An interrupted run leaves no synthetic account or cache row behind — d8f37f1
+- [x] 5.5 The 13 paid transcript rows and the 100/18 budget row verified untouched — d8f37f1
 
 ### Phase 6: CI wiring and the cookbook
 
