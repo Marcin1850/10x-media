@@ -3,6 +3,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { APIContext, AstroCookies } from "astro";
 import { createSyntheticAccount, type SyntheticAccount } from "@/test/synthetic-account";
 import { DB_LAYER_YOUTUBE_IDS } from "@/test/synthetic-fixtures";
+import { getDbOwnerConnection } from "@/test/db-owner";
 import { defaultSummarizeResult, generateRequestBody, readJson } from "./__fixtures__/generation-harness";
 
 /**
@@ -46,6 +47,10 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 }
 
 const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+// Table-owner connection (src/test/db-owner.ts) for transcript_cache/metadata_cache/credit_reservations
+// reads and writes below — those tables deliberately grant `service_role` no direct privileges
+// (impl-review.md F2), so `admin` cannot reach them outside their SECURITY DEFINER RPCs.
+const dbOwner = getDbOwnerConnection();
 
 // ---------------------------------------------------------------------------------------------------
 // Cache seeding/cleanup — the substitute for a real Supadata fetch. See the file header for why this,
@@ -95,8 +100,8 @@ async function seedUnavailableTranscriptCache(youtubeId: string): Promise<void> 
 }
 
 async function cleanupCaches(youtubeId: string): Promise<void> {
-  await admin.from("transcript_cache").delete().eq("youtube_id", youtubeId);
-  await admin.from("metadata_cache").delete().eq("youtube_id", youtubeId);
+  await dbOwner`delete from transcript_cache where youtube_id = ${youtubeId}`;
+  await dbOwner`delete from metadata_cache where youtube_id = ${youtubeId}`;
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -113,28 +118,17 @@ async function readBalance(userId: string): Promise<number | null> {
 }
 
 async function reservationStatus(reservationId: string): Promise<string> {
-  const { data, error } = await admin
-    .from("credit_reservations")
-    .select("status")
-    .eq("id", reservationId)
-    .maybeSingle();
-  if (error || !data) throw new Error(`reservationStatus: ${error?.message ?? "row not found"}`);
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-  return data.status;
+  const rows = await dbOwner<{ status: string }[]>`select status from credit_reservations where id = ${reservationId}`;
+  if (rows.length === 0) throw new Error(`reservationStatus: row not found for ${reservationId}`);
+  return rows[0].status;
 }
 
 async function activeReservationId(userId: string): Promise<string> {
-  const { data, error } = await admin
-    .from("credit_reservations")
-    .select("id")
-    .eq("user_id", userId)
-    .eq("status", "reserved")
-    .maybeSingle();
-  if (error || !data) {
-    throw new Error(`activeReservationId: no 'reserved' row for ${userId}: ${error?.message ?? "none found"}`);
-  }
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-  return data.id;
+  const rows = await dbOwner<{ id: string }[]>`
+    select id from credit_reservations where user_id = ${userId} and status = 'reserved' limit 1
+  `;
+  if (rows.length === 0) throw new Error(`activeReservationId: no 'reserved' row for ${userId}`);
+  return rows[0].id;
 }
 
 async function summaryCountFor(reservationId: string): Promise<number> {
@@ -481,14 +475,9 @@ describe("exit #34 — persistSummaryAndSettle's ok:false fork, pinned by outcom
  * performs.
  */
 async function activeOrSettledReservationId(userId: string): Promise<string> {
-  const { data, error } = await admin
-    .from("credit_reservations")
-    .select("id")
-    .eq("user_id", userId)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error || !data) throw new Error(`activeOrSettledReservationId: ${error?.message ?? "no reservation found"}`);
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-  return data.id;
+  const rows = await dbOwner<{ id: string }[]>`
+    select id from credit_reservations where user_id = ${userId} order by created_at desc limit 1
+  `;
+  if (rows.length === 0) throw new Error(`activeOrSettledReservationId: no reservation found for ${userId}`);
+  return rows[0].id;
 }

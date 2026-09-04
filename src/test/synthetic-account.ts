@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { getDbOwnerConnection } from "./db-owner";
 
 /**
  * Synthetic-account harness for the real-database layer (plan Phase 5).
@@ -33,6 +34,8 @@ export interface SyntheticAccount {
    * would otherwise survive the account and orphan into the ledger — research.md §5, plan's "Critical
    * Implementation Details"), then deletes the `auth.users` row, whose cascade removes everything else
    * per-user (`user_credits`, `credit_reservations`, `videos`, `summaries`, generation locks/limits).
+   * The `supadata_calls` delete goes through the table-owner connection (`db-owner.ts`), not
+   * `service_role` — that table deliberately grants `service_role` no direct privileges (impl-review.md F2).
    */
   dispose: (youtubeIds?: readonly string[]) => Promise<void>;
 }
@@ -100,10 +103,9 @@ export async function createSyntheticAccount(admin: SupabaseClient): Promise<Syn
     cookieHeader,
     async dispose(youtubeIds = []) {
       if (youtubeIds.length > 0) {
-        await admin
-          .from("supadata_calls")
-          .delete()
-          .in("youtube_id", [...youtubeIds]);
+        const sql = getDbOwnerConnection();
+        const ids = [...youtubeIds];
+        await sql`delete from supadata_calls where youtube_id in ${sql(ids)}`;
       }
       await admin.auth.admin.deleteUser(userId);
     },

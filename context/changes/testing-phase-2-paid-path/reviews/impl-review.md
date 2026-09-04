@@ -47,7 +47,7 @@
   - Tradeoff: Requires a shared `setupFiles` layer and explicit opt-in for every HTTP fixture.
   - Confidence: HIGH - the unsafe path and real-key presence were both verified locally; the integration suite passed with placeholders.
   - Blind spot: The firewall must be designed so stub-layer `vi.stubGlobal("fetch", ...)` tests restore to the firewall, not to the native fetch.
-- **Decision**: PENDING
+- **Decision**: FIXED — added `src/test/fetch-firewall.ts` (setupFile on the integration project) installing a `beforeEach`/`afterEach` fetch guard that only permits loopback traffic and throws otherwise; forces `SUPADATA_API_KEY`/`OPENROUTER_API_KEY` to placeholder values before every integration test file's imports; replaced the real YouTube ID in the shared stub-layer fixture (`generation-harness.ts`) with a synthetic one. Verified: unit (99), integration (51), lint, typecheck all pass; a manual sanity test confirmed the firewall blocks a real non-loopback fetch.
 
 ### F2 - Test support expands production database privileges
 
@@ -66,7 +66,7 @@
   - Tradeoff: Teardown cannot run after a hard kill, so local privileges may remain until explicitly repaired.
   - Confidence: MEDIUM - safe for production if the SQL is fully removed from deployable migrations.
   - Blind spot: Parallel local runs need serialization around grant/revoke.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A — removed `supabase/migrations/20260904130000_test_support_grants.sql`; added `src/test/db-owner.ts`, a loopback-validated, table-owner Postgres connection (`postgres` devDependency) that the test harness now uses instead. `integration-setup.ts`'s stale-fixture check, `generate.db.int.test.ts`'s cache cleanup and `credit_reservations` reads, and `synthetic-account.ts`'s `supadata_calls` cleanup all moved off `service_role`/PostgREST onto this connection. `service_role` regains zero privileges it didn't already have. Verified: `npx supabase db reset` reapplied the migration set without the grants, then the full integration suite (51 tests) still passed; typecheck/lint clean.
 
 ### F3 - Cleanup silently ignores failures and cannot filter the ledger
 

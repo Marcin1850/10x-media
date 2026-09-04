@@ -1,10 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { RESERVED_YOUTUBE_IDS } from "./synthetic-fixtures";
 import { SYNTHETIC_ACCOUNT_EMAIL_PREFIX } from "./synthetic-account";
-
-interface CacheRow {
-  youtube_id: string;
-}
+import { closeDbOwnerConnection, getDbOwnerConnection } from "./db-owner";
 
 /** Shared by both stale-row guards below — a service-role client against the (already loopback-checked) local stack. */
 function getAdminClientOrThrow(checking: string) {
@@ -17,6 +14,15 @@ function getAdminClientOrThrow(checking: string) {
     );
   }
   return createClient(url, key, { auth: { persistSession: false } });
+}
+
+/**
+ * WHATWG `new URL(...).hostname` reports an IPv6 literal WITH its brackets (`"[::1]"`, not `"::1"`) —
+ * verified against Node's URL implementation. Shared by `assertLoopbackSupabaseUrl` below and
+ * `fetch-firewall.ts`, so both guards recognize the same loopback shapes.
+ */
+export function isLoopbackHostname(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
 }
 
 /**
@@ -44,8 +50,7 @@ export function assertLoopbackSupabaseUrl(rawUrl: string | undefined): void {
     );
   }
 
-  const isLoopback = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-  if (!isLoopback) {
+  if (!isLoopbackHostname(hostname)) {
     throw new Error(
       `SUPABASE_URL ("${rawUrl}") does not resolve to loopback. The integration suite creates and ` +
         "deletes auth.users rows — running it against anything but your local stack (including " +
@@ -61,24 +66,23 @@ export function assertLoopbackSupabaseUrl(rawUrl: string | undefined): void {
  * so a leftover row from a crashed run can silently make a later test's breaker-bypass assumption
  * true for the wrong reason. `RESERVED_YOUTUBE_IDS` is empty in Phase 2; this is a no-op until a
  * later phase seeds either cache and registers the id there.
+ *
+ * Reads via the table-owner connection (`db-owner.ts`), not `service_role` — those two tables
+ * deliberately grant `service_role` no direct privileges (impl-review.md F2).
  */
 async function assertNoStaleFixtureRows(): Promise<void> {
   if (RESERVED_YOUTUBE_IDS.length === 0) {
     return;
   }
 
-  const admin = getAdminClientOrThrow("stale fixture rows");
+  const sql = getDbOwnerConnection();
   const ids = [...RESERVED_YOUTUBE_IDS];
-  const [transcript, metadata] = await Promise.all([
-    admin.from("transcript_cache").select("youtube_id").in("youtube_id", ids),
-    admin.from("metadata_cache").select("youtube_id").in("youtube_id", ids),
+  const [transcriptRows, metadataRows] = await Promise.all([
+    sql<{ youtube_id: string }[]>`select youtube_id from transcript_cache where youtube_id in ${sql(ids)}`,
+    sql<{ youtube_id: string }[]>`select youtube_id from metadata_cache where youtube_id in ${sql(ids)}`,
   ]);
-  if (transcript.error || metadata.error) {
-    throw new Error(`Could not check for stale fixture rows: ${(transcript.error ?? metadata.error)?.message}`);
-  }
 
-  const rows = [...(transcript.data as CacheRow[]), ...(metadata.data as CacheRow[])];
-  const stale = [...new Set(rows.map((row) => row.youtube_id))];
+  const stale = [...new Set([...transcriptRows, ...metadataRows].map((row) => row.youtube_id))];
   if (stale.length > 0) {
     throw new Error(
       `Stale fixture row(s) survive from a previous run: ${stale.join(", ")}. transcript_cache and ` +
@@ -130,6 +134,12 @@ async function assertNoStaleSyntheticAccounts(): Promise<void> {
 
 export default async function setup(): Promise<void> {
   assertLoopbackSupabaseUrl(process.env.SUPABASE_URL);
-  await assertNoStaleFixtureRows();
-  await assertNoStaleSyntheticAccounts();
+  try {
+    await assertNoStaleFixtureRows();
+    await assertNoStaleSyntheticAccounts();
+  } finally {
+    // globalSetup runs in its own short-lived process, outside any vitest hook context — close the
+    // owner connection explicitly rather than relying on an afterAll (db-owner.ts has none).
+    await closeDbOwnerConnection();
+  }
 }

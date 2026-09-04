@@ -74,6 +74,9 @@ export default defineConfig({
           name: "integration",
           include: ["src/**/*.int.test.ts"],
           globalSetup: ["./src/test/integration-setup.ts"],
+          // Per-test-file (unlike globalSetup, which runs once, outside `vi`) — installs the fetch
+          // firewall and forces placeholder vendor keys before every integration test (F1, impl-review.md).
+          setupFiles: ["./src/test/fetch-firewall.ts"],
         },
       },
     ],

@@ -243,7 +243,7 @@ export function stubSupadataFetch(
 
 export const SYNTHETIC_USER_ID = "00000000-0000-4000-8000-000000000001";
 export const SYNTHETIC_REQUEST_ID = "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed";
-export const SYNTHETIC_YOUTUBE_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+export const SYNTHETIC_YOUTUBE_URL = "https://www.youtube.com/watch?v=synthetic01";
 
 export function generateRequestBody(
   overrides: Partial<{ url: string; character: string; allowLong: boolean; requestId: string | null }> = {},
