@@ -449,10 +449,10 @@ One new migration, comment-only. It changes no structure and touches no data, so
 
 #### Automated
 
-- [x] 4.1 `npm run test:integration` green
-- [x] 4.2 No test in this phase opens a database connection
-- [x] 4.3 Every Phase 3 fixture factory is referenced
-- [x] 4.4 Lint and types pass
+- [x] 4.1 `npm run test:integration` green — 5a4884a
+- [x] 4.2 No test in this phase opens a database connection — 5a4884a
+- [x] 4.3 Every Phase 3 fixture factory is referenced — 5a4884a
+- [x] 4.4 Lint and types pass — 5a4884a
 
 #### Manual
 
@@ -463,14 +463,14 @@ One new migration, comment-only. It changes no structure and touches no data, so
 
 #### Automated
 
-- [ ] 5.1 `npm run test:integration` green against a running local stack
-- [ ] 5.2 Row counts in the five shared tables identical before and after a full run
-- [ ] 5.3 Lint and types pass
+- [x] 5.1 `npm run test:integration` green against a running local stack
+- [x] 5.2 Row counts in the five shared tables identical before and after a full run
+- [x] 5.3 Lint and types pass
 
 #### Manual
 
-- [ ] 5.4 An interrupted run leaves no synthetic account or cache row behind
-- [ ] 5.5 The 13 paid transcript rows and the 100/18 budget row verified untouched
+- [x] 5.4 An interrupted run leaves no synthetic account or cache row behind
+- [x] 5.5 The 13 paid transcript rows and the 100/18 budget row verified untouched
 
 ### Phase 6: CI wiring and the cookbook
 

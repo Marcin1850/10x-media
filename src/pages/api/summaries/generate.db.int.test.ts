@@ -1,0 +1,494 @@
+import { describe, expect, it, vi } from "vitest";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { APIContext, AstroCookies } from "astro";
+import { createSyntheticAccount, type SyntheticAccount } from "@/test/synthetic-account";
+import { DB_LAYER_YOUTUBE_IDS } from "@/test/synthetic-fixtures";
+import { defaultSummarizeResult, generateRequestBody, readJson } from "./__fixtures__/generation-harness";
+
+/**
+ * Real-database layer — balance invariants (plan Phase 5; test-plan risk #1's core).
+ *
+ * Unlike the stub layer (`generate.int.test.ts`), `@/lib/supabase` and `@/lib/supabase-admin` are
+ * REAL here: each test signs a synthetic account in through the app's own `createServerClient` cookie
+ * path (`synthetic-account.ts`), so `getBalance`'s RLS-scoped read runs against the actual local
+ * Postgres, not an injected stand-in. Only `@/lib/services/llm` is mocked (never spend real LLM
+ * credit, test-plan §7) — and, for exactly one test, `@/lib/supabase-admin` is mocked to a
+ * fail-on-one-RPC proxy wrapping the SAME real client (see `withFailingRpc`).
+ *
+ * "No live vendor contact, ever" is upheld without touching `fetch` at all: every scenario seeds
+ * `transcript_cache` AND `metadata_cache` directly via the same RPCs `generate.ts` itself calls, so
+ * both Supadata checkpoints are cache HITS and the budget breaker (which a cache hit bypasses by
+ * construction, D5) is never reached — `supadata_budget`'s singleton row is therefore untouched by
+ * this file, matching the "identical row counts before/after" criterion for it.
+ *
+ * Oracle: `generate.ts`'s own reservation/refund contract (`generate.ts:774-972`), `credits.ts`'s
+ * documented outcomes, and the RPC bodies in `20260720160000_credit_reservations.sql` /
+ * `20260722120000_link_summary_to_reservation.sql` / `20260723120000_atomic_persist_summary.sql` —
+ * cross-checked against the live database (`pg_get_functiondef`), not read off the branch under test.
+ *
+ * **A plan/reality mismatch, discovered and pinned rather than assumed.** The plan's exit-#34 table
+ * describes an `already_persisted` branch answering 500 "while the work succeeded". That is NOT what
+ * `persistSummaryAndSettle` does (`summaries.ts:353`): `already_persisted` is treated exactly like
+ * `persisted` (`ok: true`), so forcing it produces a 200 whose `summary` text is THIS request's own
+ * (freshly mocked) content while `videoId`/`summaryId` point at the EARLIER, out-of-band row — a
+ * mismatched-response bug, not a false-negative 500. The test below (`exit34AlreadyPersisted`) pins
+ * the ACTUAL behaviour and says so; it does not endorse it. Confirmed against the live
+ * `persist_summary` function body, not just the migration file.
+ */
+
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error(
+    "generate.db.int.test.ts requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY — set by the local " +
+      "stack's .env and already validated by integration-setup.ts's globalSetup.",
+  );
+}
+
+const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+
+// ---------------------------------------------------------------------------------------------------
+// Cache seeding/cleanup — the substitute for a real Supadata fetch. See the file header for why this,
+// not `vi.stubGlobal("fetch", ...)`, is what keeps this layer vendor-free.
+// ---------------------------------------------------------------------------------------------------
+
+async function seedCaches(youtubeId: string, content: string): Promise<void> {
+  const { error: transcriptError } = await admin.rpc("save_transcript_cache", {
+    p_youtube_id: youtubeId,
+    p_content: content,
+    p_outcome: "ok",
+    p_lang: "en",
+    p_available_langs: ["en"],
+    p_requested_lang: "en",
+    p_resolved_via: "inline",
+    p_fetch_duration_ms: 0,
+    p_content_chars: null,
+  });
+  if (transcriptError) throw new Error(`seedCaches: save_transcript_cache failed: ${transcriptError.message}`);
+
+  const { error: metadataError } = await admin.rpc("save_metadata_cache", {
+    p_youtube_id: youtubeId,
+    p_title: "Synthetic video",
+    p_thumbnail_url_reported: null,
+    p_channel_name: "Synthetic channel",
+    p_channel_id: null,
+    p_duration_seconds: 120,
+    p_published_at: null,
+  });
+  if (metadataError) throw new Error(`seedCaches: save_metadata_cache failed: ${metadataError.message}`);
+}
+
+/** A cached `unavailable` transcript, for the charged-refusal-replay scenario. No metadata needed — refusal answers before that lookup. */
+async function seedUnavailableTranscriptCache(youtubeId: string): Promise<void> {
+  const { error } = await admin.rpc("save_transcript_cache", {
+    p_youtube_id: youtubeId,
+    p_content: "",
+    p_outcome: "unavailable",
+    p_lang: null,
+    p_available_langs: null,
+    p_requested_lang: "en",
+    p_resolved_via: null,
+    p_fetch_duration_ms: 0,
+    p_content_chars: null,
+  });
+  if (error) throw new Error(`seedUnavailableTranscriptCache: ${error.message}`);
+}
+
+async function cleanupCaches(youtubeId: string): Promise<void> {
+  await admin.from("transcript_cache").delete().eq("youtube_id", youtubeId);
+  await admin.from("metadata_cache").delete().eq("youtube_id", youtubeId);
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Verification reads — the balance and ledger assertions ARE the test.
+// ---------------------------------------------------------------------------------------------------
+
+async function readBalance(userId: string): Promise<number | null> {
+  const { data, error } = await admin.from("user_credits").select("balance").eq("user_id", userId).maybeSingle();
+  if (error) throw new Error(`readBalance failed: ${error.message}`);
+  // The admin client is supabase-js's untyped default (this repo has no generated Database types), so
+  // `data` is `any` — same unavoidable gap `generate.ts`'s own RPC calls carry, not a fixable unsafe-return.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+  return data?.balance ?? null;
+}
+
+async function reservationStatus(reservationId: string): Promise<string> {
+  const { data, error } = await admin
+    .from("credit_reservations")
+    .select("status")
+    .eq("id", reservationId)
+    .maybeSingle();
+  if (error || !data) throw new Error(`reservationStatus: ${error?.message ?? "row not found"}`);
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+  return data.status;
+}
+
+async function activeReservationId(userId: string): Promise<string> {
+  const { data, error } = await admin
+    .from("credit_reservations")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("status", "reserved")
+    .maybeSingle();
+  if (error || !data) {
+    throw new Error(`activeReservationId: no 'reserved' row for ${userId}: ${error?.message ?? "none found"}`);
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+  return data.id;
+}
+
+async function summaryCountFor(reservationId: string): Promise<number> {
+  const { count, error } = await admin
+    .from("summaries")
+    .select("id", { count: "exact", head: true })
+    .eq("reservation_id", reservationId);
+  if (error) throw new Error(`summaryCountFor: ${error.message}`);
+  return count ?? 0;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Loading the endpoint with ONLY llm.ts (always) and, for one test, supabase-admin (via a fail-on-one-
+// RPC proxy) mocked. `@/lib/supabase` is never mocked — the synthetic account's Cookie header is what
+// authenticates the RLS-scoped read.
+// ---------------------------------------------------------------------------------------------------
+
+async function loadRealEndpoint(
+  options: { summarize?: ReturnType<typeof vi.fn>; admin?: SupabaseClient } = {},
+): Promise<typeof import("./generate")> {
+  vi.resetModules();
+  // `vi.doMock` registrations OUTLIVE `resetModules()` — only the imported-module cache is cleared, not
+  // the mock factory. Without this, a previous test's `options.admin` proxy (registered via `doMock`)
+  // silently keeps standing in for every later call that omits `admin`, since nothing re-registers the
+  // real module in between. Unmock first, every time, so the real `@/lib/supabase-admin` is what a
+  // caller gets unless THIS call asks for the proxy.
+  vi.doUnmock("@/lib/supabase-admin");
+  const summarize = options.summarize ?? vi.fn().mockResolvedValue(defaultSummarizeResult());
+  vi.doMock("@/lib/services/llm", () => ({ summarize }));
+  if (options.admin) {
+    const proxied = options.admin;
+    vi.doMock("@/lib/supabase-admin", () => ({ createAdminClient: () => proxied }));
+  }
+  return import("./generate");
+}
+
+/** Wraps a real client so ONE named RPC fails while every other call (including on the SAME client) goes through for real. */
+function withFailingRpc(real: SupabaseClient, failingFn: string, message: string): SupabaseClient {
+  const handler: ProxyHandler<SupabaseClient> = {
+    get(target, prop, receiver) {
+      if (prop === "rpc") {
+        return (fn: string, params?: Record<string, unknown>) => {
+          if (fn === failingFn) {
+            return Promise.resolve({ data: null, error: { message } });
+          }
+          return target.rpc(fn, params);
+        };
+      }
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- ProxyHandler.get's return type is `any` by the lib.es2015.proxy spec
+      return Reflect.get(target, prop, receiver);
+    },
+  };
+  return new Proxy(real, handler);
+}
+
+function makeDbContext(account: SyntheticAccount, body: unknown): APIContext {
+  return {
+    locals: { user: { id: account.userId } },
+    request: new Request("http://localhost/api/summaries/generate", {
+      method: "POST",
+      headers: { "content-type": "application/json", Cookie: account.cookieHeader },
+      body: JSON.stringify(body),
+    }),
+    cookies: {
+      get: () => undefined,
+      set: () => undefined,
+      delete: () => undefined,
+      has: () => false,
+    } as unknown as AstroCookies,
+  } as unknown as APIContext;
+}
+
+function youtubeUrl(id: string): string {
+  return `https://www.youtube.com/watch?v=${id}`;
+}
+
+async function withAccount(youtubeId: string, run: (account: SyntheticAccount) => Promise<void>): Promise<void> {
+  const account = await createSyntheticAccount(admin);
+  try {
+    await run(account);
+  } finally {
+    await cleanupCaches(youtubeId);
+    await account.dispose([youtubeId]);
+  }
+}
+
+describe("charge-versus-delivery invariants (research.md §3, §5)", () => {
+  it("success debits exactly the documented cost and settles", async () => {
+    const youtubeId = DB_LAYER_YOUTUBE_IDS.success;
+    await withAccount(youtubeId, async (account) => {
+      await seedCaches(youtubeId, "a short synthetic transcript, well under the long threshold");
+      const { POST } = await loadRealEndpoint();
+
+      const response = await POST(
+        makeDbContext(account, generateRequestBody({ url: youtubeUrl(youtubeId), requestId: crypto.randomUUID() })),
+      );
+      const json = (await readJson(response)) as { creditsRemaining: number; cost: number; summaryId: string };
+
+      expect(response.status).toBe(200);
+      expect(json.cost).toBe(1);
+      expect(json.creditsRemaining).toBe(4);
+      await expect(readBalance(account.userId)).resolves.toBe(4);
+      const reservationId = await activeOrSettledReservationId(account.userId);
+      await expect(reservationStatus(reservationId)).resolves.toBe("settled");
+    });
+  });
+
+  it("an LLM failure debits then restores the balance", async () => {
+    const youtubeId = DB_LAYER_YOUTUBE_IDS.llmFailure;
+    await withAccount(youtubeId, async (account) => {
+      await seedCaches(youtubeId, "a short synthetic transcript for the llm-failure case");
+      const summarize = vi.fn().mockRejectedValue(new Error("synthetic llm failure"));
+      const { POST } = await loadRealEndpoint({ summarize });
+
+      const response = await POST(
+        makeDbContext(account, generateRequestBody({ url: youtubeUrl(youtubeId), requestId: crypto.randomUUID() })),
+      );
+
+      expect(response.status).toBe(502);
+      await expect(readBalance(account.userId)).resolves.toBe(5);
+    });
+  });
+
+  it("a persistence failure likewise refunds", async () => {
+    const youtubeId = DB_LAYER_YOUTUBE_IDS.persistFailure;
+    await withAccount(youtubeId, async (account) => {
+      await seedCaches(youtubeId, "a short synthetic transcript for the persist-failure case");
+      const failingAdmin = withFailingRpc(admin, "persist_summary", "synthetic persistence failure");
+      const { POST } = await loadRealEndpoint({ admin: failingAdmin });
+
+      const response = await POST(
+        makeDbContext(account, generateRequestBody({ url: youtubeUrl(youtubeId), requestId: crypto.randomUUID() })),
+      );
+
+      expect(response.status).toBe(500);
+      await expect(readBalance(account.userId)).resolves.toBe(5);
+    });
+  });
+
+  it("reports `insufficient` at a 1-credit balance against a 2-cost long video (the prose's omitted case)", async () => {
+    const youtubeId = DB_LAYER_YOUTUBE_IDS.insufficientLong;
+    await withAccount(youtubeId, async (account) => {
+      // Explicit test setup for a NON-default balance — the account's initial 5 still came from the
+      // trigger (createSyntheticAccount never sets it), this is a later, separate step.
+      const { error: setBalanceError } = await admin
+        .from("user_credits")
+        .update({ balance: 1 })
+        .eq("user_id", account.userId);
+      if (setBalanceError) throw new Error(`failed to set balance for insufficient test: ${setBalanceError.message}`);
+
+      await seedCaches(youtubeId, "x".repeat(50_000)); // > LONG_TRANSCRIPT_CHARS (40000) => cost 2
+      const { POST } = await loadRealEndpoint();
+
+      const response = await POST(
+        makeDbContext(
+          account,
+          generateRequestBody({ url: youtubeUrl(youtubeId), requestId: crypto.randomUUID(), allowLong: true }),
+        ),
+      );
+      const json = (await readJson(response)) as { error: string };
+
+      expect(response.status).toBe(402);
+      expect(json.error).toBe("You need 2 credits for this video; you have 1");
+      await expect(readBalance(account.userId)).resolves.toBe(1); // untouched — the conditional decrement never fired
+    });
+  });
+
+  it("replays the same requestId without a second debit or a second LLM call", async () => {
+    const youtubeId = DB_LAYER_YOUTUBE_IDS.replay;
+    await withAccount(youtubeId, async (account) => {
+      await seedCaches(youtubeId, "a short synthetic transcript for the replay case");
+      const summarize = vi.fn().mockResolvedValue(defaultSummarizeResult());
+      const requestId = crypto.randomUUID();
+      const body = generateRequestBody({ url: youtubeUrl(youtubeId), requestId });
+
+      const first = await loadRealEndpoint({ summarize });
+      const firstResponse = await first.POST(makeDbContext(account, body));
+      const firstJson = (await readJson(firstResponse)) as { summaryId: string; creditsRemaining: number };
+      expect(firstResponse.status).toBe(200);
+      expect(firstJson.creditsRemaining).toBe(4);
+
+      const second = await loadRealEndpoint({ summarize });
+      const secondResponse = await second.POST(makeDbContext(account, body));
+      const secondJson = (await readJson(secondResponse)) as { summaryId: string; creditsRemaining: number };
+
+      expect(secondResponse.status).toBe(200);
+      expect(secondJson.summaryId).toBe(firstJson.summaryId);
+      expect(secondJson.creditsRemaining).toBe(4); // not debited again
+      expect(summarize).toHaveBeenCalledTimes(1); // the replay never reaches the LLM call
+      await expect(readBalance(account.userId)).resolves.toBe(4);
+    });
+  });
+
+  it("a charged refusal replays as `charged: true` without a second charge", async () => {
+    const youtubeId = DB_LAYER_YOUTUBE_IDS.chargedRefusalReplay;
+    await withAccount(youtubeId, async (account) => {
+      await seedUnavailableTranscriptCache(youtubeId);
+      const requestId = crypto.randomUUID();
+      const body = generateRequestBody({ url: youtubeUrl(youtubeId), requestId });
+
+      const first = await loadRealEndpoint();
+      const firstResponse = await first.POST(makeDbContext(account, body));
+      const firstJson = (await readJson(firstResponse)) as { charged?: boolean };
+      expect(firstResponse.status).toBe(422);
+      expect(firstJson.charged).toBe(true);
+      await expect(readBalance(account.userId)).resolves.toBe(4);
+
+      const second = await loadRealEndpoint();
+      const secondResponse = await second.POST(makeDbContext(account, body));
+      const secondJson = (await readJson(secondResponse)) as { charged?: boolean };
+
+      expect(secondResponse.status).toBe(422);
+      expect(secondJson.charged).toBe(true);
+      await expect(readBalance(account.userId)).resolves.toBe(4); // not charged twice
+    });
+  });
+});
+
+describe("exit #34 — persistSummaryAndSettle's ok:false fork, pinned by outcome, not as each other's negation (research.md §3)", () => {
+  it("sweep-refunded (reconcile_reservation, no linked summary): 500, and the user is whole", async () => {
+    const youtubeId = DB_LAYER_YOUTUBE_IDS.exit34SweepRefunded;
+    await withAccount(youtubeId, async (account) => {
+      await seedCaches(youtubeId, "a short synthetic transcript for the sweep-refund case");
+      const summarize = vi.fn(async () => {
+        const reservationId = await activeReservationId(account.userId);
+        const { error } = await admin.rpc("reconcile_reservation", {
+          target_user: account.userId,
+          reservation: reservationId,
+        });
+        if (error) throw new Error(`reconcile_reservation failed: ${error.message}`);
+        return defaultSummarizeResult();
+      });
+      const { POST } = await loadRealEndpoint({ summarize });
+
+      const response = await POST(
+        makeDbContext(account, generateRequestBody({ url: youtubeUrl(youtubeId), requestId: crypto.randomUUID() })),
+      );
+
+      expect(response.status).toBe(500);
+      await expect(readBalance(account.userId)).resolves.toBe(5); // whole
+    });
+  });
+
+  it("operator-settled (settle_reservation, no summary): 500, and the balance stays down", async () => {
+    const youtubeId = DB_LAYER_YOUTUBE_IDS.exit34OperatorSettled;
+    await withAccount(youtubeId, async (account) => {
+      await seedCaches(youtubeId, "a short synthetic transcript for the operator-settle case");
+      const summarize = vi.fn(async () => {
+        const reservationId = await activeReservationId(account.userId);
+        const { error } = await admin.rpc("settle_reservation", {
+          target_user: account.userId,
+          reservation: reservationId,
+        });
+        if (error) throw new Error(`settle_reservation failed: ${error.message}`);
+        return defaultSummarizeResult();
+      });
+      const { POST } = await loadRealEndpoint({ summarize });
+
+      const response = await POST(
+        makeDbContext(account, generateRequestBody({ url: youtubeUrl(youtubeId), requestId: crypto.randomUUID() })),
+      );
+
+      expect(response.status).toBe(500);
+      await expect(readBalance(account.userId)).resolves.toBe(4); // the genuine charge-without-delivery
+    });
+  });
+
+  it("already_persisted (a summary already cites this reservation): PINS THE ACTUAL 200, not the plan's claimed 500 — see file header", async () => {
+    const youtubeId = DB_LAYER_YOUTUBE_IDS.exit34AlreadyPersisted;
+    await withAccount(youtubeId, async (account) => {
+      await seedCaches(youtubeId, "a short synthetic transcript for the already-persisted case");
+      const outOfBandContent = "out-of-band content, persisted before this request's own persist_summary call";
+      let outOfBandSummaryId: string | undefined;
+      let outOfBandVideoId: string | undefined;
+
+      const summarize = vi.fn(async () => {
+        const reservationId = await activeReservationId(account.userId);
+        const { data, error } = (await admin.rpc("persist_summary", {
+          target_user: account.userId,
+          reservation: reservationId,
+          p_url: youtubeUrl(youtubeId),
+          p_youtube_id: youtubeId,
+          p_character: "informational",
+          p_content: outOfBandContent,
+          p_model: "synthetic-out-of-band-model",
+          p_resolved_via: "stored",
+          p_title: null,
+          p_thumbnail_url_reported: null,
+          p_channel_name: null,
+          p_channel_id: null,
+          p_duration_seconds: null,
+          p_published_at: null,
+          p_transcript_lang: null,
+          p_transcript_available_langs: null,
+          p_transcript_chars: null,
+          p_generation_ms: null,
+          p_transcript_ms: null,
+          p_llm_ms: null,
+          p_metadata_ms: null,
+          p_cost_usd: null,
+          p_prompt_tokens: null,
+          p_completion_tokens: null,
+          p_metadata_via: null,
+        })) as {
+          data: { outcome: string; video_id: string; summary_id: string }[] | null;
+          error: { message: string } | null;
+        };
+        if (error || !data || data.length === 0) {
+          throw new Error(`out-of-band persist_summary failed: ${error?.message ?? "no row"}`);
+        }
+        outOfBandVideoId = data[0].video_id;
+        outOfBandSummaryId = data[0].summary_id;
+        return defaultSummarizeResult();
+      });
+      const { POST } = await loadRealEndpoint({ summarize });
+
+      const response = await POST(
+        makeDbContext(account, generateRequestBody({ url: youtubeUrl(youtubeId), requestId: crypto.randomUUID() })),
+      );
+      const json = (await readJson(response)) as { summary: string; videoId: string; summaryId: string };
+
+      // ACTUAL behaviour, not the plan's claimed 500: already_persisted maps to ok:true in
+      // persistSummaryAndSettle, so the endpoint answers 200.
+      expect(response.status).toBe(200);
+      // The ids in the response are the EARLIER, out-of-band row's — not a fresh one.
+      expect(json.videoId).toBe(outOfBandVideoId);
+      expect(json.summaryId).toBe(outOfBandSummaryId);
+      // The mismatch: this request's OWN (mocked) summary text ships in a body whose ids point at
+      // different, already-persisted content. A real reader would receive text that does not match
+      // what `videoId`/`summaryId` actually reference.
+      expect(json.summary).not.toBe(outOfBandContent);
+      // Only the ONE debit from begin_generation ever happened — the out-of-band persist_summary call
+      // does not touch the balance.
+      await expect(readBalance(account.userId)).resolves.toBe(4);
+      await expect(summaryCountFor(await activeOrSettledReservationId(account.userId))).resolves.toBe(1);
+    });
+  });
+});
+
+/**
+ * After a SUCCESSFUL generation the reservation is 'settled', so `activeReservationId` (which only
+ * matches 'reserved') can no longer find it. Falls back to the most recent reservation for the user —
+ * safe here because each test's account is single-use and this runs only after the one debit a test
+ * performs.
+ */
+async function activeOrSettledReservationId(userId: string): Promise<string> {
+  const { data, error } = await admin
+    .from("credit_reservations")
+    .select("id")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) throw new Error(`activeOrSettledReservationId: ${error?.message ?? "no reservation found"}`);
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+  return data.id;
+}
