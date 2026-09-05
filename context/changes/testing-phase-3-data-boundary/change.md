@@ -1,7 +1,7 @@
 ---
 change_id: testing-phase-3-data-boundary
 title: Test rollout phase 3 — data-boundary authorization
-status: planned
+status: implementing
 created: 2026-09-05
 updated: 2026-09-05
 archived_at: null

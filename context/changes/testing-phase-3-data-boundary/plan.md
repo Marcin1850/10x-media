@@ -598,11 +598,11 @@ grant.
 
 #### Automated
 
-- [ ] 1.1 `npm run test:integration` passes with the new file green
-- [ ] 1.2 `npm run lint` passes
-- [ ] 1.3 `npm run typecheck` passes
-- [ ] 1.4 A dropped roster entry makes assertion 1 fail naming the table (reverted)
-- [ ] 1.5 A temporary `grant select on transcript_cache to authenticated` makes assertion 4 fail (reverted)
+- [x] 1.1 `npm run test:integration` passes with the new file green
+- [x] 1.2 `npm run lint` passes
+- [x] 1.3 `npm run typecheck` passes
+- [x] 1.4 A dropped roster entry makes assertion 1 fail naming the table (reverted)
+- [x] 1.5 A temporary `grant select on transcript_cache to authenticated` makes assertion 4 fail (reverted)
 
 #### Manual
 
