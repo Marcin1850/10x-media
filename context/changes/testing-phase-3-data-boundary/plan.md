@@ -792,9 +792,9 @@ pass's Query 2 is the verification that counts.
 
 #### Manual
 
-- [x] 1.6 Cloud default-privilege and per-table-grant queries run and recorded in the plan's "Cloud verification pass" section with date and verdict
-- [x] 1.7 The record contains no account identifiers
-- [x] 1.8 Any divergence between cloud grants and the roster reported before Phase 2 starts
+- [x] 1.6 Cloud default-privilege and per-table-grant queries run and recorded in the plan's "Cloud verification pass" section with date and verdict — d0629d3
+- [x] 1.7 The record contains no account identifiers — d0629d3
+- [x] 1.8 Any divergence between cloud grants and the roster reported before Phase 2 starts — d0629d3
 
 ### Phase 2: Two-account policy probe
 
