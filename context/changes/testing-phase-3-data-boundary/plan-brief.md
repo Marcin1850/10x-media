@@ -11,6 +11,12 @@ reaching the user-agnostic shared caches at all — is the PRD's **only** stated
 shared tables shipped one day ago (`d8f37f1`) and was reverted by human impl-review (`e0fdb0d`), not by
 any test. This phase closes that gap with two new integration files and one boundary case.
 
+**It also grew a fifth phase mid-flight.** The catalog invariant forced a re-verification of the cloud
+project's privileges, and that pass found a live production divergence — `service_role` holds full DML
+on all nine internal tables on cloud and none locally, because every migration's `revoke` names
+`public, anon, authenticated` and stops. Phase 4 closes it. The enforcement point found an un-tightened
+role on its first run, which is the argument for building it.
+
 ## Starting Point
 
 Research mapped the whole surface and **inverted the phase's stated premise**. The shared caches added by
@@ -39,22 +45,27 @@ production embed shape and including two accounts submitting the same `requestId
 | `service_role` DML | Assert none on the nine internal tables | The exact assertion that would have caught `20260904130000`; marked defence-in-depth since `service_role` bypasses RLS | Plan |
 | `Dxtm` handling | Fails for `authenticated`, tolerated for `service_role` | It is the forgotten-revoke signal for one role and inherited local default for the other — asserting "zero privileges" would go red today | Research |
 | Cloud divergence | Accept the gap + one-off manual prod read, recorded and dated | The per-table roster is environment-independent, but the 2026-07-14 claim the risk rests on deserves re-dating | Plan |
+| Where the cloud record lives | Inline in `plan.md` ("Cloud verification pass"), not a separate file | A one-off verification with no consumer of its own belongs where the decisions it feeds already live | Implementation |
+| Role assertions | `has_table_privilege` / `has_function_privilege`, not `aclexplode` | A function with no explicit ACL is EXECUTE-able by `PUBLIC` (grantee oid 0), which the ACL-array form cannot see — invariants 3 and 5 would have passed against the very regression they exist to catch | Implementation |
+| The `service_role` divergence | Fix it in this change (Phase 4), not defer to a follow-up | Otherwise invariant 8 passes locally for a reason that does not obtain in production, and the coverage is illusory | Implementation |
 | RLS session seam | Built per test from the cookie header via the app's own `createClient` | Round-trips through the real `parseCookieHeader`, so the session under test is production's; `synthetic-account.ts` stays unchanged | Plan |
 | `readStoredSummary` | One boundary test, not a group | The only place application code, not RLS, is the trust boundary — an argument replaced by evidence | Research |
 | `graphql_public` | Assert the schema holds no user objects | Exposed only by CLI default and used by nothing in the app; verified during planning as zero relations plus one non-extension-owned function, so no maintained exclusion list is needed | Plan |
-| Migration changes | None | Test-harness needs must not apply pressure on production privileges; `pg_catalog` reads need no grant | Research |
+| Migration changes | One, in Phase 4 only | Phases 1-3 add no SQL — harness needs must not widen production privileges; Phase 4's migration is the opposite, *narrowing* `service_role` to match documented intent, and no test needs it to pass | Implementation |
 
 ## Scope
 
 **In scope:** a catalog-invariant test over `pg_class`/`pg_policy`/`pg_proc`/`pg_default_acl`; a
 two-account policy probe with unfiltered reads through real sessions; one cross-account replay boundary
-case; a dated cloud default-privilege record; `test-plan.md` §6.3 + §6.6 + status; `CLAUDE.md` /
+case; a dated cloud default-privilege record, inline in `plan.md`; one migration revoking `service_role`
+on the nine internal tables; `test-plan.md` §6.3 + §6.6 + §6.2 correction + status; `CLAUDE.md` /
 `AGENTS.md` / `README.md`; Linear MAR-21.
 
-**Out of scope:** e2e and Playwright (Phase 4); mutation testing (no application code under test); any
-migration — including revoking the `authenticated` default schema-wide or dropping the `graphql_public`
-exposure; a test that creates a table to observe default-privilege inheritance; changing
-`listSummaries` / `getBalance`; refreshing `test-plan.md` §2 (already backported 2026-09-05).
+**Out of scope:** e2e and Playwright (test-rollout Phase 4); mutation testing (no application code under
+test); every migration *except* Phase 4's `service_role` revoke — in particular revoking the
+`authenticated` default schema-wide and dropping the `graphql_public` exposure both stay out; a test that
+creates a table to observe default-privilege inheritance; changing `listSummaries` / `getBalance`;
+refreshing `test-plan.md` §2 (already backported 2026-09-05).
 
 ## Architecture / Approach
 
@@ -80,15 +91,16 @@ filters, and the probe cannot see a table that does not exist yet.
 
 | Phase | What it delivers | Key risk |
 | --- | --- | --- |
-| 1. Catalog invariant | `authorization-invariants.int.test.ts` + dated cloud record | The roster decays into a mirror of the catalog if entries lose their source citations |
+| 1. Catalog invariant ✅ | `authorization-invariants.int.test.ts` + dated cloud record | The roster decays into a mirror of the catalog if entries lose their source citations |
 | 2. Two-account policy probe | `cross-account-policy.int.test.ts` | Accidentally asserting through `listSummaries`/`getBalance`, whose `.eq("user_id", …)` masks the very regression under test |
 | 3. Replay boundary case | One case in `generate.db.int.test.ts` | Two accounts in the paid-path harness — the first double-account teardown, where a leaked `auth.users` row aborts the *next* run |
-| 4. Cookbook + docs + sync | §6.3, §6.6, status, `CLAUDE.md`/`AGENTS.md`/`README.md`, MAR-21 | `CLAUDE.md` and `AGENTS.md` silently diverging |
+| 4. `service_role` revoke | One migration + invariant 8's message | A **production** schema change whose local run proves nothing — the whole verification is `db push` plus a re-read of the cloud grants and one real generation |
+| 5. Cookbook + docs + sync | §6.3, §6.6, §6.2 correction, status, `CLAUDE.md`/`AGENTS.md`/`README.md`, MAR-21 | `CLAUDE.md` and `AGENTS.md` silently diverging |
 
-**Prerequisites:** local Supabase stack running (`npx supabase start`); all five env keys set; read access
-to the cloud project's SQL editor for Phase 1's manual step.
-**Estimated effort:** ~2 sessions across 4 phases; Phases 1 and 2 are the bulk, Phase 3 is one test,
-Phase 4 is documentation.
+**Prerequisites:** local Supabase stack running (`npx supabase start`); all five env keys set; access to
+the cloud project's SQL editor for Phase 1's manual step, and push rights for Phase 4.
+**Estimated effort:** ~2 sessions across 5 phases; Phases 1 and 2 are the bulk, Phase 3 is one test,
+Phase 4 is one statement with a real deploy behind it, Phase 5 is documentation.
 
 ## Open Risks & Assumptions
 
@@ -97,8 +109,14 @@ Phase 4 is documentation.
 - **The cloud half is verified once, by hand, and then goes stale.** The per-table roster is the
   environment-independent guard; a direct change to cloud default privileges outside a migration is not
   covered by anything.
-- **If Phase 1's cloud read shows the cloud grants diverging from the roster, that is a live production
-  finding**, not a test-design question — it must be reported before Phase 2 starts.
+- **The cloud read did find a divergence** (2026-09-06): `service_role` holds full DML on the nine
+  internal tables in production. Not a guardrail breach — `service_role` bypasses RLS anyway and is
+  server-only — but the defence-in-depth property `db-owner.ts` and §6.2 both assert has never held on
+  cloud. Phase 4 closes it; until it lands, invariant 8 is environment-dependent.
+- **Phase 4's migration is assumed behaviour-neutral on the strength of a static reading** — no
+  `.from(<internal table>)` anywhere in `src/`/`scripts/`, and `SECURITY DEFINER` executes as the owner.
+  A path research missed would fail only in production, which is why a real generation run is a manual
+  criterion rather than a nicety.
 - **Two concurrent synthetic accounts are unexercised today.** Nothing blocks them (fresh UUID email,
   per-call cookie jar), but Phase 2 is the first user, so double teardown is new ground.
 - The `graphql_public` `graphql` function is assumed stable across pg_graphql upgrades on the strength of

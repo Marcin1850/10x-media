@@ -39,8 +39,10 @@ import { getDbOwnerConnection } from "./db-owner";
  * **Environment boundary — read this before trusting invariant 9.** Invariant 9 pins the *local*
  * default ACL only. Cloud diverges: `20260714140000:8-16` records that the cloud project grants
  * `authenticated` ALL on new tables while the local stack grants only `Dxtm`
- * (TRUNCATE/REFERENCES/TRIGGER/MAINTAIN — no DML). The cloud values are re-verified and dated in
- * `context/changes/testing-phase-3-data-boundary/docs/cloud-default-privileges.md`. What makes that
+ * (TRUNCATE/REFERENCES/TRIGGER/MAINTAIN — no DML). Re-verified against the cloud project on
+ * 2026-09-06 and recorded in `context/changes/testing-phase-3-data-boundary/plan.md`, "Cloud
+ * verification pass" — where it turned out to be wider than the migration says: cloud also grants
+ * `authenticated` EXECUTE on new *functions*, which local defaults do not. What makes that
  * gap tolerable is that invariants 1 and 4 are environment-independent: a table added without its
  * per-table tightening shows a stray `Dxtm` for `authenticated` locally and full CRUD on cloud, and
  * either way invariant 4 goes red. Note also that the local `pg_default_acl` carries a second,

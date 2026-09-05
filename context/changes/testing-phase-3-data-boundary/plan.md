@@ -15,6 +15,14 @@ artifacts, in descending value per unit of cost:
 Then the documentation this phase owes: `test-plan.md` §6.3 has read "TBD — see §3 Phase 3" since the
 plan was written.
 
+**Plus one phase this plan did not originally have.** Implementing artifact 1 forced a re-verification
+of the cloud project's privileges, and that pass found a live production divergence: `service_role`
+holds full DML on all nine internal tables on cloud and none locally, because every migration's
+`revoke` names `public, anon, authenticated` and stops there. Phase 4 closes it. That is the rollout
+working as intended — the phase's premise was that per-table tightening is a convention with no
+enforcement point, and the first thing the enforcement point found was an un-tightened role in
+production.
+
 ## Current State Analysis
 
 `research.md` (2026-09-05, commit `2772302`) mapped the whole surface. What matters here:
@@ -62,6 +70,73 @@ plan was written.
   it. No maintained exclusion list is needed.
 - Seed-insert shape: the only `NOT NULL`-without-default columns are `videos(user_id, url, youtube_id)`
   and `summaries(user_id, video_id, character, content)`.
+
+## Cloud verification pass (2026-09-06)
+
+Phase 1 owed a re-verification of the one fact the whole risk framing rests on — that the cloud
+project's default privileges differ from the local stack's — because the catalog test can only ever
+read local state (CI must not hold production credentials). Four read-only `pg_catalog` queries were
+run against project `10x-media`, branch `main`, as role `postgres`. Roles and privileges only; no
+account identifier was read or recorded (`lessons.md`).
+
+**The claim in `20260714140000:8-16` holds, and the divergence is wider than that migration records.**
+Grantor `postgres`, schema `public`:
+
+| objtype | cloud | local | consequence |
+| --- | --- | --- | --- |
+| `r` tables | `authenticated=arwdDxtm` | `authenticated=Dxtm` | a new table lands with full CRUD for `authenticated` on cloud, no DML locally |
+| `f` functions | `authenticated=X` | *(absent)* | a new function lands EXECUTE-able by `authenticated` on cloud |
+| `S` sequences | `authenticated=rwU` | `authenticated=w` | cloud adds SELECT/USAGE |
+
+The function row is new information — `20260714140000` recorded only the table half. It compounds the
+implicit-ACL finding below: on cloud a migration that forgets its function `revoke` is exposed twice,
+by the `PUBLIC` default *and* by the `authenticated` default.
+
+`anon` is absent from all three `postgres`/`public` rows, so `20260714140000:41-43` is doing its job in
+production. (`supabase_admin`'s `public` defaults do list `anon`, but they never apply to objects
+migrations create.)
+
+**Everything the roster asserts about `anon` and `authenticated` matches production exactly** — the
+same twelve base tables, RLS on all of them, the five owner-scoped `auth.uid() = user_id` policies,
+`authenticated` at `{DELETE,SELECT}` / `{DELETE,SELECT}` / `{SELECT}` on `videos`/`summaries`/
+`user_credits` and nothing on the nine internal tables, `anon` holding nothing anywhere, and zero
+`public` functions EXECUTE-able by either role. Invariants 1–7 would pass unchanged against cloud.
+
+### The finding: `service_role` holds full DML on all nine internal tables in production
+
+Invariant 8 asserts `service_role` holds no `SELECT/INSERT/UPDATE/DELETE` on the nine internal tables.
+True locally; **false on cloud**, where it holds all four on every one of them.
+
+**Cause.** Each internal table's migration runs `revoke all on table … from public, anon,
+authenticated` — never from `service_role`. Locally that suffices, because the local default hands
+`service_role` only `Dxtm`. On cloud the default hands it `arwdDxtm`, so the privilege survives.
+
+**Consequences, stated precisely:**
+
+- The intent recorded in `src/test/db-owner.ts:6-11` and `test-plan.md` §6.2 — "these tables
+  deliberately grant `service_role` no direct table privileges; the app reaches them exclusively
+  through `SECURITY DEFINER` RPCs" — describes the **local stack only**. In production it has never
+  held.
+- It is **not** a breach of the PRD privacy guardrail. `service_role` carries `rolbypassrls` and is a
+  server-only secret that no client reaches. The property lost is defence in depth, not isolation.
+- It changes the reading of `d8f37f1` → `e0fdb0d`. Reverting `20260904130000_test_support_grants.sql`
+  was still right — it kept intent explicit and kept the harness off the production privilege surface
+  — but its stated rationale ("permanently widens what the production request-path secret can do") did
+  not hold: on cloud those four tables already granted `service_role` everything.
+- **Invariant 8 is environment-dependent**, passing locally for a reason that does not obtain in
+  production. Phase 4 exists to close that gap.
+
+**The implicit-ACL finding this pass extends.** The local `f` default row reads `{postgres=X/postgres}`
+— `anon` absent, exactly as `20260714140000:41-43` intends — but it does not behave as that row
+suggests. Verified locally in a rolled-back transaction: a function created by `postgres` in `public`
+lands with `proacl = NULL`, and `has_function_privilege('anon', …, 'EXECUTE')` returns **true**,
+because a NULL function ACL means the built-in default, which is EXECUTE to `PUBLIC`. So a migration
+that forgets `revoke all on function … from public, anon, authenticated` leaves that function
+client-callable in **both** environments — and on cloud the `authenticated=X` default grants it a
+second time, so revoking `PUBLIC` alone would not be enough there. That is why invariant 5 goes
+through `has_function_privilege` rather than `aclexplode(proacl)`: the ACL-array form cannot see a
+`PUBLIC` grant (grantee oid 0 joins to no role) and would have passed. The current production surface
+is clean — zero such functions — and invariant 5 is what keeps it that way.
 
 ## Desired End State
 
@@ -236,21 +311,23 @@ stack, so it would have to be mirrored in the cloud project's API settings or it
 local/cloud divergence this phase exists to pin down.
 
 The file header states the environment boundary explicitly: assertion 9 pins the **local** default ACL
-only, the cloud value is recorded in `docs/cloud-default-privileges.md`, and assertions 1 and 4 are the
-environment-independent guard that makes that gap tolerable.
+only, the cloud values are recorded in this plan's "Cloud verification pass" section, and assertions 1
+and 4 are the environment-independent guard that makes that gap tolerable.
 
-#### 2. The cloud divergence record
+#### 2. The cloud divergence check
 
-**File**: `context/changes/testing-phase-3-data-boundary/docs/cloud-default-privileges.md` (new)
+**Where it lands**: this plan's **"Cloud verification pass (2026-09-06)"** section, above. Deliberately
+not a separate file — a one-off verification record with no consumer of its own belongs where the
+decisions it feeds already live, and Phase 4 is one of those decisions.
 
 **Intent**: Re-verify and date the 2026-07-14 claim that the cloud project's default privileges grant
 `authenticated` `ALL` on new tables — the fact the entire risk framing rests on — and confirm the cloud
 project's per-table ACLs match the roster Phase 1 commits.
 
-**Contract**: Two read-only queries run by hand in the cloud project's SQL editor, with their verbatim
-output, the date, and a one-line verdict against `20260714140000:8-16`. Per `lessons.md` ("Never commit
-account identifiers from a real-environment pass"), the record carries **no** email, `user_id`, token or
-key — roles and privileges only. Queries:
+**Contract**: Read-only queries run by hand in the cloud project's SQL editor, with the date and a
+verdict against `20260714140000:8-16`. Per `lessons.md` ("Never commit account identifiers from a
+real-environment pass"), the record carries **no** email, `user_id`, token or key — roles and
+privileges only. Queries:
 
 ```sql
 -- 1. default privileges: does `authenticated` still get ALL on new tables?
@@ -281,8 +358,8 @@ group by 1, 2 order by 1, 2;
 
 #### Manual Verification:
 
-- The two queries above are run against the cloud project and their output recorded in
-  `docs/cloud-default-privileges.md`, with the date and the verdict against `20260714140000:8-16`
+- The queries above are run against the cloud project and their outcome recorded in this plan's
+  "Cloud verification pass" section, with the date and the verdict against `20260714140000:8-16`
 - The record contains no account identifiers (`lessons.md`)
 - If cloud's per-table grants diverge from the roster, that divergence is reported before Phase 2 starts —
   it would be a live finding, not a test-design question
@@ -442,7 +519,96 @@ load-bearing: `cleanupCaches(youtubeId)` once, then each account's `dispose([you
 
 ---
 
-## Phase 4: Cookbook, project docs, and status sync
+## Phase 4: Close the `service_role` divergence the tests exposed
+
+### Overview
+
+**This phase was not in the original plan.** It exists because Phase 1's catalog invariant, plus the
+cloud pass it forced, surfaced a live production divergence that no local test can see: `service_role`
+holds full DML on all nine internal tables on cloud, and none locally (see "Cloud verification pass"
+above). Invariant 8 therefore passes locally for a reason that does not obtain in production, and the
+intent recorded in `db-owner.ts` and `test-plan.md` §6.2 describes only the local stack.
+
+This is the test rollout doing its job: the phase's whole argument was that per-table tightening is a
+convention with no enforcement point, and the first thing the enforcement point found was an
+un-tightened role in production. Fixing it makes invariant 8 mean the same thing in both environments,
+which is what turns it from a local curiosity into coverage.
+
+The earlier "no production schema change" boundary applied to *test-harness convenience* — the
+`d8f37f1` failure mode, where a migration widened privileges so a test could reach past an RPC. This
+change is its opposite: it narrows privileges to match documented intent, and no test needs it to pass.
+
+### Changes Required:
+
+#### 1. The revoke
+
+**File**: `supabase/migrations/<YYYYMMDDHHmmss>_revoke_service_role_internal_tables.sql` (new)
+
+**Intent**: Bring production in line with the design every internal table's migration states — reachable
+only through `SECURITY DEFINER` RPCs — by removing the table privileges the cloud default privileges
+handed `service_role` and no migration ever revoked.
+
+**Contract**: One statement, revoking every table privilege from `service_role` on the nine tables in
+`INTERNAL`:
+
+```sql
+revoke all on table
+  public.generation_locks, public.credit_reservations,
+  public.transcript_fetch_attempts, public.transcript_quotes,
+  public.transcript_cache, public.supadata_calls,
+  public.metadata_cache, public.supadata_budget,
+  public.supadata_reservations
+from service_role;
+```
+
+The header must record: that this is a **cloud-only correction** (locally it is a near-no-op — the local
+default grants `service_role` only `Dxtm`, so only that is removed); that `service_role` keeps `EXECUTE`
+on every RPC and needs nothing else; and the `20260714140000:8-16` divergence that caused it, so a
+future reader does not mistake the revoke for a tightening that was always in force.
+
+**Why it should be behaviour-neutral**: no `.from(<internal table>)` exists anywhere in `src/` or
+`scripts/` (research.md §6) — every path goes through a `SECURITY DEFINER` function, which executes as
+the table owner (`postgres`), not as the caller. The test harness already reaches these tables through
+`getDbOwnerConnection()`, which is a table-owner connection and unaffected.
+
+#### 2. Make invariant 8 say what it now means
+
+**File**: `src/test/authorization-invariants.int.test.ts` (extend)
+
+**Intent**: The invariant's message and the file header currently frame `service_role` DML as a
+regression that "would have caught `20260904130000`". After this migration that is true in both
+environments; before it, it was true only locally. Record the distinction so the next reader does not
+re-derive it.
+
+**Contract**: Extend invariant 8's failure message and the file header with the cloud finding, its date,
+and the migration that closed it. No assertion changes — the invariant already asserts the right thing;
+what changes is that production now satisfies it too.
+
+### Success Criteria:
+
+#### Automated Verification:
+
+- `npx supabase migration up` applies cleanly against the local stack
+- `npm run test:integration` passes — invariant 8 still green locally (the migration removes `Dxtm`
+  there, which the invariant does not assert)
+- `npm run lint` and `npm run typecheck` pass
+
+#### Manual Verification:
+
+- `npx supabase db push` applied to the cloud project
+- Query 2 from the cloud pass re-run against cloud: `service_role` returns **no rows** for the nine
+  internal tables, and the three client-readable tables are unchanged
+- A full generation run against production succeeds end to end — the only way to prove no RPC path
+  reaches those tables as `service_role` by a route research.md §6 did not find
+- `anon` and `authenticated` grants unchanged on cloud (the revoke names `service_role` only)
+
+**Implementation Note**: Pause for manual confirmation before proceeding to Phase 5. The cloud push is
+the load-bearing step here — a green local run proves almost nothing, because locally the migration is
+a near-no-op.
+
+---
+
+## Phase 5: Cookbook, project docs, and status sync
 
 ### Overview
 
@@ -469,13 +635,19 @@ given new assertion belongs in.
 
 **File**: `context/foundation/test-plan.md`
 
-**Intent**: Reflect that Phase 3 shipped, and record what it taught so Phase 4 does not rediscover it.
+**Intent**: Reflect that Phase 3 shipped, and record what it taught so the next rollout phase does not
+rediscover it.
 
 **Contract**: §3's Phase 3 row Status → `complete`. §5's integration row drops "authorization is still §3
 Phase 3". A §6.6 "Phase 3" block records: the `Dxtm`-per-role asymmetry; that `pg_catalog` reads need no
 grant, which is why this phase applied no privilege pressure; the `graphql_public` finding (zero
-relations, one non-extension-owned function); and the roster's maintenance contract. §8 gains a dated
-entry.
+relations, one non-extension-owned function); the roster's maintenance contract; **the two findings the
+cloud pass produced** — that a function with no explicit ACL is EXECUTE-able by `PUBLIC`, which is why
+role assertions go through `has_*_privilege` and not `aclexplode`, and the `service_role` divergence
+Phase 4 closed; and **the rule those two share**: an invariant that reads a *default* privilege pins
+only the environment it runs in, so the assertions that carry the guarantee must be the per-object ones.
+§6.2's "these tables deliberately grant `service_role` no direct table privileges" is corrected in the
+same pass — true in both environments only from Phase 4 onward. §8 gains a dated entry.
 
 #### 3. Agent-facing rules
 
@@ -493,7 +665,11 @@ bullet currently reads "Always enable RLS on new tables with granular per-operat
 the schema uses **two** mechanisms, and for internal tables the second is the correct one — RLS on,
 `revoke all from public, anon, authenticated`, zero policies. Rewrite it to name both and say which
 applies when, and add that a new table must be classified in
-`src/test/authorization-invariants.int.test.ts`'s roster or the integration suite fails.
+`src/test/authorization-invariants.int.test.ts`'s roster or the integration suite fails. The revoke list
+must now read `public, anon, authenticated, service_role` for an internal table — Phase 4's finding is
+that omitting `service_role` leaves the cloud default in place, and the omission is invisible locally.
+Same for a new function: `revoke all on function … from public, anon, authenticated` is required, and
+`public` is the load-bearing word — without it the function is client-callable in both environments.
 
 #### 4. README
 
@@ -560,9 +736,12 @@ None. Nothing here is a pure function; the subject is catalog state and policy b
    red with a message naming the object. For Phase 2, broaden `summaries_select_authenticated`'s `using`
    clause to `true` in a rolled-back transaction; the unfiltered-list row must go red. Revert every probe.
    A test that has never been seen red is not evidence.
-2. **Run the cloud queries** from Phase 1 and record their output, stripped of account identifiers.
+2. **Run the cloud queries** from Phase 1 and record their outcome, stripped of account identifiers.
 3. **Run `npm run test:integration` twice in a row.** The second run passing is the cleanup assertion.
 4. **Check Supabase Studio's Auth panel** for surviving `synthetic-db-int-` accounts.
+5. **After Phase 4's `db push`, re-run the cloud pass's Query 2** and confirm `service_role` returns no
+   rows for the nine internal tables, then drive one full generation against production. Phase 4 is the
+   only step here whose local run is not evidence.
 
 ## Performance Considerations
 
@@ -573,9 +752,16 @@ relative cost is negligible.
 
 ## Migration Notes
 
-No migration. This phase deliberately adds no SQL — its whole argument is that test-harness needs must
-not apply pressure on production privileges (`d8f37f1` → `e0fdb0d`), and `pg_catalog` reads need no
-grant.
+**One migration, added mid-flight (Phase 4), and it is the opposite of the thing this phase forbids.**
+Phases 1-3 add no SQL: their whole argument is that test-harness needs must not apply pressure on
+production privileges (`d8f37f1` → `e0fdb0d`), and `pg_catalog` reads need no grant. Phase 4's migration
+is not harness pressure — it *narrows* `service_role` to match what every internal table's own migration
+already claims, and no test needs it to pass. It exists because the catalog invariant found a real
+divergence, which is the enforcement point working as designed.
+
+It is a **cloud-only correction in effect**: locally it removes `Dxtm` (which nothing asserts), on cloud
+it removes full CRUD. So a green local run proves almost nothing — `db push` plus a re-run of the cloud
+pass's Query 2 is the verification that counts.
 
 ## References
 
@@ -598,17 +784,17 @@ grant.
 
 #### Automated
 
-- [x] 1.1 `npm run test:integration` passes with the new file green
-- [x] 1.2 `npm run lint` passes
-- [x] 1.3 `npm run typecheck` passes
-- [x] 1.4 A dropped roster entry makes assertion 1 fail naming the table (reverted)
-- [x] 1.5 A temporary `grant select on transcript_cache to authenticated` makes assertion 4 fail (reverted)
+- [x] 1.1 `npm run test:integration` passes with the new file green — bd136af
+- [x] 1.2 `npm run lint` passes — bd136af
+- [x] 1.3 `npm run typecheck` passes — bd136af
+- [x] 1.4 A dropped roster entry makes assertion 1 fail naming the table (reverted) — bd136af
+- [x] 1.5 A temporary `grant select on transcript_cache to authenticated` makes assertion 4 fail (reverted) — bd136af
 
 #### Manual
 
-- [ ] 1.6 Cloud default-privilege and per-table-grant queries run and recorded in `docs/cloud-default-privileges.md` with date and verdict
-- [ ] 1.7 The record contains no account identifiers
-- [ ] 1.8 Any divergence between cloud grants and the roster reported before Phase 2 starts
+- [x] 1.6 Cloud default-privilege and per-table-grant queries run and recorded in the plan's "Cloud verification pass" section with date and verdict
+- [x] 1.7 The record contains no account identifiers
+- [x] 1.8 Any divergence between cloud grants and the roster reported before Phase 2 starts
 
 ### Phase 2: Two-account policy probe
 
@@ -638,17 +824,32 @@ grant.
 - [ ] 3.5 `supadata_budget` row count unchanged before and after the run
 - [ ] 3.6 No `sdbtest0010` row survives in `transcript_cache` or `metadata_cache`
 
-### Phase 4: Cookbook, project docs, and status sync
+### Phase 4: Close the `service_role` divergence the tests exposed
 
 #### Automated
 
-- [ ] 4.1 `npm run lint` passes
-- [ ] 4.2 `npm run typecheck` and `npm run typecheck:astro` pass
-- [ ] 4.3 `npm test` and `npm run test:integration` both pass
-- [ ] 4.4 `CLAUDE.md` and `AGENTS.md` `## Testing` / `## Conventions` sections show no divergence
+- [ ] 4.1 `npx supabase migration up` applies the revoke cleanly against the local stack
+- [ ] 4.2 `npm run test:integration` passes — invariant 8 still green locally
+- [ ] 4.3 `npm run lint` and `npm run typecheck` pass
 
 #### Manual
 
-- [ ] 4.5 §6.3 is usable without re-reading the test files
-- [ ] 4.6 MAR-21 carries a comment per phase and no stale `Next:` pointer
-- [ ] 4.7 `test-plan.md` §3's Phase 3 row and §5's integration row agree
+- [ ] 4.4 `npx supabase db push` applied to the cloud project
+- [ ] 4.5 Cloud Query 2 re-run: `service_role` returns no rows for the nine internal tables
+- [ ] 4.6 `anon` and `authenticated` grants unchanged on cloud
+- [ ] 4.7 One full generation run against production succeeds end to end
+
+### Phase 5: Cookbook, project docs, and status sync
+
+#### Automated
+
+- [ ] 5.1 `npm run lint` passes
+- [ ] 5.2 `npm run typecheck` and `npm run typecheck:astro` pass
+- [ ] 5.3 `npm test` and `npm run test:integration` both pass
+- [ ] 5.4 `CLAUDE.md` and `AGENTS.md` `## Testing` / `## Conventions` sections show no divergence
+
+#### Manual
+
+- [ ] 5.5 §6.3 is usable without re-reading the test files
+- [ ] 5.6 MAR-21 carries a comment per phase and no stale `Next:` pointer
+- [ ] 5.7 `test-plan.md` §3's Phase 3 row and §5's integration row agree
