@@ -614,15 +614,15 @@ grant.
 
 #### Automated
 
-- [ ] 2.1 `npm run test:integration` passes with the new file green
-- [ ] 2.2 `npm run lint` and `npm run typecheck` pass
-- [ ] 2.3 A second consecutive `npm run test:integration` passes (cleanup proven)
-- [ ] 2.4 Broadening `summaries_select_authenticated`'s `using` to `true` turns the unfiltered-list row red (reverted)
+- [x] 2.1 `npm run test:integration` passes with the new file green
+- [x] 2.2 `npm run lint` and `npm run typecheck` pass
+- [x] 2.3 A second consecutive `npm run test:integration` passes (cleanup proven)
+- [x] 2.4 Broadening `summaries_select_authenticated`'s `using` to `true` turns the unfiltered-list row red (reverted)
 
 #### Manual
 
-- [ ] 2.5 No `synthetic-db-int-` accounts survive in Supabase Studio's Auth panel
-- [ ] 2.6 Non-synthetic `videos`/`summaries` row counts unchanged
+- [x] 2.5 No `synthetic-db-int-` accounts survive in Supabase Studio's Auth panel
+- [x] 2.6 Non-synthetic `videos`/`summaries` row counts unchanged
 
 ### Phase 3: Replay boundary case
 
