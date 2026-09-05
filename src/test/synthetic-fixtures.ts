@@ -10,6 +10,11 @@
  * Every phase that seeds `transcript_cache` or `metadata_cache` with a synthetic video id must add
  * it here first. Populated in Phase 5 — one id per `generate.db.int.test.ts` scenario, each of which
  * seeds and then cleans up both caches for its own id (never shared across tests).
+ *
+ * Conversely, a synthetic id that never reaches either cache does NOT belong here — the omission is
+ * the correct state, not an oversight. `cross-account-policy.int.test.ts`'s `xacct*` ids are the
+ * standing example: they exist only on per-user `videos`/`summaries` rows, which leave with
+ * `dispose()`'s `auth.users` cascade, so a guard keyed on them would watch a table they never touch.
  */
 export const DB_LAYER_YOUTUBE_IDS = {
   success: "sdbtest0001",
