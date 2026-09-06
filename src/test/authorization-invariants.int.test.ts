@@ -23,6 +23,20 @@ import { getDbOwnerConnection } from "./db-owner";
  * `d8f37f1` and was reverted in `e0fdb0d` by human impl-review — no test caught it. Invariant 8
  * would have.
  *
+ * **Invariant 8 was environment-dependent until 2026-09-06, and closing that gap is what turned it
+ * into coverage.** The cloud pass Phase 1 forced (plan.md, "Cloud verification pass", 2026-09-06)
+ * found `service_role` holding all four DML verbs on all nine internal tables in production and none
+ * locally. Cause: every internal table's migration revokes from `public, anon, authenticated` and
+ * stops there, which suffices only against the local default of `Dxtm`; the cloud default hands
+ * `service_role` `arwdDxtm`, so the privilege survived. Invariant 8 therefore passed here for a
+ * reason that did not obtain there, and the intent recorded in `db-owner.ts:6-11` and test-plan §6.2
+ * described the local stack only. `20260906120000_revoke_service_role_internal_tables.sql` closed
+ * it. The assertion below did not change — it always asserted the right thing; what changed is that
+ * production now satisfies it too, so a red run means the same thing in both environments. The rule
+ * this shares with the implicit-ACL finding above: an invariant that holds because of a *default*
+ * privilege pins only the environment it runs in, so the guarantee has to be carried by the
+ * per-object assertions.
+ *
  * **This test applies no privilege pressure of its own** — the mistake `d8f37f1` made. It reads
  * `pg_class` / `pg_policy` / `pg_proc` / `pg_default_acl` / `pg_namespace` through
  * `getDbOwnerConnection()` (`db-owner.ts:22`), and `pg_catalog` needs no grant. It creates nothing,
@@ -365,14 +379,18 @@ describe("public schema authorization invariants", () => {
     expect(
       dml,
       "`service_role` gained direct DML on an internal table. These are reached exclusively through " +
-        "SECURITY DEFINER RPCs; a direct grant permanently widens what the production request-path " +
-        "secret can do. This is exactly what 20260904130000_test_support_grants.sql did for a test " +
-        "harness's convenience (`d8f37f1`, reverted in `e0fdb0d`) — reach around the boundary with " +
+        "SECURITY DEFINER RPCs; a direct grant widens what the production request-path secret can do. " +
+        "This is exactly what 20260904130000_test_support_grants.sql did for a test harness's " +
+        "convenience (`d8f37f1`, reverted in `e0fdb0d`) — reach around the boundary with " +
         "`getDbOwnerConnection()` instead of widening it. Defence in depth, not the PRD guardrail: " +
         "`service_role` carries rolbypassrls anyway. Only SELECT/INSERT/UPDATE/DELETE are asserted — " +
         "`service_role` legitimately inherits MAINTAIN/REFERENCES/TRIGGER/TRUNCATE from the local " +
         "defaults on all nine (research.md §1, precision note), so a zero-privileges assertion would go " +
-        "red today for the wrong reason.",
+        "red today for the wrong reason. THIS INVARIANT ONLY BECAME ENVIRONMENT-INDEPENDENT ON " +
+        "2026-09-06: until 20260906120000_revoke_service_role_internal_tables.sql it passed here for a " +
+        "reason that did not obtain on cloud, where the default privileges had handed `service_role` " +
+        "all four verbs on all nine tables and no migration's `revoke ... from public, anon, " +
+        "authenticated` ever named it. A new internal table must revoke from `service_role` too.",
     ).toEqual(expected);
   });
 

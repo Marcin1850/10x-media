@@ -814,30 +814,30 @@ pass's Query 2 is the verification that counts.
 
 #### Automated
 
-- [x] 3.1 `npm run test:integration` passes with the new case green
-- [x] 3.2 `npm run lint` and `npm run typecheck` pass
-- [x] 3.3 A second consecutive `npm run test:integration` passes (no stale `sdbtest0010` row, no stale account)
-- [x] 3.4 The mocked `summarize` is called twice, confirming B generated rather than replayed
+- [x] 3.1 `npm run test:integration` passes with the new case green — bb5e6b1
+- [x] 3.2 `npm run lint` and `npm run typecheck` pass — bb5e6b1
+- [x] 3.3 A second consecutive `npm run test:integration` passes (no stale `sdbtest0010` row, no stale account) — bb5e6b1
+- [x] 3.4 The mocked `summarize` is called twice, confirming B generated rather than replayed — bb5e6b1
 
 #### Manual
 
-- [x] 3.5 `supadata_budget` row count unchanged before and after the run
-- [x] 3.6 No `sdbtest0010` row survives in `transcript_cache` or `metadata_cache`
+- [x] 3.5 `supadata_budget` row count unchanged before and after the run — bb5e6b1
+- [x] 3.6 No `sdbtest0010` row survives in `transcript_cache` or `metadata_cache` — bb5e6b1
 
 ### Phase 4: Close the `service_role` divergence the tests exposed
 
 #### Automated
 
-- [ ] 4.1 `npx supabase migration up` applies the revoke cleanly against the local stack
-- [ ] 4.2 `npm run test:integration` passes — invariant 8 still green locally
-- [ ] 4.3 `npm run lint` and `npm run typecheck` pass
+- [x] 4.1 `npx supabase migration up` applies the revoke cleanly against the local stack
+- [x] 4.2 `npm run test:integration` passes — invariant 8 still green locally
+- [x] 4.3 `npm run lint` and `npm run typecheck` pass
 
 #### Manual
 
-- [ ] 4.4 `npx supabase db push` applied to the cloud project
-- [ ] 4.5 Cloud Query 2 re-run: `service_role` returns no rows for the nine internal tables
-- [ ] 4.6 `anon` and `authenticated` grants unchanged on cloud
-- [ ] 4.7 One full generation run against production succeeds end to end
+- [x] 4.4 `npx supabase db push` applied to the cloud project
+- [x] 4.5 Cloud Query 2 re-run: `service_role` returns no rows for the nine internal tables
+- [x] 4.6 `anon` and `authenticated` grants unchanged on cloud
+- [x] 4.7 One full generation run against production succeeds end to end
 
 ### Phase 5: Cookbook, project docs, and status sync
 
