@@ -671,15 +671,15 @@ in the database. Deletions themselves are irreversible by design (no soft delete
 
 #### Automated
 
-- [x] 2.1 Integration suite passes against a running local stack: `npm run test:integration`
-- [x] 2.2 Both new files run in that suite: `delete.int.test.ts` (hermetic, six exits) and `delete.db.int.test.ts` (real stack)
-- [x] 2.3 Lint passes on the new files: `npm run lint`
-- [x] 2.4 Types pass: `npm run typecheck`
-- [x] 2.5 `authorization-invariants.int.test.ts` and `cross-account-policy.int.test.ts` still pass unchanged (no relation added, no grant changed)
+- [x] 2.1 Integration suite passes against a running local stack: `npm run test:integration` — 8a61a23
+- [x] 2.2 Both new files run in that suite: `delete.int.test.ts` (hermetic, six exits) and `delete.db.int.test.ts` (real stack) — 8a61a23
+- [x] 2.3 Lint passes on the new files: `npm run lint` — 8a61a23
+- [x] 2.4 Types pass: `npm run typecheck` — 8a61a23
+- [x] 2.5 `authorization-invariants.int.test.ts` and `cross-account-policy.int.test.ts` still pass unchanged (no relation added, no grant changed) — 8a61a23
 
 #### Manual
 
-- [x] 2.6 The balance assertion genuinely fails if broken: temporarily make the endpoint credit the user, confirm case 2 goes red, then revert. A test that cannot fail is not evidence.
+- [x] 2.6 The balance assertion genuinely fails if broken: temporarily make the endpoint credit the user, confirm case 2 goes red, then revert. A test that cannot fail is not evidence. — 8a61a23
 
 ### Phase 3: UI — the card control and the list state
 
