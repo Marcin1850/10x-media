@@ -19,6 +19,14 @@ import { stubDeleteFailing, stubDeleteRejecting, stubDeleting } from "@/lib/serv
  * that the service does not narrow the query itself. That another account genuinely cannot delete
  * your row is proved only by `delete.db.int.test.ts` (Phase 2, case 3), against a real database and
  * two real sessions.
+ *
+ * **Mutation check** (`npx stryker run --mutate "src/lib/services/summary-delete.ts"`, 2026-09-06):
+ * 11 mutants, 10 killed, 0 survived, 1 not covered. The uncovered one replaced the `?? []` fallback's
+ * empty array with a non-empty one, flipping a null payload from `false` to `true`. It was put to the
+ * standing question — would this change hurt a user or the business? — and the answer was yes: that is
+ * precisely the state a future edit dropping `.select("id")` produces, and it would make every delete
+ * answer 200, a denied cross-account one included. Covered by the null-payload row below rather than
+ * ignored. Nothing is ignored in this file today.
  */
 
 const SUMMARY_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
@@ -34,6 +42,16 @@ describe("deleteSummary", () => {
     // Under RLS this is both "already deleted" and "not yours" — indistinguishable here by design.
     // The endpoint turns it into a 404; treating it as an error would turn it into a 500.
     const stub = stubDeleting([]);
+
+    await expect(deleteSummary(stub.client, SUMMARY_ID)).resolves.toBe(false);
+  });
+
+  it("reads a null payload as nothing deleted, not as something", async () => {
+    // The shape PostgREST answers when no representation was requested — i.e. the exact state a
+    // future edit dropping `.select("id")` would produce. Reporting `true` here would make EVERY
+    // delete answer 200, a denied cross-account one included, which is why the fallback is not
+    // cosmetic. (Stryker's one no-coverage mutant on this line, now killed.)
+    const stub = stubDeleting(null);
 
     await expect(deleteSummary(stub.client, SUMMARY_ID)).resolves.toBe(false);
   });

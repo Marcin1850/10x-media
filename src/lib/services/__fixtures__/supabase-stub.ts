@@ -91,7 +91,12 @@ function queryStubFrom(select: Mock<(columns?: string) => Promise<unknown>>): Qu
 }
 
 /** PostgREST answered successfully — `rows` is what `.select()` reported as affected. */
-export function stubDeleting(rows: { id: string }[]): QueryStub {
+/**
+ * `null` is a distinct shape from `[]`, not a synonym for it: it is what PostgREST answers when no
+ * representation was requested — a `DELETE` whose `.select()` was dropped. Both must read as "nothing
+ * was deleted", so the caller's `?? []` fallback needs a stub that can produce it.
+ */
+export function stubDeleting(rows: { id: string }[] | null): QueryStub {
   return queryStubFrom(vi.fn<(columns?: string) => Promise<unknown>>().mockResolvedValue({ data: rows, error: null }));
 }
 
