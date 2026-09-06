@@ -4,7 +4,7 @@
 - **Plan**: `context/changes/delete-summary/plan.md`
 - **Mode**: Deep
 - **Date**: 2026-09-06
-- **Verdict**: REVISE
+- **Verdict**: REVISE → **SOUND** after triage (all 7 findings fixed, 2026-09-06)
 - **Findings**: 2 critical, 4 warnings, 1 observation
 
 ## Verdicts
@@ -37,7 +37,7 @@ The requested skill's own `references/progress-format.md` is missing, so the equ
   - Tradeoff: Adds a research pass before implementation can begin.
   - Confidence: HIGH — the repository's AGENTS.md states this requirement explicitly.
   - Blind spot: Research may reveal additional plan changes.
-- **Decision**: PENDING
+- **Decision**: FIXED — research pass scoped to the test oracle (`research.md`), per user direction
 
 ### F2 — Progress titles violate the mechanical contract
 
@@ -47,7 +47,7 @@ The requested skill's own `references/progress-format.md` is missing, so the equ
 - **Location**: `## Progress`
 - **Detail**: The structure is correct—one bottom-level Progress section, three matching phases, and all 29 rows—but 15 Progress titles are shortened versions of their corresponding Success Criteria. The review skill requires matching titles because `/10x-implement` treats this as a mechanical contract. Examples include 1.6, 1.9, 2.1, 2.4–2.5, and 3.7, 3.9–3.13.
 - **Fix**: Make each Progress title match its Success Criteria bullet verbatim before the plan is reviewed and titles become immutable.
-- **Decision**: PENDING
+- **Decision**: FIXED — all 15 Progress titles rewritten verbatim
 
 ### F3 — Deleted-id state can be stale across asynchronous callbacks
 
@@ -66,7 +66,7 @@ The requested skill's own `references/progress-format.md` is missing, so the equ
   - Tradeoff: More refactoring for a small feature.
   - Confidence: HIGH — functional updates receive the latest combined state.
   - Blind spot: Generation bookkeeping must remain outside the reducer or be carefully integrated.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A — deleted-id set is an authoritative `useRef`, read after every await
 
 ### F4 — Endpoint validation and failure contracts lack automated coverage
 
@@ -85,7 +85,7 @@ The requested skill's own `references/progress-format.md` is missing, so the equ
   - Tradeoff: Leaves the handler's 503/500 response mappings unprotected.
   - Confidence: HIGH — the pattern already exists.
   - Blind spot: Service-to-response translation remains manual.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A — hermetic `delete.int.test.ts` added as Phase 2 item 1
 
 ### F5 — Phase 3 specifies unreachable UI and an incomplete error callback
 
@@ -95,7 +95,7 @@ The requested skill's own `references/progress-format.md` is missing, so the equ
 - **Location**: Phase 3 — Card and list contracts
 - **Detail**: The card is removed immediately when deletion starts, so its `deleting` prop and in-flight label can never render. Separately, the card promises that Cancel clears its parent-owned per-ID error, but its declared props provide no error-clear callback.
 - **Fix**: Preserve optimistic removal, remove the unreachable deleting state, prop, and copy, and add an `onClearDeleteError(id)` path through `SummaryList` to `SummaryCard`.
-- **Decision**: PENDING
+- **Decision**: FIXED — `deleting` prop/label dropped, `onClearDeleteError(id)` added through the list
 
 ### F6 — The branch phase is already stale
 
@@ -105,7 +105,7 @@ The requested skill's own `references/progress-format.md` is missing, so the equ
 - **Location**: Phase 1 — Branch
 - **Detail**: The plan, brief, and roadmap say the change is still on `master` and instruct implementation to create `delete-summary`. The current branch is already `delete-summary`, with plan commit `6e9740f`. Attempting to create it again will fail.
 - **Fix**: Mark the branch prerequisite satisfied or remove the implementation step, and synchronize the stale statements in `plan-brief.md` and `roadmap.md`.
-- **Decision**: PENDING
+- **Decision**: FIXED — Phase 1 branch step marked satisfied; `plan-brief.md` and `roadmap.md` synced
 
 ### F7 — Confirmation guidance is generalized beyond its source
 
@@ -115,4 +115,4 @@ The requested skill's own `references/progress-format.md` is missing, so the equ
 - **Location**: Key Discoveries
 - **Detail**: The plan says the account-deletion review established that confirmation must be enforced server-side, but the proposed summary endpoint accepts no confirmation. This is not necessarily a code defect: account deletion uses re-entered email as meaningful independent proof, while a boolean or repeated summary ID would add ceremony without protection.
 - **Fix**: Scope the discovery to high-blast-radius account erasure and explicitly document why per-card deletion uses inline UI confirmation only.
-- **Decision**: PENDING
+- **Decision**: FIXED — discovery scoped to account erasure; per-card rationale documented
