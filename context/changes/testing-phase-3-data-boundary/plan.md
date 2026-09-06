@@ -828,28 +828,28 @@ pass's Query 2 is the verification that counts.
 
 #### Automated
 
-- [x] 4.1 `npx supabase migration up` applies the revoke cleanly against the local stack
-- [x] 4.2 `npm run test:integration` passes — invariant 8 still green locally
-- [x] 4.3 `npm run lint` and `npm run typecheck` pass
+- [x] 4.1 `npx supabase migration up` applies the revoke cleanly against the local stack — 9545d57
+- [x] 4.2 `npm run test:integration` passes — invariant 8 still green locally — 9545d57
+- [x] 4.3 `npm run lint` and `npm run typecheck` pass — 9545d57
 
 #### Manual
 
-- [x] 4.4 `npx supabase db push` applied to the cloud project
-- [x] 4.5 Cloud Query 2 re-run: `service_role` returns no rows for the nine internal tables
-- [x] 4.6 `anon` and `authenticated` grants unchanged on cloud
-- [x] 4.7 One full generation run against production succeeds end to end
+- [x] 4.4 `npx supabase db push` applied to the cloud project — 9545d57
+- [x] 4.5 Cloud Query 2 re-run: `service_role` returns no rows for the nine internal tables — 9545d57
+- [x] 4.6 `anon` and `authenticated` grants unchanged on cloud — 9545d57
+- [x] 4.7 One full generation run against production succeeds end to end — 9545d57
 
 ### Phase 5: Cookbook, project docs, and status sync
 
 #### Automated
 
-- [ ] 5.1 `npm run lint` passes
-- [ ] 5.2 `npm run typecheck` and `npm run typecheck:astro` pass
-- [ ] 5.3 `npm test` and `npm run test:integration` both pass
-- [ ] 5.4 `CLAUDE.md` and `AGENTS.md` `## Testing` / `## Conventions` sections show no divergence
+- [x] 5.1 `npm run lint` passes
+- [x] 5.2 `npm run typecheck` and `npm run typecheck:astro` pass
+- [x] 5.3 `npm test` and `npm run test:integration` both pass
+- [x] 5.4 `CLAUDE.md` and `AGENTS.md` `## Testing` / `## Conventions` sections show no divergence
 
 #### Manual
 
-- [ ] 5.5 §6.3 is usable without re-reading the test files
-- [ ] 5.6 MAR-21 carries a comment per phase and no stale `Next:` pointer
-- [ ] 5.7 `test-plan.md` §3's Phase 3 row and §5's integration row agree
+- [x] 5.5 §6.3 is usable without re-reading the test files
+- [x] 5.6 MAR-21 carries a comment per phase and no stale `Next:` pointer
+- [x] 5.7 `test-plan.md` §3's Phase 3 row and §5's integration row agree
