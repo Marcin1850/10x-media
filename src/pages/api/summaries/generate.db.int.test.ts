@@ -229,7 +229,8 @@ async function withAccount(youtubeId: string, run: (account: SyntheticAccount) =
  * instead of failing the test that caused it. The inner `finally` runs the user-agnostic
  * `cleanupCaches` once — both accounts share the one `youtube_id` — before either account goes, so
  * `supadata_calls` rows (`on delete set null`) never outlive the `auth.users` row they point at and
- * orphan into the ledger sums (test-plan §6.2).
+ * orphan into the ledger sums (test-plan §6.2). It is itself wrapped so that a cache-cleanup failure
+ * still disposes B rather than leaking the row into the next run's stale-account guard.
  */
 async function withTwoAccounts(
   youtubeId: string,
@@ -241,8 +242,11 @@ async function withTwoAccounts(
     try {
       await run(accountA, accountB);
     } finally {
-      await cleanupCaches(youtubeId);
-      await accountB.dispose([youtubeId]);
+      try {
+        await cleanupCaches(youtubeId);
+      } finally {
+        await accountB.dispose([youtubeId]);
+      }
     }
   } finally {
     await accountA.dispose([youtubeId]);

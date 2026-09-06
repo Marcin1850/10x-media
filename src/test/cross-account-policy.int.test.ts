@@ -277,11 +277,13 @@ describe("cross-account data boundary (test-plan risk #4)", () => {
       expect(error, "The listSummaries embed shape failed outright as a signed-in account.").toBeNull();
       expect(
         data,
-        "The embed shape listSummaries actually issues (summary-list.ts:46-48) leaked across accounts. " +
-          "An embedded table is a SECOND policy evaluation — videos' own SELECT policy — so this row " +
-          "catches a videos regression the summaries-only probes above cannot: the parent could stay " +
-          `owner-scoped while the join hands over another account's video metadata (A seeded ` +
-          `${CROSS_ACCOUNT_YOUTUBE_IDS.accountA}).`,
+        "The embed shape listSummaries actually issues (summary-list.ts:46-48) returned the wrong " +
+          "rows. An embedded table is a SECOND policy evaluation — videos' own SELECT policy — and " +
+          "this row proves the production query survives it intact and owner-scoped. It is NOT an " +
+          "independent oracle for a broadened videos policy (impl-review.md F5): the composite " +
+          "ownership foreign key means B's visible summary can only reference B's video, so widening " +
+          "videos alone would not change this expectation. The unfiltered videos probe above is what " +
+          "catches that regression.",
       ).toEqual([{ id: b.summaryId, videos: { youtube_id: b.youtubeId } }]);
       expect(a.youtubeId, "Account A must hold a distinct video for the embed probe to mean anything.").toBe(
         CROSS_ACCOUNT_YOUTUBE_IDS.accountA,

@@ -125,9 +125,6 @@ const TABLE_PRIVILEGES = [
   "MAINTAIN",
 ] as const;
 
-/** The four verbs that move rows. The rest (`Dxtm`) is what the local defaults hand out — see invariant 8. */
-const DML_PRIVILEGES = ["SELECT", "INSERT", "UPDATE", "DELETE"] as const;
-
 /** `pg_policy.polcmd` codes. `*` is `for all`, which the roster deliberately has no shape for. */
 const POLICY_COMMANDS: Record<string, string> = {
   r: "SELECT",
@@ -246,9 +243,9 @@ describe("public schema authorization invariants", () => {
       "A relation in `public` is not classified in this file's roster (or a classified one vanished). " +
         "Classify it: add it to CLIENT_READABLE with the exact verbs `authenticated` needs and an " +
         "owner-scoped policy, or to INTERNAL — and confirm its migration runs `revoke all on table " +
-        "public.<name> from public, anon, authenticated`. This assertion is the enforcement point for " +
-        "the per-table tightening convention (20260714140000:36-40): on cloud, a new table without that " +
-        "revoke lands with full CRUD for `authenticated`.",
+        "public.<name> from public, anon, authenticated, service_role`. This assertion is the " +
+        "enforcement point for the per-table tightening convention (20260714140000:36-40): on cloud, " +
+        "a new table without that revoke lands with full CRUD for `authenticated`.",
     ).toEqual(ROSTER);
   });
 
@@ -301,8 +298,9 @@ describe("public schema authorization invariants", () => {
       actual,
       "`authenticated`'s privileges diverge from the roster. A table listed in INTERNAL must show NO " +
         "entry at all. A stray `MAINTAIN/REFERENCES/TRIGGER/TRUNCATE` set means the migration that " +
-        "created the table never ran its `revoke all ... from public, anon, authenticated` — locally " +
-        "that grants no DML, but the SAME omission on the cloud project grants full CRUD " +
+        "created the table never ran its `revoke all ... from public, anon, authenticated, " +
+        "service_role` — locally that grants no DML, but the SAME omission on the cloud project " +
+        "grants full CRUD " +
         "(20260714140000:8-16). Add the revoke, or, if the grant is intended, widen CLIENT_READABLE " +
         "here and give the verb a matching owner-scoped policy.",
     ).toEqual(expected);
@@ -364,37 +362,30 @@ describe("public schema authorization invariants", () => {
     ).toEqual(expected);
   });
 
-  it("8. service_role holds no DML on the internal tables", async () => {
+  it("8. service_role holds no privilege at all on the internal tables", async () => {
     const held = await effectiveTablePrivileges("service_role");
 
-    const dml = Object.fromEntries(
-      INTERNAL.map((table) => [
-        table,
-        (held.get(table) ?? []).filter((privilege) => (DML_PRIVILEGES as readonly string[]).includes(privilege)),
-      ]),
-    );
-
+    const actual = Object.fromEntries(INTERNAL.map((table) => [table, held.get(table) ?? []]));
     const expected = Object.fromEntries(INTERNAL.map((table) => [table, []]));
 
     expect(
-      dml,
-      "`service_role` gained direct DML on an internal table. These are reached exclusively through " +
-        "SECURITY DEFINER RPCs; a direct grant widens what the production request-path secret can do. " +
-        "This is exactly what 20260904130000_test_support_grants.sql did for a test harness's " +
-        "convenience (`d8f37f1`, reverted in `e0fdb0d`) — reach around the boundary with " +
-        "`getDbOwnerConnection()` instead of widening it. Defence in depth, not the PRD guardrail: " +
-        "`service_role` carries rolbypassrls anyway. Only SELECT/INSERT/UPDATE/DELETE are asserted — " +
-        "`service_role` legitimately inherits MAINTAIN/REFERENCES/TRIGGER/TRUNCATE from the local " +
-        "defaults on all nine (research.md §1, precision note), so a zero-privileges assertion would go " +
-        "red today for the wrong reason. THIS INVARIANT ONLY BECAME ENVIRONMENT-INDEPENDENT ON " +
-        "2026-09-06: until 20260906120000_revoke_service_role_internal_tables.sql it passed here for a " +
-        "reason that did not obtain on cloud, where the default privileges had handed `service_role` " +
-        "all four verbs on all nine tables and no migration's `revoke ... from public, anon, " +
-        "authenticated` ever named it. A new internal table must revoke from `service_role` too.",
+      actual,
+      "`service_role` holds a direct privilege on an internal table. These are reached exclusively " +
+        "through SECURITY DEFINER RPCs, so the contract is ZERO direct privilege — not merely no DML. A " +
+        "stray `MAINTAIN/REFERENCES/TRIGGER/TRUNCATE` set is the forgotten-revoke signal: the local " +
+        "default privileges hand out exactly that and no DML, but the SAME omission on the cloud " +
+        "project hands `service_role` all four DML verbs (`arwdDxtm`). That divergence was live in " +
+        "production until 20260906120000_revoke_service_role_internal_tables.sql, because every " +
+        "internal table's migration revoked from `public, anon, authenticated` and stopped there. A " +
+        "new internal table must run `revoke all on table public.<name> from public, anon, " +
+        "authenticated, service_role;`. Do not widen this for a test harness's convenience — " +
+        "20260904130000_test_support_grants.sql did (`d8f37f1`, reverted in `e0fdb0d`); reach around " +
+        "the boundary with `getDbOwnerConnection()` instead. Defence in depth, not the PRD guardrail: " +
+        "`service_role` carries rolbypassrls anyway.",
     ).toEqual(expected);
   });
 
-  it("9. anon is excluded from public's default privileges and graphql_public is empty", async () => {
+  it("9. anon is excluded from public's default privileges and graphql_public holds only graphql()", async () => {
     const [defaults, relations, functions] = await Promise.all([
       sql<{ objtype: string; acl: string }[]>`
         select d.defaclobjtype::text as objtype, d.defaclacl::text as acl
@@ -417,16 +408,34 @@ describe("public schema authorization invariants", () => {
       `,
     ]);
 
-    const mentioningAnon = defaults.filter((row) => row.acl.includes("anon=")).map((row) => row.objtype);
+    // Sorted in JS, not by the query: `order by` applies the database collation, which is not code-unit
+    // order, so the expectation below would be collation-dependent.
+    const objtypes = defaults.map((row) => row.objtype).sort();
 
     expect(
-      mentioningAnon,
+      objtypes,
+      "A `public` default-privilege row for grantor `postgres` is missing — the schema-wide revoke was " +
+        "removed rather than weakened. 20260714140000:41-43 writes one `pg_default_acl` row per object " +
+        "type (`r` tables, `S` sequences, `f` functions), and the no-`anon` assertion below is vacuous " +
+        "once a row is gone: an absent row means PostgreSQL's built-in defaults apply again. The `f` " +
+        "row is the load-bearing one — without it a function created with no explicit ACL falls back " +
+        "to implicit EXECUTE for PUBLIC, the exact exposure invariant 5 exists to catch. Existence is " +
+        "asserted before content for that reason. Re-apply the revoke in a migration.",
+    ).toEqual(["S", "f", "r"]);
+
+    const overreaching = defaults
+      .filter((row) => row.acl.includes("anon=") || row.acl.includes("{=") || row.acl.includes(",="))
+      .map((row) => `${row.objtype}: ${row.acl}`);
+
+    expect(
+      overreaching,
       "The schema-wide `anon` default-privilege revoke has been undone. " +
         "20260714140000:41-43 revokes tables, sequences and functions from `anon` for role `postgres` " +
         "(the role migrations run as) so the cloud defaults cannot re-grant ALL to `anon` on every " +
-        "future object. Re-apply it in a migration. Scoped to grantor `postgres` on purpose: the " +
-        "`supabase_admin` default ACLs in this schema do grant `anon` ALL, but they do not apply to " +
-        "objects migrations create.",
+        "future object. A grantee-less entry (`=...`) is PUBLIC, which reaches `anon` through role " +
+        "membership and is caught here too. Re-apply the revoke in a migration. Scoped to grantor " +
+        "`postgres` on purpose: the `supabase_admin` default ACLs in this schema do grant `anon` ALL, " +
+        "but they do not apply to objects migrations create.",
     ).toEqual([]);
 
     expect(
