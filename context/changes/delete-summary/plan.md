@@ -649,10 +649,10 @@ in the database. Deletions themselves are irreversible by design (no soft delete
 
 #### Automated
 
-- [ ] 1.1 The migration's function body differs from `20260723130000:78-205` in exactly one hunk, the comment block: `diff` shows nothing else
-- [ ] 1.2 Migration applies to a running local stack: `npx supabase migration up`
-- [ ] 1.3 `begin_generation` still reports `prosecdef` true, `search_path=''`, the same identity arguments, and EXECUTE for `service_role` only
-- [ ] 1.4 Integration suite still passes after the migration, `authorization-invariants.int.test.ts` included: `npm run test:integration`
+- [x] 1.1 The migration's function body differs from `20260723130000:78-205` in exactly one hunk, the comment block: `diff` shows nothing else — 8a73123
+- [x] 1.2 Migration applies to a running local stack: `npx supabase migration up` — 8a73123
+- [x] 1.3 `begin_generation` still reports `prosecdef` true, `search_path=''`, the same identity arguments, and EXECUTE for `service_role` only — 8a73123
+- [x] 1.4 Integration suite still passes after the migration, `authorization-invariants.int.test.ts` included: `npm run test:integration` — 8a73123
 - [ ] 1.5 Lint passes: `npm run lint`
 - [ ] 1.6 Types pass: `npm run typecheck`
 - [ ] 1.7 Astro types pass: `npm run typecheck:astro`
