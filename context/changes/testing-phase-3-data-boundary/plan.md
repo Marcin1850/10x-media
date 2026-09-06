@@ -814,15 +814,15 @@ pass's Query 2 is the verification that counts.
 
 #### Automated
 
-- [ ] 3.1 `npm run test:integration` passes with the new case green
-- [ ] 3.2 `npm run lint` and `npm run typecheck` pass
-- [ ] 3.3 A second consecutive `npm run test:integration` passes (no stale `sdbtest0010` row, no stale account)
-- [ ] 3.4 The mocked `summarize` is called twice, confirming B generated rather than replayed
+- [x] 3.1 `npm run test:integration` passes with the new case green
+- [x] 3.2 `npm run lint` and `npm run typecheck` pass
+- [x] 3.3 A second consecutive `npm run test:integration` passes (no stale `sdbtest0010` row, no stale account)
+- [x] 3.4 The mocked `summarize` is called twice, confirming B generated rather than replayed
 
 #### Manual
 
-- [ ] 3.5 `supadata_budget` row count unchanged before and after the run
-- [ ] 3.6 No `sdbtest0010` row survives in `transcript_cache` or `metadata_cache`
+- [x] 3.5 `supadata_budget` row count unchanged before and after the run
+- [x] 3.6 No `sdbtest0010` row survives in `transcript_cache` or `metadata_cache`
 
 ### Phase 4: Close the `service_role` divergence the tests exposed
 

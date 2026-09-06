@@ -26,6 +26,7 @@ export const DB_LAYER_YOUTUBE_IDS = {
   exit34SweepRefunded: "sdbtest0007",
   exit34OperatorSettled: "sdbtest0008",
   exit34AlreadyPersisted: "sdbtest0009",
+  crossAccountReplay: "sdbtest0010",
 } as const;
 
 export const RESERVED_YOUTUBE_IDS: readonly string[] = Object.values(DB_LAYER_YOUTUBE_IDS);
