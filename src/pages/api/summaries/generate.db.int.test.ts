@@ -131,6 +131,13 @@ async function activeReservationId(userId: string): Promise<string> {
   return rows[0].id;
 }
 
+/** The owner of a summary row, read through the table-owner connection — the check `readStoredSummary` itself does not make. */
+async function summaryOwner(summaryId: string): Promise<string> {
+  const rows = await dbOwner<{ user_id: string }[]>`select user_id from summaries where id = ${summaryId}`;
+  if (rows.length === 0) throw new Error(`summaryOwner: no summaries row for ${summaryId}`);
+  return rows[0].user_id;
+}
+
 async function summaryCountFor(reservationId: string): Promise<number> {
   const { count, error } = await admin
     .from("summaries")
@@ -212,6 +219,37 @@ async function withAccount(youtubeId: string, run: (account: SyntheticAccount) =
   } finally {
     await cleanupCaches(youtubeId);
     await account.dispose([youtubeId]);
+  }
+}
+
+/**
+ * Two accounts for one scenario (plan Phase 3). Teardown is nested rather than sequential because
+ * `dispose()` throws by design (impl-review.md F3): a sequential `await a.dispose(); await b.dispose();`
+ * would let a failure on A leak B's `auth.users` row, which aborts the NEXT run's stale-account guard
+ * instead of failing the test that caused it. The inner `finally` runs the user-agnostic
+ * `cleanupCaches` once — both accounts share the one `youtube_id` — before either account goes, so
+ * `supadata_calls` rows (`on delete set null`) never outlive the `auth.users` row they point at and
+ * orphan into the ledger sums (test-plan §6.2). It is itself wrapped so that a cache-cleanup failure
+ * still disposes B rather than leaking the row into the next run's stale-account guard.
+ */
+async function withTwoAccounts(
+  youtubeId: string,
+  run: (accountA: SyntheticAccount, accountB: SyntheticAccount) => Promise<void>,
+): Promise<void> {
+  const accountA = await createSyntheticAccount(admin);
+  try {
+    const accountB = await createSyntheticAccount(admin);
+    try {
+      await run(accountA, accountB);
+    } finally {
+      try {
+        await cleanupCaches(youtubeId);
+      } finally {
+        await accountB.dispose([youtubeId]);
+      }
+    }
+  } finally {
+    await accountA.dispose([youtubeId]);
   }
 }
 
@@ -468,6 +506,84 @@ describe("exit #34 — persistSummaryAndSettle's ok:false fork, pinned by outcom
       // does not touch the balance.
       await expect(readBalance(account.userId)).resolves.toBe(4);
       await expect(summaryCountFor(await activeOrSettledReservationId(account.userId))).resolves.toBe(1);
+    });
+  });
+});
+
+describe("cross-account replay boundary (test-plan risk #4; plan Phase 3)", () => {
+  /**
+   * `readStoredSummary` (`summaries.ts:387-404`) reads a summary by id through the ADMIN client — RLS
+   * bypassed, no `user_id` predicate. Nothing in that function keeps one account off another's row;
+   * what does is that the id it is handed was derived double-scoped, `where cr.user_id = target_user
+   * and cr.request_id = request` (`20260723130000_idempotent_generation.sql:123-128,143-144`), and that
+   * the partial unique index behind it is on `(user_id, request_id)` — not on `request_id` alone
+   * (`20260723130000:48-50`). Until now that was an argument. This is the evidence.
+   *
+   * Oracle: the PRD privacy guardrail (`prd.md:36-37`) plus `begin_generation`'s own documented lookup,
+   * read from the migration rather than from `generate.ts`. A `requestId` is client-supplied, so two
+   * accounts colliding on one is not exotic — a shared UUID, a copied cURL, a retry replayed from
+   * another session. The contract is that the key is scoped to its owner: B's POST must be a FRESH
+   * generation, not a replay of A's.
+   */
+  it("two accounts posting the SAME requestId each generate their own summary, and neither sees the other's", async () => {
+    const youtubeId = DB_LAYER_YOUTUBE_IDS.crossAccountReplay;
+    await withTwoAccounts(youtubeId, async (accountA, accountB) => {
+      await seedCaches(youtubeId, "a short synthetic transcript for the cross-account replay case");
+
+      // Per-call distinguishable text: the whole point is that a leak would be VISIBLE in the body.
+      // Identical content would let a genuine cross-account replay pass unnoticed.
+      const contentA = "# Account A's summary\n\n- a point only A generated";
+      const contentB = "# Account B's summary\n\n- a point only B generated";
+      const texts = [contentA, contentB];
+      let callIndex = 0;
+      const summarize = vi.fn(() => {
+        const text = texts[Math.min(callIndex, texts.length - 1)];
+        callIndex += 1;
+        return Promise.resolve({ ...defaultSummarizeResult(), text });
+      });
+
+      // ONE key, submitted by BOTH accounts — the collision under test.
+      const requestId = crypto.randomUUID();
+      const body = generateRequestBody({ url: youtubeUrl(youtubeId), requestId });
+
+      const endpointA = await loadRealEndpoint({ summarize });
+      const responseA = await endpointA.POST(makeDbContext(accountA, body));
+      const jsonA = (await readJson(responseA)) as {
+        summary: string;
+        videoId: string;
+        summaryId: string;
+        creditsRemaining: number;
+      };
+      expect(responseA.status).toBe(200);
+      expect(jsonA.summary).toBe(contentA);
+      expect(jsonA.creditsRemaining).toBe(4);
+
+      const endpointB = await loadRealEndpoint({ summarize });
+      const responseB = await endpointB.POST(makeDbContext(accountB, body));
+      const jsonB = (await readJson(responseB)) as {
+        summary: string;
+        videoId: string;
+        summaryId: string;
+        creditsRemaining: number;
+      };
+
+      expect(responseB.status).toBe(200);
+      // B's body is B's own work, asserted positively AND against A's — so a regression that replays
+      // A's row fails here rather than passing by omission.
+      expect(jsonB.summary).toBe(contentB);
+      expect(jsonB.summary).not.toBe(contentA);
+      expect(jsonB.summaryId).not.toBe(jsonA.summaryId);
+      expect(jsonB.videoId).not.toBe(jsonA.videoId);
+      // The id in B's body names a row B owns — the ownership check `readStoredSummary` does not make.
+      await expect(summaryOwner(jsonB.summaryId)).resolves.toBe(accountB.userId);
+      await expect(summaryOwner(jsonA.summaryId)).resolves.toBe(accountA.userId);
+      // B was DEBITED: a replay costs nothing (see the same-account replay case above), so a balance
+      // still at 5 would mean B's request resolved against A's reservation instead of opening its own.
+      expect(jsonB.creditsRemaining).toBe(4);
+      await expect(readBalance(accountB.userId)).resolves.toBe(4);
+      await expect(readBalance(accountA.userId)).resolves.toBe(4);
+      // Twice, not once: the second POST reached the LLM call, which a replay never does.
+      expect(summarize).toHaveBeenCalledTimes(2);
     });
   });
 });
