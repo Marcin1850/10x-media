@@ -653,33 +653,33 @@ in the database. Deletions themselves are irreversible by design (no soft delete
 - [x] 1.2 Migration applies to a running local stack: `npx supabase migration up` — 8a73123
 - [x] 1.3 `begin_generation` still reports `prosecdef` true, `search_path=''`, the same identity arguments, and EXECUTE for `service_role` only — 8a73123
 - [x] 1.4 Integration suite still passes after the migration, `authorization-invariants.int.test.ts` included: `npm run test:integration` — 8a73123
-- [x] 1.5 Lint passes: `npm run lint`
-- [x] 1.6 Types pass: `npm run typecheck`
-- [x] 1.7 Astro types pass: `npm run typecheck:astro`
-- [x] 1.8 Unit suite passes, including the new file: `npm test`
-- [x] 1.9 Build passes: `npm run build`
+- [x] 1.5 Lint passes: `npm run lint` — 789cfca
+- [x] 1.6 Types pass: `npm run typecheck` — 789cfca
+- [x] 1.7 Astro types pass: `npm run typecheck:astro` — 789cfca
+- [x] 1.8 Unit suite passes, including the new file: `npm test` — 789cfca
+- [x] 1.9 Build passes: `npm run build` — 789cfca
 
 #### Manual
 
-- [x] 1.10 `DELETE /api/summaries/<own summary id>` returns `200 {"ok":true}` and the row is gone from the database
-- [x] 1.11 The same call repeated returns `404`, not `500`
-- [x] 1.12 `DELETE /api/summaries/not-a-uuid` returns `400`
-- [x] 1.13 A valid UUID belonging to another account returns `404`, and that row still exists when read back through a table-owner connection
-- [x] 1.14 Signed out, the call returns `401`
+- [x] 1.10 `DELETE /api/summaries/<own summary id>` returns `200 {"ok":true}` and the row is gone from the database — 789cfca
+- [x] 1.11 The same call repeated returns `404`, not `500` — 789cfca
+- [x] 1.12 `DELETE /api/summaries/not-a-uuid` returns `400` — 789cfca
+- [x] 1.13 A valid UUID belonging to another account returns `404`, and that row still exists when read back through a table-owner connection — 789cfca
+- [x] 1.14 Signed out, the call returns `401` — 789cfca
 
 ### Phase 2: Integration test — the row is gone, the balance is not
 
 #### Automated
 
-- [ ] 2.1 Integration suite passes against a running local stack: `npm run test:integration`
-- [ ] 2.2 Both new files run in that suite: `delete.int.test.ts` (hermetic, six exits) and `delete.db.int.test.ts` (real stack)
-- [ ] 2.3 Lint passes on the new files: `npm run lint`
-- [ ] 2.4 Types pass: `npm run typecheck`
-- [ ] 2.5 `authorization-invariants.int.test.ts` and `cross-account-policy.int.test.ts` still pass unchanged (no relation added, no grant changed)
+- [x] 2.1 Integration suite passes against a running local stack: `npm run test:integration`
+- [x] 2.2 Both new files run in that suite: `delete.int.test.ts` (hermetic, six exits) and `delete.db.int.test.ts` (real stack)
+- [x] 2.3 Lint passes on the new files: `npm run lint`
+- [x] 2.4 Types pass: `npm run typecheck`
+- [x] 2.5 `authorization-invariants.int.test.ts` and `cross-account-policy.int.test.ts` still pass unchanged (no relation added, no grant changed)
 
 #### Manual
 
-- [ ] 2.6 The balance assertion genuinely fails if broken: temporarily make the endpoint credit the user, confirm case 2 goes red, then revert. A test that cannot fail is not evidence.
+- [x] 2.6 The balance assertion genuinely fails if broken: temporarily make the endpoint credit the user, confirm case 2 goes red, then revert. A test that cannot fail is not evidence.
 
 ### Phase 3: UI — the card control and the list state
 
