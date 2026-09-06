@@ -1,7 +1,7 @@
 ---
 change_id: delete-summary
 title: Delete summary
-status: plan_reviewed
+status: implementing
 created: 2026-09-06
 updated: 2026-09-06
 archived_at: null

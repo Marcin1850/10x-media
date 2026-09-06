@@ -653,19 +653,19 @@ in the database. Deletions themselves are irreversible by design (no soft delete
 - [x] 1.2 Migration applies to a running local stack: `npx supabase migration up` — 8a73123
 - [x] 1.3 `begin_generation` still reports `prosecdef` true, `search_path=''`, the same identity arguments, and EXECUTE for `service_role` only — 8a73123
 - [x] 1.4 Integration suite still passes after the migration, `authorization-invariants.int.test.ts` included: `npm run test:integration` — 8a73123
-- [ ] 1.5 Lint passes: `npm run lint`
-- [ ] 1.6 Types pass: `npm run typecheck`
-- [ ] 1.7 Astro types pass: `npm run typecheck:astro`
-- [ ] 1.8 Unit suite passes, including the new file: `npm test`
-- [ ] 1.9 Build passes: `npm run build`
+- [x] 1.5 Lint passes: `npm run lint`
+- [x] 1.6 Types pass: `npm run typecheck`
+- [x] 1.7 Astro types pass: `npm run typecheck:astro`
+- [x] 1.8 Unit suite passes, including the new file: `npm test`
+- [x] 1.9 Build passes: `npm run build`
 
 #### Manual
 
-- [ ] 1.10 `DELETE /api/summaries/<own summary id>` returns `200 {"ok":true}` and the row is gone from the database
-- [ ] 1.11 The same call repeated returns `404`, not `500`
-- [ ] 1.12 `DELETE /api/summaries/not-a-uuid` returns `400`
-- [ ] 1.13 A valid UUID belonging to another account returns `404`, and that row still exists when read back through a table-owner connection
-- [ ] 1.14 Signed out, the call returns `401`
+- [x] 1.10 `DELETE /api/summaries/<own summary id>` returns `200 {"ok":true}` and the row is gone from the database
+- [x] 1.11 The same call repeated returns `404`, not `500`
+- [x] 1.12 `DELETE /api/summaries/not-a-uuid` returns `400`
+- [x] 1.13 A valid UUID belonging to another account returns `404`, and that row still exists when read back through a table-owner connection
+- [x] 1.14 Signed out, the call returns `401`
 
 ### Phase 2: Integration test — the row is gone, the balance is not
 
