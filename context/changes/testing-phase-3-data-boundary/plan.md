@@ -843,13 +843,13 @@ pass's Query 2 is the verification that counts.
 
 #### Automated
 
-- [x] 5.1 `npm run lint` passes
-- [x] 5.2 `npm run typecheck` and `npm run typecheck:astro` pass
-- [x] 5.3 `npm test` and `npm run test:integration` both pass
-- [x] 5.4 `CLAUDE.md` and `AGENTS.md` `## Testing` / `## Conventions` sections show no divergence
+- [x] 5.1 `npm run lint` passes — 9578d2f
+- [x] 5.2 `npm run typecheck` and `npm run typecheck:astro` pass — 9578d2f
+- [x] 5.3 `npm test` and `npm run test:integration` both pass — 9578d2f
+- [x] 5.4 `CLAUDE.md` and `AGENTS.md` `## Testing` / `## Conventions` sections show no divergence — 9578d2f
 
 #### Manual
 
-- [x] 5.5 §6.3 is usable without re-reading the test files
-- [x] 5.6 MAR-21 carries a comment per phase and no stale `Next:` pointer
-- [x] 5.7 `test-plan.md` §3's Phase 3 row and §5's integration row agree
+- [x] 5.5 §6.3 is usable without re-reading the test files — 9578d2f
+- [x] 5.6 MAR-21 carries a comment per phase and no stale `Next:` pointer — 9578d2f
+- [x] 5.7 `test-plan.md` §3's Phase 3 row and §5's integration row agree — 9578d2f
