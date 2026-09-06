@@ -685,20 +685,20 @@ in the database. Deletions themselves are irreversible by design (no soft delete
 
 #### Automated
 
-- [x] 3.1 Lint passes: `npm run lint`
-- [x] 3.2 Types pass: `npm run typecheck`
-- [x] 3.3 Astro types pass: `npm run typecheck:astro`
-- [x] 3.4 Unit suite passes: `npm test`
-- [x] 3.5 Integration suite still passes: `npm run test:integration`
-- [x] 3.6 Build passes: `npm run build`
+- [x] 3.1 Lint passes: `npm run lint` — 7ea6cd5
+- [x] 3.2 Types pass: `npm run typecheck` — 7ea6cd5
+- [x] 3.3 Astro types pass: `npm run typecheck:astro` — 7ea6cd5
+- [x] 3.4 Unit suite passes: `npm test` — 7ea6cd5
+- [x] 3.5 Integration suite still passes: `npm run test:integration` — 7ea6cd5
+- [x] 3.6 Build passes: `npm run build` — 7ea6cd5
 
 #### Manual
 
-- [x] 3.7 Deleting a summary removes its card immediately; a page reload does not bring it back
-- [x] 3.8 Cancel at the confirmation step leaves the summary untouched
-- [x] 3.9 The credit balance in the topbar is identical before and after a deletion
-- [x] 3.10 Deleting the same summary in a second tab, then confirming in the first, leaves the card removed and shows no error (the `404`-is-success path)
-- [x] 3.11 With the network offline, a failed deletion restores the card in its original list position and shows an inline error; retrying afterward succeeds
-- [x] 3.12 Starting a generation, deleting an unrelated saved summary while it runs, and letting the generation finish: the new summary appears and the deleted card does **not** come back
-- [x] 3.13 Keyboard only: the delete control is reachable by Tab, activating it does not toggle the card's expand state, and the confirmation is operable and dismissible
-- [x] 3.14 The whole flow reads in Polish
+- [x] 3.7 Deleting a summary removes its card immediately; a page reload does not bring it back — 7ea6cd5
+- [x] 3.8 Cancel at the confirmation step leaves the summary untouched — 7ea6cd5
+- [x] 3.9 The credit balance in the topbar is identical before and after a deletion — 7ea6cd5
+- [x] 3.10 Deleting the same summary in a second tab, then confirming in the first, leaves the card removed and shows no error (the `404`-is-success path) — 7ea6cd5
+- [x] 3.11 With the network offline, a failed deletion restores the card in its original list position and shows an inline error; retrying afterward succeeds — 7ea6cd5
+- [x] 3.12 Starting a generation, deleting an unrelated saved summary while it runs, and letting the generation finish: the new summary appears and the deleted card does **not** come back — 7ea6cd5
+- [x] 3.13 Keyboard only: the delete control is reachable by Tab, activating it does not toggle the card's expand state, and the confirmation is operable and dismissible — 7ea6cd5
+- [x] 3.14 The whole flow reads in Polish — 7ea6cd5
