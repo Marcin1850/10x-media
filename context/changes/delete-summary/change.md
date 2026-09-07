@@ -27,3 +27,24 @@ archived_at: null
   container carried `mt-1` *and* the button carried `p-1`, while the chevron has only `mt-1`. Dropped
   the container's `mt-1` so both icon centres land at 12px; verified in-browser in both the idle and
   the confirming state, and that Escape returns focus to the trigger.
+
+- **Review triage closed, 2026-09-07** (`877f017`). All three impl-review warnings were fixed rather
+  than accepted. F1: a thrown `DELETE` fetch is no longer read as proof the row survived —
+  `reconcileDelete` probes `GET /api/summaries` while the tombstone is still held, so an absent row
+  keeps the card gone, a present row restores it with the (now verified) network message, and a
+  failed probe restores it with new copy `summaryDeleteUnknown`. F2: this roadmap's stale S-03
+  handoff and Parked entry. F3: `plan.md` + `plan-brief.md` resynced to the shipped rollback rule and
+  the `initialSummaries` filter exception. **No automated test covers F1's three branches** — this
+  repo has no component-test layer by design, so they rest on manual verification only.
+
+- **Merged and deployed, 2026-09-07.** Merge `e7fe55c` into `master` (`--no-ff`, 13 commits, 18 files,
+  +2608/-18), pushed as `02ece10..e7fe55c`. CI run 34069014104 green on all three jobs (`ci`,
+  `integration`, `deploy`); Worker version `56e5a5ba-f78e-4f2d-b058-2d6ca38235bc` at
+  `https://10x-media.nightshiftlab.workers.dev`. **Both halves of the deploy have run.** CI uploads
+  the Worker only — it never runs `supabase db push` — so the comment-only migration
+  `20260906170000` was pushed by hand the same day: `npx supabase db push --linked` applied exactly
+  that one migration (confirmed by a `--dry-run` first), and `supabase migration list --linked` now
+  reports local and remote in sync across all 35. Production's `begin_generation` therefore no longer
+  carries the settled-with-no-summary claim the migration exists to retract. `status` stays
+  `impl_reviewed` — there is no "merged" value in the vocabulary, and `/10x-archive` expects
+  `implemented` or `impl_reviewed`. Archiving is deliberately deferred (user decision).
