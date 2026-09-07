@@ -212,14 +212,34 @@ export function SummariesSurface({ initialSummaries, initialCredits, listUnavail
   }
 
   /**
+   * Which way an ambiguous delete actually went, asked of the only authority on it — the saved list.
+   *
+   * A probe, not a refresh: the list it reads is fresher than the one on screen, but committing it
+   * would add a second writer of `summaries` outside `refreshSeq`'s ordering, and the caller is
+   * mid-delete holding a tombstone. It answers the question and touches no state.
+   */
+  async function reconcileDelete(id: string): Promise<"present" | "absent" | "unknown"> {
+    try {
+      return (await readSummaries()).some((item) => item.id === id) ? "present" : "absent";
+    } catch {
+      return "unknown";
+    }
+  }
+
+  /**
    * Delete one summary, optimistically.
    *
    * The card goes the moment the user confirms and only comes back if the server says the row still
    * exists. **`200` and `404` are both terminal success** — under RLS "not yours" and "already gone"
    * are the same observation, so a `404` means the summary is gone and the removal was right; the
    * obvious "non-2xx → revert" reading would resurrect a row that no longer exists (a second tab, or
-   * a retried request). Only a 5xx, a `401`, a `400`/`503`, or a thrown fetch restores the card,
-   * because in every one of those the row is still there.
+   * a retried request). Any other *status* — a 5xx, a `401`, a `400`/`503` — restores the card,
+   * because in every one of those the server answered and the row is still there.
+   *
+   * A **thrown** fetch is the exception, because it is not an answer: the request may have reached
+   * Postgres and committed before the response was lost. That case is settled by `reconcileDelete`
+   * against the saved list rather than assumed — the card stays gone, comes back, or comes back
+   * reporting an unknown outcome, on what the list says.
    *
    * Ordering is load-bearing on both paths. The tombstone goes into `deletedIds` **before** the row
    * leaves `summaries`, so a re-read landing in between cannot re-add it; and it is removed
@@ -244,7 +264,13 @@ export function SummariesSurface({ initialSummaries, initialCredits, listUnavail
       if (response.ok || response.status === 404) return;
       message = copy.errors.summaryDeleteFailed;
     } catch {
-      message = copy.errors.summaryDeleteNetwork;
+      // A rejected fetch is the one outcome that is not an answer: the request may have reached
+      // Postgres and committed before the response was lost. Restoring the card here would assert
+      // the row survived — the one claim we cannot make. Ask the list instead.
+      const state = await reconcileDelete(id);
+      // Deleted after all: the tombstone stays and the card stays gone.
+      if (state === "absent") return;
+      message = state === "present" ? copy.errors.summaryDeleteNetwork : copy.errors.summaryDeleteUnknown;
     }
 
     deletedIds.current.delete(id);

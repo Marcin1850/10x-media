@@ -246,6 +246,7 @@ export const pl = {
     accountDeleteNetwork: "Błąd sieci. Twoje konto nie zostało usunięte.",
     summaryDeleteFailed: "Nie udało się usunąć podsumowania. Spróbuj ponownie.",
     summaryDeleteNetwork: "Błąd sieci. Podsumowanie nie zostało usunięte.",
+    summaryDeleteUnknown: "Nie wiemy, czy podsumowanie zostało usunięte. Odśwież stronę, aby sprawdzić.",
     alreadyGenerating: "Podsumowanie jest już generowane. Poczekaj, aż się zakończy, zanim rozpoczniesz kolejne.",
     tooLong: "Ten film jest zbyt długi, aby go podsumować.",
     noTranscript: "Brak dostępnego transkryptu dla tego filmu.",

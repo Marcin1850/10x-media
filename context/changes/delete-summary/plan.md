@@ -526,15 +526,27 @@ The behaviour:
 - `200` **and** `404` are both terminal success — the row is gone either way, so the card stays removed
   and the id stays in the deleted set. This needs the comment described in Critical Implementation
   Details; the obvious "non-2xx → revert" reading is wrong here.
-- Any other status, or a thrown fetch: remove the id from `deletedIds.current` **before** restoring
-  the row into `summaries` in `created_at` order (so it does not jump to the top), then set that id's
-  error. Ref-first is load-bearing: a restore committed while the tombstone is still present would be
+- **Any other answered status** — a 5xx, a `401`, a `400`, a `503` — means the server replied and the
+  row is still there: remove the id from `deletedIds.current` **before** restoring the row into
+  `summaries` in `created_at` order (so it does not jump to the top), then set that id's error.
+  Ref-first is load-bearing: a restore committed while the tombstone is still present would be
   filtered straight back out.
+- **A thrown fetch is not an answer** and must not be treated as one: the request may have reached
+  Postgres and committed before the response was lost, so restoring the card would assert the row
+  survived — the one claim this path cannot make. Reconcile it against the saved list with a
+  read-only probe of `GET /api/summaries`, holding the tombstone across the read: **absent** → the
+  deletion committed, the card stays gone and no error is shown; **present** → restore as above with
+  the network message, now a verified claim; **the probe also failed** → restore with uncertainty
+  copy that says the outcome is unknown and asks for a reload. The probe commits no list, so
+  `summaries` keeps exactly the two writers `refreshSeq` orders. (Added by impl-review F1.)
 - **Every list that enters `summaries` is filtered through `deletedIds.current`, read after the last
-  `await` on that path** — the initial prop, `refreshSummaries`'s result, and any list the generation
-  success path commits. This is the guard against a post-generation re-read resurrecting a deleted
-  card, and it is order-independent by design (`refreshSeq` orders re-reads against each other and
-  knows nothing about deletions).
+  `await` on that path** — `refreshSummaries`'s result and any list the generation success path
+  commits. This is the guard against a post-generation re-read resurrecting a deleted card, and it is
+  order-independent by design (`refreshSeq` orders re-reads against each other and knows nothing
+  about deletions). **`initialSummaries` is the one exception, and safely so:** it is committed
+  directly by `useState`, because it lands on the first render — before any deletion in this session
+  can exist — and reading `deletedIds.current` during render is precisely what `react-hooks/refs`
+  forbids.
 - If the deleted id equals `unlisted.summaryId`, clear `unlisted`. The note would otherwise keep telling
   the user a summary was saved and is missing from the list, after they deliberately removed it — a
   wrong statement about their data, which is what `SummaryList.tsx:60-68` is at pains to avoid.

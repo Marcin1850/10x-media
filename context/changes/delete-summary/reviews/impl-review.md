@@ -37,7 +37,7 @@
   - Tradeoff: A ghost card can remain visible until reload/retry even when the delete committed.
   - Confidence: HIGH — only the message contract changes.
   - Blind spot: Does not reconcile state automatically.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A — a thrown `DELETE` fetch is now settled by `reconcileDelete(id)`, a read-only probe of `GET /api/summaries`: absent → the removal stands and the card stays gone with no message; present → the card returns with the existing network copy (now a verified claim); probe also failed → the card returns with new copy `summaryDeleteUnknown` ("Nie wiemy, czy podsumowanie zostało usunięte. Odśwież stronę, aby sprawdzić."). The tombstone stays in `deletedIds` across the probe, so a re-read landing mid-reconciliation still cannot resurrect the row, and the probe commits no list, so `refreshSeq`'s ordering keeps a single writer. `handleDelete`'s JSDoc was corrected to stop claiming a thrown fetch proves the row survived.
 
 ### F2 — Roadmap still routes agents to redo completed S-03 work
 
@@ -47,7 +47,7 @@
 - **Location**: `context/foundation/roadmap.md:382`; `context/foundation/roadmap.md:407`
 - **Detail**: S-03 is marked implemented with all three phases landed, but Backlog Handoff still ends with `Next: /10x-implement delete-summary phase 3`, and Parked still says the slice remains proposed/parked. This misses the plan's epilogue requirement and the accepted lesson that roadmap status, Backlog Handoff, and lifecycle state must move together.
 - **Fix**: Remove the stale phase-3 `Next` instruction and remove S-03 from Parked while preserving the current implemented/pending-review status text.
-- **Decision**: PENDING
+- **Decision**: FIXED — the Backlog Handoff row for S-03 now records all three phases as done (`8a73123`, `789cfca`, `8a61a23`, `7ea6cd5`) and points at merge + `/10x-archive` instead of `/10x-implement delete-summary phase 3`; the S-03 bullet was removed from `## Parked`. The `## Slices` status text (`implemented — 3/3 phases, 34/34 Progress rows, pending impl-review + merge`) was left as it stood.
 
 ### F3 — Plan sources do not record the implementation's accepted UI exceptions
 
@@ -57,7 +57,13 @@
 - **Location**: `context/changes/delete-summary/plan-brief.md:37`; `context/changes/delete-summary/plan-brief.md:38`; `context/changes/delete-summary/plan.md:533`; `src/components/summaries/DashboardSummaries.tsx:69`
 - **Detail**: The brief says rollback happens only for 5xx/401/network even though the implementation rolls back every status other than 200/404 (including 400/503). The plan and brief also say every incoming list, including the initial prop, is filtered through `deletedIds`, while the implementation deliberately commits the initial prop directly because no deletion can precede the first render and React's refs lint rejects reading the ref during render. The code documents both behaviors, but the plan sources were not synchronized, contrary to the accepted derived-document lesson.
 - **Fix**: Update `plan.md` and `plan-brief.md` together to state the actual non-200/404 rollback rule and the safe first-render exception for `initialSummaries`.
-- **Decision**: PENDING
+- **Decision**: FIXED — both documents were updated together, and describe the behaviour **after** F1's fix rather than the pre-review behaviour: an answered status other than `200`/`404` reverts the card, a thrown fetch is reconciled against `GET /api/summaries` (absent / present / probe-failed), and `initialSummaries` is named as the one list committed outside the `deletedIds` filter, with both reasons (nothing can be deleted before the first render; `react-hooks/refs` forbids reading the ref during render).
+
+## Triage Outcome (2026-09-07)
+
+All three findings were triaged and fixed. Code changed by triage: `src/components/summaries/DashboardSummaries.tsx` (new `reconcileDelete` probe, reworked `catch` branch, corrected `handleDelete` JSDoc) and `src/lib/copy/pl.ts` (new `summaryDeleteUnknown` key). Documents changed: `context/foundation/roadmap.md`, `context/changes/delete-summary/plan.md`, `context/changes/delete-summary/plan-brief.md`.
+
+Re-verified after the fixes: `npm.cmd run lint` PASS · `npm.cmd run lint:tokens` PASS · `npm.cmd run typecheck` PASS · `npm.cmd run typecheck:astro` PASS (0 errors, 0 warnings, 5 pre-existing hints) · `npm.cmd test` PASS (5 files, 106 tests) · `npm.cmd run build` PASS. No test was added for F1: this repository has no component-level test layer — React islands are deliberately untested, with coverage living in `src/lib/**` and the API-route integration suites — so adding one would have introduced a new testing layer during triage. The two new branches are consequently covered only by manual verification.
 
 ## Verification Evidence
 
