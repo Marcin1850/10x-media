@@ -31,6 +31,15 @@ interface Props {
   unlisted: UnlistedSummary | null;
   onPendingConfirm: () => void;
   onPendingDismiss: () => void;
+  /**
+   * The user confirmed a deletion. Keyed by summary id and fired once — the caller removes the card
+   * optimistically, so this list never renders an in-flight state and is passed no "deleting" set:
+   * an id being deleted has no card here to receive one.
+   */
+  onDeleteSummary: (id: string) => void;
+  /** Per-id message from a deletion that failed and restored its row. Absent for every other id. */
+  deleteErrors: Record<string, string | undefined>;
+  onClearDeleteError: (id: string) => void;
 }
 
 /**
@@ -78,6 +87,9 @@ export function SummaryList({
   unlisted,
   onPendingConfirm,
   onPendingDismiss,
+  onDeleteSummary,
+  deleteErrors,
+  onClearDeleteError,
 }: Props) {
   const [filter, setFilter] = useState<Filter>("all");
 
@@ -85,7 +97,8 @@ export function SummaryList({
 
   // The filter never applies to the pending card. A pending generation does have a character, but
   // hiding the thing the user just started — in the one place they can watch it — is the wrong
-  // default; the filter is for browsing what is saved.
+  // default; the filter is for browsing what is saved. It also carries no delete control: a
+  // generation in flight is not a saved summary, and there is no row to delete.
   const pendingCard =
     pending === null ? null : (
       <PendingSummaryCard
@@ -194,7 +207,12 @@ export function SummaryList({
         <ul className="space-y-3">
           {visible.map((item) => (
             <li key={item.id}>
-              <SummaryCard item={item} />
+              <SummaryCard
+                item={item}
+                onDelete={onDeleteSummary}
+                deleteError={deleteErrors[item.id]}
+                onClearDeleteError={onClearDeleteError}
+              />
             </li>
           ))}
         </ul>

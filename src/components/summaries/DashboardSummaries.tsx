@@ -36,6 +36,12 @@ const REFRESH_RETRY_DELAYS_MS = [250, 750];
  * **Single owner of list state.** `summaries` is held here and passed down to the controlled
  * `SummaryList`, which keeps only its filter. The re-read after a generation therefore has exactly
  * one place to land, and the list never holds a second source of truth for the same corpus.
+ *
+ * **Two writers, one filter.** S-03 gave that list a second writer — a delete — so the two can race:
+ * a post-generation re-read issued before a deletion commits will legitimately still contain the
+ * deleted row. Removing the card is therefore not enough; every list that enters `summaries` goes
+ * through `commitSummaries`, which subtracts `deletedIds`. That makes the outcome independent of
+ * arrival order rather than dependent on it.
  */
 export function SummariesSurface({ initialSummaries, initialCredits, listUnavailable }: Props) {
   // The capture bar's URL input. A long-video 409 can arrive with the bar scrolled out of view — the
@@ -46,7 +52,30 @@ export function SummariesSurface({ initialSummaries, initialCredits, listUnavail
   const [url, setUrl] = useState("");
   const [character, setCharacter] = useState<ChannelCharacter>("informational");
   const [allowLong, setAllowLong] = useState(false);
+  /**
+   * Every summary this session has deleted. A tombstone set, not a mirror of the list.
+   *
+   * A `useRef` for the same reason `refreshSeq` is one: the value must be correct **across an
+   * await**, not merely eventually. Both writers of `summaries` cross one — `refreshSummaries`
+   * awaits the fetch, and the generation `onSuccess` callback is captured at submit time (the
+   * closure hazard the comment above already warns about) — so a `useState<Set>` read from either
+   * closure can predate a deletion that happened during the wait and put the deleted card straight
+   * back. The ref is mutated synchronously on confirm and on rollback, and every commit of
+   * `summaries` reads `deletedIds.current` after its last `await`.
+   *
+   * Ids are kept for the life of the page. That is bounded by the number of deletions in one
+   * session and costs nothing.
+   */
+  const deletedIds = useRef<Set<string>>(new Set());
+  // The one list that is committed *without* passing through `commitSummaries`, and the only one
+  // that can be: it lands on the first render, before any delete can have happened, and reading
+  // `deletedIds.current` during render is exactly what `react-hooks/refs` forbids. Every later list
+  // — from the re-read, or from anything added after it — goes through the filter.
   const [summaries, setSummaries] = useState<SummaryListItem[]>(initialSummaries);
+  // Per-id message from a deletion that failed and put its row back. There is deliberately no
+  // "ids in flight" state alongside it: an id being deleted is exactly an id in `deletedIds` with
+  // no card rendered, and tracking that twice would be two sources of truth for one fact.
+  const [deleteErrors, setDeleteErrors] = useState<Record<string, string | undefined>>({});
   // Seeded from the server read, but not frozen to it: a re-read that succeeds proves the corpus is
   // readable again, and continuing to show "we couldn't load your summaries" over a list we are
   // holding would be the same wrong statement about their data, just in the other direction.
@@ -85,6 +114,21 @@ export function SummariesSurface({ initialSummaries, initialCredits, listUnavail
       void refreshSummaries(success);
     },
   });
+
+  /** Drops anything already deleted. Reads the ref, never a state copy — see `deletedIds`. */
+  function keepUndeleted(list: SummaryListItem[]): SummaryListItem[] {
+    return list.filter((item) => !deletedIds.current.has(item.id));
+  }
+
+  /**
+   * The one way a list becomes `summaries`. Filtering lives here rather than at each call site so a
+   * future third writer cannot forget it, and it reads `deletedIds.current` at commit time — which
+   * is what makes the outcome independent of when the list was fetched. `refreshSeq` orders re-reads
+   * against each other and knows nothing about deletions; this is the other half.
+   */
+  function commitSummaries(list: SummaryListItem[]) {
+    setSummaries(keepUndeleted(list));
+  }
 
   /** One read of the saved list. Throws on anything that isn't a usable list. */
   async function readSummaries(): Promise<SummaryListItem[]> {
@@ -137,7 +181,9 @@ export function SummariesSurface({ initialSummaries, initialCredits, listUnavail
     // Any list we did get is fresher than the one on screen, so it lands even when the new row is
     // missing from it — being behind by one row beats being behind by everything since page load.
     if (list !== null) {
-      setSummaries(list);
+      // Committed here, after the last `await` above, so a deletion that happened while this read
+      // was in flight still suppresses its row.
+      commitSummaries(list);
       setUnavailable(false);
     }
     setUnlisted((current) => {
@@ -156,6 +202,88 @@ export function SummariesSurface({ initialSummaries, initialCredits, listUnavail
     // Only now, with the saved row proven present, does the pending entry go — so there is no frame
     // in which the summary appears in neither place.
     if (landed) generation.clearAttempt(success.attemptId);
+  }
+
+  /** Forget an id's failure message. The card cannot do it: the error is owned here. */
+  function clearDeleteError(id: string) {
+    setDeleteErrors((current) =>
+      current[id] === undefined ? current : Object.fromEntries(Object.entries(current).filter(([key]) => key !== id)),
+    );
+  }
+
+  /**
+   * Which way an ambiguous delete actually went, asked of the only authority on it — the saved list.
+   *
+   * A probe, not a refresh: the list it reads is fresher than the one on screen, but committing it
+   * would add a second writer of `summaries` outside `refreshSeq`'s ordering, and the caller is
+   * mid-delete holding a tombstone. It answers the question and touches no state.
+   */
+  async function reconcileDelete(id: string): Promise<"present" | "absent" | "unknown"> {
+    try {
+      return (await readSummaries()).some((item) => item.id === id) ? "present" : "absent";
+    } catch {
+      return "unknown";
+    }
+  }
+
+  /**
+   * Delete one summary, optimistically.
+   *
+   * The card goes the moment the user confirms and only comes back if the server says the row still
+   * exists. **`200` and `404` are both terminal success** — under RLS "not yours" and "already gone"
+   * are the same observation, so a `404` means the summary is gone and the removal was right; the
+   * obvious "non-2xx → revert" reading would resurrect a row that no longer exists (a second tab, or
+   * a retried request). Any other *status* — a 5xx, a `401`, a `400`/`503` — restores the card,
+   * because in every one of those the server answered and the row is still there.
+   *
+   * A **thrown** fetch is the exception, because it is not an answer: the request may have reached
+   * Postgres and committed before the response was lost. That case is settled by `reconcileDelete`
+   * against the saved list rather than assumed — the card stays gone, comes back, or comes back
+   * reporting an unknown outcome, on what the list says.
+   *
+   * Ordering is load-bearing on both paths. The tombstone goes into `deletedIds` **before** the row
+   * leaves `summaries`, so a re-read landing in between cannot re-add it; and it is removed
+   * **before** the row is restored, or the restore would be filtered straight back out by the
+   * tombstone it is undoing.
+   */
+  async function handleDelete(id: string) {
+    // From this render's list: the click came from a card that is in it.
+    const removed = summaries.find((item) => item.id === id);
+
+    deletedIds.current.add(id);
+    setSummaries((current) => current.filter((item) => item.id !== id));
+    clearDeleteError(id);
+    // The note says this summary is saved but missing from the list. Once the user has deliberately
+    // removed it, that is a wrong statement about their data — the thing `SummaryList`'s three
+    // non-list states exist to avoid.
+    setUnlisted((current) => (current !== null && current.summaryId === id ? null : current));
+
+    let message: string;
+    try {
+      const response = await fetch(`/api/summaries/${id}`, { method: "DELETE" });
+      if (response.ok || response.status === 404) return;
+      message = copy.errors.summaryDeleteFailed;
+    } catch {
+      // A rejected fetch is the one outcome that is not an answer: the request may have reached
+      // Postgres and committed before the response was lost. Restoring the card here would assert
+      // the row survived — the one claim we cannot make. Ask the list instead.
+      const state = await reconcileDelete(id);
+      // Deleted after all: the tombstone stays and the card stays gone.
+      if (state === "absent") return;
+      message = state === "present" ? copy.errors.summaryDeleteNetwork : copy.errors.summaryDeleteUnknown;
+    }
+
+    deletedIds.current.delete(id);
+    if (removed !== undefined) {
+      setSummaries((current) =>
+        current.some((item) => item.id === id)
+          ? current
+          : // Back into `created_at` order — the list is newest-first, and re-appending would move a
+            // months-old summary to the top, which misreports when it was generated.
+            [...current, removed].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+      );
+    }
+    setDeleteErrors((current) => ({ ...current, [id]: message }));
   }
 
   const attempt = generation.attempt;
@@ -243,6 +371,11 @@ export function SummariesSurface({ initialSummaries, initialCredits, listUnavail
         onPendingDismiss={() => {
           generation.clearAttempt();
         }}
+        onDeleteSummary={(id) => {
+          void handleDelete(id);
+        }}
+        deleteErrors={deleteErrors}
+        onClearDeleteError={clearDeleteError}
       />
     </div>
   );

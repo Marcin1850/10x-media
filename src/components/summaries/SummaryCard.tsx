@@ -1,5 +1,5 @@
-import { useId, useState } from "react";
-import { Calendar, ChevronDown, Clock } from "lucide-react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { Calendar, ChevronDown, CircleAlert, Clock, Trash2 } from "lucide-react";
 import { VideoThumbnail } from "@/components/summaries/VideoThumbnail";
 import { SummaryMarkdown } from "@/components/summaries/SummaryMarkdown";
 import { useHasMounted } from "@/components/hooks/useHasMounted";
@@ -17,6 +17,15 @@ import type { ChannelCharacter, SummaryListItem } from "@/types";
 
 interface Props {
   item: SummaryListItem;
+  /** Fired once the user has confirmed. The parent removes the card immediately — see `onDelete`'s
+   *  contract in `SummaryList`. */
+  onDelete: (id: string) => void;
+  /**
+   * The message from a deletion that failed and put this row back. Owned by the parent: the card
+   * cannot clear it, because the card is unmounted for the whole time the request is in flight.
+   */
+  deleteError?: string;
+  onClearDeleteError: (id: string) => void;
 }
 
 /**
@@ -68,23 +77,43 @@ function previewText(content: string): string {
 }
 
 /**
- * One saved summary: the video's thumbnail and metadata, the character it was generated for, and the
- * body, collapsed by default and expanding in place.
+ * One saved summary: the video's thumbnail and metadata, the character it was generated for, the
+ * body (collapsed by default, expanding in place), and an inline two-step delete control.
+ *
+ * Presentational about the *outcome* of a deletion: it owns which of the control's two steps is
+ * showing and nothing else. Removal, the request, and the error all belong to the list's owner.
  *
  * The creation date is an addition beyond the card fields named in the brief, kept deliberately: the
  * list is flat and accepts the same video appearing once per character, so "generated on" is what
  * distinguishes two otherwise near-identical cards. `created_at` is read regardless — it is the
  * newest-first sort key.
  */
-export function SummaryCard({ item }: Props) {
+export function SummaryCard({ item, onDelete, deleteError, onClearDeleteError }: Props) {
   const [expanded, setExpanded] = useState(false);
+  // Which of the delete control's two steps is showing, and the card's *only* delete state. There is
+  // deliberately no `deleting` flag: the parent drops the card the moment deletion starts, so an
+  // in-flight state on this component could never render.
+  const [confirming, setConfirming] = useState(false);
   const contentId = useId();
+  // Keyboard continuity across the two steps. Activating the trigger unmounts it, so without this
+  // the focus ring lands on `<body>` and the confirmation is unreachable without re-Tabbing from the
+  // top of the page; cancelling has the mirror problem. `wasConfirming` is what keeps the effect from
+  // stealing focus on mount — every card in the list would fight for it.
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const wasConfirming = useRef(false);
   // `daysSince` reads the real clock (see its doc comment) — computed once on the server and again,
   // independently, during hydration. Held back until after mount so the very first client render
   // matches the server's exactly; a few-ms gap straddling UTC midnight would otherwise make the two
   // disagree, a real hydration mismatch. Recomputed on every render once mounted, so the suffix still
   // advances live as the page stays open, same as before.
   const mounted = useHasMounted();
+
+  useEffect(() => {
+    if (confirming) confirmRef.current?.focus();
+    else if (wasConfirming.current) triggerRef.current?.focus();
+    wasConfirming.current = confirming;
+  }, [confirming]);
 
   const duration = formatDuration(item.durationSeconds);
   const published = formatPublishedDate(item.publishedAt);
@@ -98,6 +127,20 @@ export function SummaryCard({ item }: Props) {
   // `relative z-10` on the two links below lifts them above the toggle button's stretched `::after`
   // (see the comment on the outer row), which otherwise catches every click in the row first.
   const linkClassName = "relative z-10 hover:text-foreground hover:underline";
+
+  function cancelDelete() {
+    setConfirming(false);
+    // The parent owns the error, so returning this control to idle is not enough to clear it.
+    onClearDeleteError(item.id);
+  }
+
+  /** Escape dismisses the confirmation, the way it would dismiss a dialog. */
+  function handleConfirmKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      cancelDelete();
+    }
+  }
 
   return (
     <article className="border-border bg-card hover:bg-accent rounded-xl border transition-colors">
@@ -177,6 +220,54 @@ export function SummaryCard({ item }: Props) {
           {expanded ? null : <p className="text-muted-foreground line-clamp-2 text-sm">{previewText(item.content)}</p>}
         </div>
 
+        {/* Sibling of the expand button, never nested inside it: a nested button is invalid markup and
+            every delete click would also toggle the card. `relative z-10` for the same reason the two
+            links above carry it — that button's stretched `::after` covers the whole row and
+            otherwise swallows the click first.
+
+            No `mt-1` here, unlike the expand button: the trigger's own `p-1` already supplies that
+            4px, so both icons' centres land 12px down and sit on one line. Adding `mt-1` back — the
+            obvious symmetry — is what pushed the trash a padding's width below the chevron. */}
+        <div className="relative z-10 flex shrink-0 items-center gap-1">
+          {confirming ? (
+            <>
+              <span className="text-muted-foreground text-xs">{copy.summaries.card.deleteQuestion}</span>
+              <button
+                ref={confirmRef}
+                type="button"
+                onClick={() => {
+                  setConfirming(false);
+                  onDelete(item.id);
+                }}
+                onKeyDown={handleConfirmKeyDown}
+                className="text-destructive focus-visible:ring-ring rounded-md px-2 py-0.5 text-xs font-medium outline-none hover:underline focus-visible:ring-2"
+              >
+                {copy.summaries.card.deleteConfirm}
+              </button>
+              <button
+                type="button"
+                onClick={cancelDelete}
+                onKeyDown={handleConfirmKeyDown}
+                className="text-muted-foreground focus-visible:ring-ring rounded-md px-2 py-0.5 text-xs outline-none hover:underline focus-visible:ring-2"
+              >
+                {copy.summaries.card.deleteCancel}
+              </button>
+            </>
+          ) : (
+            <button
+              ref={triggerRef}
+              type="button"
+              aria-label={copy.summaries.card.deleteSummary(item.title ?? item.url)}
+              onClick={() => {
+                setConfirming(true);
+              }}
+              className="text-muted-foreground hover:text-destructive focus-visible:ring-ring rounded-md p-1 transition-colors outline-none focus-visible:ring-2"
+            >
+              <Trash2 className="size-4" aria-hidden="true" />
+            </button>
+          )}
+        </div>
+
         <button
           type="button"
           aria-expanded={expanded}
@@ -190,6 +281,20 @@ export function SummaryCard({ item }: Props) {
           <ChevronDown className={cn("size-4 transition-transform", expanded && "rotate-180")} aria-hidden="true" />
         </button>
       </div>
+
+      {/* Only ever rendered after a failed deletion has already put this row back — the card does not
+          exist while the request is in flight. Same `role="alert"` destructive treatment as
+          `DeleteAccountDialog`. */}
+      {deleteError ? (
+        <p
+          role="alert"
+          aria-atomic="true"
+          className="border-destructive bg-destructive/10 text-destructive mx-4 mb-4 flex items-center gap-2 rounded-lg border-2 px-3 py-2 text-sm"
+        >
+          <CircleAlert aria-hidden="true" className="size-4 shrink-0" />
+          {deleteError}
+        </p>
+      ) : null}
 
       {expanded ? (
         <div id={contentId} className="border-border mx-auto max-w-[62ch] space-y-2 border-t px-4 py-4">

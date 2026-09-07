@@ -150,6 +150,14 @@ export const pl = {
       openChannel: (channelName: string) => `Otwórz kanał na YouTube: ${channelName}`,
       /** Parenthesised suffix after the upload date, e.g. `"(3 dni temu)"` — the date alone is exact but not immediately legible as "how long ago". */
       publishedRelative: (days: number) => `(${relativeTime(days)})`,
+      // The delete control (S-03). The trigger names the video for the same reason `summaryOf` and
+      // `openVideo` do: a list of icon-only buttons is indistinguishable to a screen reader. There
+      // is deliberately no "deleting…" string — removal is optimistic, so the card is out of the
+      // list before the request resolves and an in-flight label could never render.
+      deleteSummary: (title: string) => `Usuń podsumowanie: ${title}`,
+      deleteQuestion: "Usunąć?",
+      deleteConfirm: "Usuń",
+      deleteCancel: "Anuluj",
     },
   },
   generate: {
@@ -236,6 +244,9 @@ export const pl = {
     network: "Błąd sieci — spróbuj ponownie.",
     accountDeleteFailed: "Coś poszło nie tak. Twoje konto nie zostało usunięte.",
     accountDeleteNetwork: "Błąd sieci. Twoje konto nie zostało usunięte.",
+    summaryDeleteFailed: "Nie udało się usunąć podsumowania. Spróbuj ponownie.",
+    summaryDeleteNetwork: "Błąd sieci. Podsumowanie nie zostało usunięte.",
+    summaryDeleteUnknown: "Nie wiemy, czy podsumowanie zostało usunięte. Odśwież stronę, aby sprawdzić.",
     alreadyGenerating: "Podsumowanie jest już generowane. Poczekaj, aż się zakończy, zanim rozpoczniesz kolejne.",
     tooLong: "Ten film jest zbyt długi, aby go podsumować.",
     noTranscript: "Brak dostępnego transkryptu dla tego filmu.",
