@@ -387,11 +387,18 @@ describe("charge-versus-delivery invariants (research.md §3, §5)", () => {
 
       const second = await loadRealEndpoint();
       const secondResponse = await second.POST(makeDbContext(account, body));
-      const secondJson = (await readJson(secondResponse)) as { charged?: boolean };
+      const secondJson = (await readJson(secondResponse)) as { charged?: boolean; creditsRemaining?: number };
 
       expect(secondResponse.status).toBe(422);
       expect(secondJson.charged).toBe(true);
       await expect(readBalance(account.userId)).resolves.toBe(4); // not charged twice
+      // The replay is reached by the retry of a request whose response was LOST, so this client never
+      // saw the original refusal's balance — confirming the charge without the number would leave the
+      // header (and the form's credit gate) one credit too high. Oracle: README §Summary credits, the
+      // body carries the resulting balance whenever the server knows it. Read independently through
+      // the admin client above, and pinned as a literal so a run that lost BOTH the debit and the
+      // report cannot satisfy it.
+      expect(secondJson.creditsRemaining).toBe(4);
     });
   });
 

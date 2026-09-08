@@ -15,12 +15,12 @@ import { copy } from "@/lib/copy";
  * localisation contract was extracted into a function that needs neither. What reaches the wire is
  * the integration suite's job (`generate.int.test.ts`); what the wire means is this file's.
  *
- * **Mutation check** (`npx stryker run --mutate "src/components/hooks/useGenerateSummary.ts:118-128"`,
+ * **Mutation check** (`npx stryker run --mutate "src/components/hooks/useGenerateSummary.ts:124-134"`,
  * 2026-09-08): 9 mutants, 8 killed, 1 survived. No assertion was added to raise the number.
  *
  * Ignored, with the reason:
  *
- * 1. **`if (typeof code === "string")` emptied to `if (true)`** (`:119`). The guard is a type
+ * 1. **`if (typeof code === "string")` emptied to `if (true)`** (`:125`). The guard is a type
  *    narrowing, not a behavioural branch: without it `byCode[undefined]` looks up the key
  *    `"undefined"` and `byCode[42]` the key `"42"`, both miss, and the function falls through to
  *    `messageForStatus` exactly as before — so no input a client can send observes a difference.
@@ -35,10 +35,13 @@ describe("messageForError — a code, when there is one, decides the copy", () =
   // own Polish table, because the table had one entry per STATUS and 422 has three causes. A row
   // that only checked "returns something" would have passed then too, so this pins the actual swap:
   // the English string is present AND ignored.
-  it("prefers the Polish code copy over the server's English string", () => {
-    const message = messageForError(422, "This video has no captions, so there is nothing to summarize.", "noCaptions");
+  it("picks the cause's copy, not the one sentence its status would otherwise get", () => {
+    const message = messageForError(422, "noCaptions");
 
     expect(message).toBe(copy.errors.codes.noCaptions);
+    // The status entry is what a code-less 422 lands on, so "not that" is what proves the code was
+    // read rather than the switch below it.
+    expect(message).not.toBe(copy.errors.noTranscript);
   });
 
   // The distinction the code mechanism exists to preserve, and the one a per-status table cannot
@@ -47,8 +50,8 @@ describe("messageForError — a code, when there is one, decides the copy", () =
   // Asserted as two positive identities plus their inequality: "not the other one" alone would stay
   // green if both collapsed onto a third string.
   it("keeps the two 422s that share an English string apart in Polish", () => {
-    const durable = messageForError(422, "Transcript unavailable for this video", "transcriptUnavailable");
-    const transient = messageForError(422, "Transcript unavailable for this video", "transcriptFetchFailed");
+    const durable = messageForError(422, "transcriptUnavailable");
+    const transient = messageForError(422, "transcriptFetchFailed");
 
     expect(durable).toBe(copy.errors.codes.transcriptUnavailable);
     expect(transient).toBe(copy.errors.codes.transcriptFetchFailed);
@@ -70,19 +73,25 @@ describe("messageForError — a code, when there is one, decides the copy", () =
   ];
 
   it.each(unresolved)("falls back to the per-status message given %s: %s", (_label, _why, code) => {
-    // 413 is chosen deliberately: its entry ignores `serverError` entirely, so the assertion cannot
-    // accidentally pass by echoing the English string back.
-    expect(messageForError(413, "This video's transcript is too long to summarize.", code)).toBe(copy.errors.tooLong);
+    expect(messageForError(413, code)).toBe(copy.errors.tooLong);
   });
 
-  // The last-resort rule, stated on its own because it looks like a bug until you know why it holds:
-  // on a multi-cause status with no code, a SPECIFIC English sentence still beats a Polish one that
-  // may name the wrong cause. Every cause that has a code has already been answered above; this is
-  // what is left over.
-  it("still prefers the server's string over a generic Polish one when nothing else identifies the cause", () => {
-    const serverError = "Too many transcript requests. Please wait a moment and try again.";
+  // The MULTI-CAUSE statuses, which are where an unresolved code is actually reachable and where the
+  // fallback used to leak: each of these once returned the endpoint's English sentence in preference
+  // to its Polish entry, so a cause deployed ahead of its translation reached the user in the wrong
+  // language. 413/401/502 above cannot catch that — they have one cause and never had the English
+  // branch. Each row is a status with its own branch in the switch, so a single re-added
+  // `serverError ??` fails here rather than passing on a status that never had one.
+  const multiCause: [number, string][] = [
+    [400, copy.errors.checkUrl],
+    [422, copy.errors.noTranscript],
+    [429, copy.errors.alreadyGenerating],
+    [500, copy.errors.generic],
+    [503, copy.errors.notConfigured],
+    [418, copy.errors.generic], // the `default` arm — a status this client has never been taught
+  ];
 
-    expect(messageForError(429, serverError, undefined)).toBe(serverError);
-    expect(messageForError(429, undefined, undefined)).toBe(copy.errors.alreadyGenerating);
+  it.each(multiCause)("answers a code-less %d in Polish", (status, expected) => {
+    expect(messageForError(status, undefined)).toBe(expected);
   });
 });

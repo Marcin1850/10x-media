@@ -597,7 +597,7 @@ const LOOKUP_PARAMS = {
  */
 describe("lookupRefusalReplay — what reaches the ledger", () => {
   it("asks about the key it was given, under the names the SQL function declares", async () => {
-    const stub = stubReturning("unavailable");
+    const stub = stubReturning([{ refusal_reason: "unavailable", balance: 4 }]);
 
     await lookupRefusalReplay(stub.client, LOOKUP_PARAMS);
 
@@ -614,9 +614,41 @@ describe("lookupRefusalReplay — the reasons that have copy behind them", () =>
   // Returned verbatim — this is an identity, and translating it here would desynchronise the lookup
   // from the column it reads.
   it.each([["unavailable"], ["empty"], ["whitespace"]])("returns %s verbatim", async (reason) => {
-    const stub = stubReturning(reason);
+    const stub = stubReturning([{ refusal_reason: reason, balance: 4 }]);
 
-    await expect(lookupRefusalReplay(stub.client, LOOKUP_PARAMS)).resolves.toBe(reason);
+    await expect(lookupRefusalReplay(stub.client, LOOKUP_PARAMS)).resolves.toMatchObject({ reason });
+  });
+});
+
+/**
+ * Oracle: README §Summary credits — the body "carries the resulting balance as `creditsRemaining`
+ * whenever the server knows it, so the app never keeps showing a number the last request has already
+ * changed".
+ *
+ * Why the replay in particular: it is reached by the retry of a request whose response was LOST, so it
+ * is the one caller that cannot have learned the balance from the original refusal. Returning the
+ * reason alone would confirm the charge while leaving the displayed balance one credit too high — and
+ * the form's credit gate reads that number.
+ */
+describe("lookupRefusalReplay — the balance the refusal left behind", () => {
+  it("reports the balance the ledger row was read with, not a number derived from the reason", async () => {
+    const stub = stubReturning([{ refusal_reason: "unavailable", balance: 3 }]);
+
+    await expect(lookupRefusalReplay(stub.client, LOOKUP_PARAMS)).resolves.toEqual({
+      reason: "unavailable",
+      balance: 3,
+    });
+  });
+
+  // A user with no `user_credits` row has nothing to spend; zero is the same reading
+  // `chargeFailedTranscript` and `beginGeneration`'s `insufficient` branch take of a missing row.
+  it("reads a missing credits row as zero rather than dropping the field", async () => {
+    const stub = stubReturning([{ refusal_reason: "empty", balance: null }]);
+
+    await expect(lookupRefusalReplay(stub.client, LOOKUP_PARAMS)).resolves.toEqual({
+      reason: "empty",
+      balance: 0,
+    });
   });
 });
 
@@ -626,9 +658,17 @@ describe("lookupRefusalReplay — fails toward null, the OPPOSITE direction of t
   // a new generation". That 409 is what the row was written for, so a value outside the documented
   // three must keep it rather than be coerced into a replayed 422.
   const nulls: [string, string, unknown][] = [
-    ["no row on this key", "nothing was closed by a refusal charge", null],
-    ["a row that is not a refusal charge", "an operator-side settle leaves no reason — it keeps its 409", "settled"],
-    ["an unrecognised reason", "there is no copy to reconstruct a 422 body from", "quota_exceeded"],
+    ["no row on this key", "nothing was closed by a refusal charge", []],
+    [
+      "a row that is not a refusal charge",
+      "an operator-side settle leaves no reason — it keeps its 409",
+      [{ refusal_reason: null, balance: 4 }],
+    ],
+    [
+      "an unrecognised reason",
+      "there is no copy to reconstruct a 422 body from",
+      [{ refusal_reason: "quota_exceeded", balance: 4 }],
+    ],
   ];
 
   it.each(nulls)("returns null for %s: %s", async (_label, _why, data) => {

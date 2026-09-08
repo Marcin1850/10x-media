@@ -114,8 +114,14 @@ export interface UseGenerateSummary {
  * cause before its translation exists degrades to a correct-but-generic Polish sentence instead of
  * an English one. Exported for unit test: it is pure, and it is where the localisation contract
  * actually lives.
+ *
+ * The server's English `error` string is deliberately NOT a parameter: it stays on the body for logs
+ * and non-browser consumers (README §Summary credits), and no path through this function can put it
+ * in front of a user. Taking it and merely de-prioritising it is what let it leak before — the one
+ * status where the card is user-visible English is the one where no code resolved, which is exactly
+ * the case the Polish fallback exists for.
  */
-export function messageForError(status: number, serverError?: string, code?: unknown): string {
+export function messageForError(status: number, code?: unknown): string {
   if (typeof code === "string") {
     // `string | undefined`, not `string`: `noUncheckedIndexedAccess` is off, so the honest type has
     // to be written here or the miss below reads as dead code to both the compiler and the linter —
@@ -124,7 +130,7 @@ export function messageForError(status: number, serverError?: string, code?: unk
     const localised = byCode[code];
     if (localised !== undefined) return localised;
   }
-  return messageForStatus(status, serverError);
+  return messageForStatus(status);
 }
 
 /**
@@ -132,45 +138,41 @@ export function messageForError(status: number, serverError?: string, code?: unk
  * 402/409 paths carry server-computed numbers, so they are built inline by the caller rather than
  * here.
  *
- * Still prefers `serverError` on the multi-cause statuses. That is now a LAST resort rather than the
- * design: an English sentence that is at least specific beats a Polish one that is wrong about which
- * of three things happened. Every cause that has a code has already been answered above.
+ * Polish only, on every branch. On a multi-cause status this message is generic by construction —
+ * one entry cannot say which of three things happened — and that is the accepted trade: the causes
+ * that a user must act on differently all carry a `code` and were answered above, so what reaches
+ * here is a cause shipped ahead of its translation, an older endpoint build, or a body that is not
+ * this endpoint's. A generic Polish sentence is the right answer to all three; an English one is a
+ * mixed-language card, which the copy contract (`copy.errors.codes`) rules out.
  */
-function messageForStatus(status: number, serverError?: string): string {
+function messageForStatus(status: number): string {
   switch (status) {
+    // Three distinct causes answer 429 (generation lease, idempotent in-progress replay, transcript
+    // rate cap). All three ask the user to wait, so the shared sentence misdirects nobody.
     case 429:
-      // Three distinct causes answer 429 (generation lease, idempotent in-progress replay, transcript
-      // rate cap), each with its own server message. Prefer the server's so a cooldown doesn't
-      // misreport as lock contention; the fallback covers a non-JSON 429.
-      return serverError ?? copy.errors.alreadyGenerating;
+      return copy.errors.alreadyGenerating;
     case 413:
       return copy.errors.tooLong;
+    // Three distinct causes answer 422 (no caption track, a vendor success carrying no words, and a
+    // transient fetch failure) and they differ in whether retrying helps — which is why all three
+    // send a code and are resolved above. This line is only reached when none did.
     case 422:
-      // Three distinct causes answer 422 (no caption track, a vendor success carrying no words, and
-      // a transient fetch failure), each with its own server message. Prefer the server's so a video
-      // that will NEVER be summarizable doesn't misreport as a retryable hiccup; the fallback covers
-      // a non-JSON 422.
-      return serverError ?? copy.errors.noTranscript;
+      return copy.errors.noTranscript;
     case 502:
       return copy.errors.serviceFailed;
+    // Two very different causes answer 503: a missing service-role or provider key, and a tripped
+    // budget breaker. Both send a code; without one, "not configured" is the safer generic — it does
+    // not promise the user that waiting will fix it.
     case 503:
-      // Two very different causes answer 503, and collapsing them into the configuration one is what
-      // this used to do: a missing service-role or provider key (genuinely a configuration problem the
-      // user cannot affect) and a tripped budget breaker (a temporary capacity problem that resolves
-      // on its own). Prefer the server's string so "try again in a while" is not reported as "this is
-      // broken"; the fallback covers a non-JSON 503.
-      return serverError ?? copy.errors.notConfigured;
+      return copy.errors.notConfigured;
     case 500:
-      // Several distinct server-side 500s exist (pre-save infrastructure failures vs. a persistence
-      // failure), each with its own message. Prefer the server's so a lock/balance/reserve failure
-      // doesn't misreport as a save failure; the generic fallback covers a non-JSON framework 500.
-      return serverError ?? copy.errors.generic;
+      return copy.errors.generic;
     case 401:
       return copy.errors.sessionExpired;
     case 400:
-      return serverError ?? copy.errors.checkUrl;
+      return copy.errors.checkUrl;
     default:
-      return serverError ?? copy.errors.generic;
+      return copy.errors.generic;
   }
 }
 
@@ -331,6 +333,18 @@ export function useGenerateSummary({
       return;
     }
 
+    // A balance on the body is a FACT about the user's money, not advice about the submission it
+    // answered — so it is applied HERE, above the staleness guard, for the same reason the paid
+    // success above is. Everything below is dropped once the inputs moved on (an obsolete error card
+    // describes a request the user has abandoned), but the number the server just reported is still
+    // the user's current balance: dropping it leaves the header and the form's own credit gate
+    // over-stating what can be spent, which is how a zero-credit user gets to submit into a 402. The
+    // branches below therefore never re-apply it.
+    if (typeof payload.creditsRemaining === "number") {
+      setCredits(payload.creditsRemaining);
+      announceBalance(payload.creditsRemaining);
+    }
+
     // Every remaining outcome is advisory (a consent prompt or an error), not a persisted result. If
     // the inputs it was computed for are no longer current, it can't be applied to what the user now
     // sees — drop it, including any late 409.
@@ -356,12 +370,9 @@ export function useGenerateSummary({
     }
 
     if (response.status === 402) {
-      // The endpoint sends the balance as a FIELD now, not only inside the English `error` sentence,
-      // so this path syncs like every other one instead of leaving the form's gate a request behind.
-      if (typeof payload.creditsRemaining === "number") {
-        setCredits(payload.creditsRemaining);
-        announceBalance(payload.creditsRemaining);
-      }
+      // The balance this status carries is applied above the staleness guard, with every other one:
+      // the endpoint sends it as a FIELD now, not only inside the English `error` sentence, so this
+      // path syncs like the rest instead of leaving the form's gate a request behind.
       // The one refusal whose copy is arithmetic, so it is rebuilt from the numbers rather than looked
       // up by code — and rebuilt with the SAME string the confirmation card uses, so a user who is
       // told a video costs 2 and refused for having 1 reads one sentence, not two phrasings of it.
@@ -370,7 +381,7 @@ export function useGenerateSummary({
           typeof payload.cost === "number" &&
           typeof payload.creditsRemaining === "number"
           ? copy.generate.gate.tooExpensive(payload.cost, payload.creditsRemaining)
-          : messageForError(402, payload.error, payload.code),
+          : messageForError(402, payload.code),
       );
       setConfirm(null);
       setLoading(false);
@@ -381,15 +392,10 @@ export function useGenerateSummary({
     // `undefined`, which narrows to `null` here — silence about money rather than a guessed `false`.
     setCharged(typeof payload.charged === "boolean" ? payload.charged : null);
     // A charged refusal took a credit, so the balance this hook feeds the form is now one behind. The
-    // 422 carries the post-charge number whenever the server knows it; apply it through the same
-    // narrowing the success path uses, and leave `credits` alone when it does not (`notCharged`, an
-    // ambiguous outcome, or any other status) rather than guessing a decrement. Without this the gate
-    // in GenerateSummaryForm over-states the balance and lets a zero-credit user submit into a 402.
-    if (typeof payload.creditsRemaining === "number") {
-      setCredits(payload.creditsRemaining);
-      announceBalance(payload.creditsRemaining);
-    }
-    setError(messageForError(response.status, payload.error, payload.code));
+    // 422 carries the post-charge number whenever the server knows it and it is applied above, with
+    // every other balance-bearing status; `credits` is left alone when the body carries none
+    // (`notCharged`, an ambiguous outcome, or any other status) rather than guessing a decrement.
+    setError(messageForError(response.status, payload.code));
     setConfirm(null);
     setLoading(false);
   }

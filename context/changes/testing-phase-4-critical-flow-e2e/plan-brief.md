@@ -30,14 +30,14 @@ Playwright is absent entirely — no config, no specs, not in `package.json`. Ph
 | Long-video depth | Drive through to a saved summary | The relabelled submit replaying frozen inputs is the actual risk-#6 surface, and only confirming proves the 2-credit cost. | Plan |
 | Fixture registries | Separate ids, prefix and sweep from the integration suite | Keeps the suites from aborting each other; the loopback guard is still *imported*, never re-written. | Plan |
 | Ambiguous charge | No UI, no e2e coverage | Ruled intentional; it has no browser-reachable trigger and stays an integration concern. | Research |
-| Refusal copy language | Polish, resolved from a server-sent cause `code` | A translation would have collapsed three 422 causes into one sentence, which is why the client preferred the English string; the code keeps the distinction and the copy. | User, 2026-09-08 |
+| Error copy language | Polish for **every** exit the card can render, resolved from a server-sent cause `code` | A translation would have collapsed three 422 causes into one sentence, which is why the client preferred the English string; the code keeps the distinction and the copy. Extended from the refusals to all coded exits the same day, and the client's mapper no longer takes the English string at all (impl review F3), so the fallback is structural. | User, 2026-09-08 |
 | Header balance staleness | Fixed with a `credits:changed` DOM event | A page that contradicts itself is worse than one uniformly stale, and the seam fixes the success path too. | User, 2026-09-08 |
 
 ## Scope
 
-**In scope:** Phase 0 balance fix (endpoint + hook + README + unit/integration coverage) · Polish refusal copy via a server-sent cause `code` · a client-side header-balance sync · Playwright runner and config · the LLM alias seam and fake module · an isolated e2e harness (registry, auth fixture, cache seeding, global setup) · an accessible name on the credit balance · three specs · a blocking CI job · `test-plan.md` §6.4.
+**In scope:** Phase 0 balance fix (migration + endpoint + hook + README + unit/integration coverage) · Polish copy for every card-renderable endpoint error via a server-sent cause `code` · a client-side header-balance sync · Playwright runner and config · the LLM alias seam and fake module · an isolated e2e harness (registry, auth fixture, cache seeding, global setup) · an accessible name on the credit balance · three specs · a blocking CI job · `test-plan.md` §6.4.
 
-**Out of scope:** Astro component rendering · a sign-in spec · e2e coverage of the `ambiguous` outcome · any UI for `ambiguousCharge` · Sentry/alerting · RLS and cross-account checks (Phase 3 owns them) · Firefox · snapshot and pixel assertions · Polish copy for the non-refusal exits (400, 429, 500, 503, the "already processed" 409).
+**Out of scope:** Astro component rendering · a sign-in spec · e2e coverage of the `ambiguous` outcome · any UI for `ambiguousCharge` · Sentry/alerting · RLS and cross-account checks (Phase 3 owns them) · Firefox · snapshot and pixel assertions · ~~Polish copy for the non-refusal exits (400, 429, 500, 503, the "already processed" 409)~~ — **moved into scope 2026-09-08**, see the paragraph below.
 
 **Moved INTO scope 2026-09-08 (user, after Phase 0's manual pass):** Polish copy for **every** generate-endpoint error the card can render, via a server-sent cause `code` (Phase 0 item 6); a redirect for signed-in users on the auth forms (item 6b, noticed during the same pass); and a client-side sync for the header balance (item 7). The first two reverse decisions recorded above; see `change.md` for the reasoning.
 
@@ -49,7 +49,7 @@ Playwright runs in its own process and drives a real HTTP server, so both vendor
 
 | Phase | What it delivers | Key risk |
 | --- | --- | --- |
-| 0. Balance on refusal | `creditsRemaining` on the 422 body, hook applies it, README narrowed — plus Polish refusal copy via a cause `code` and a live header balance | Touches a paid-path response body; must not disturb the `ambiguous` silence |
+| 0. Balance on refusal | `creditsRemaining` on the 422 body (the refusal **replay** included, via a `get_refusal_replay` migration), hook applies it above the staleness guard, README narrowed — plus Polish copy via a cause `code` on every renderable exit, and a live header balance | Touches a paid-path response body; must not disturb the `ambiguous` silence |
 | 1. Runner + LLM seam | `@playwright/test`, `playwright.config.ts`, the alias and the fake module | The alias must win over Astro's tsconfig-derived `@/*`; proof is the bundle, not the config |
 | 2. Harness + seed spec | Registry, auth fixture, cache seeding, a11y fix, the happy-flow spec | The exemplar propagates — one bad pattern here reaches every later spec |
 | 3. Charged-refusal spec | Charged and transient 422s, both sides of the oracle | Asserting the generic per-status fallback instead of the cause's own `copy.errors.codes.*` entry |

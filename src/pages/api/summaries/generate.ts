@@ -59,10 +59,11 @@ export const prerender = false;
  *                 transcript, and the transient `failed`/`timeout` fetch outcomes. Different causes,
  *                 none of them "there are no captions", and some of which DO succeed on a retry.
  *
- * The status is 422 in every case; only the body differs. `useGenerateSummary`'s `messageForStatus`
- * (`src/components/hooks/useGenerateSummary.ts`) prefers the server's string for 422 precisely so
- * this distinction survives the trip to the user — it used to hardcode one message and drop both of
- * these.
+ * The status is 422 in every case; only the body differs. What carries the distinction to the user is
+ * the `code` beside this string, not the string itself: `useGenerateSummary`'s `messageForError`
+ * (`src/components/hooks/useGenerateSummary.ts`) renders the Polish copy for that code, and falls back
+ * to ONE generic Polish sentence per status when none resolves. These English strings are for logs and
+ * non-browser consumers.
  */
 const TRANSCRIPT_NO_CAPTIONS_ERROR =
   "This video has no captions, so there is nothing to summarize. We can only summarize videos that have a caption track — try another video.";
@@ -131,8 +132,9 @@ const REFUSAL_CHARGE = 1;
  * copy says the service cannot process NEW videos right now and that this is temporary — not a
  * generic failure they will read as their own. 503 is both honest (the service genuinely cannot do the
  * work) and already this endpoint's "generation is unavailable" status, so the client needs no new
- * branch — but it did need to stop discarding the server's string, which is the one client change in
- * this phase.
+ * branch. What keeps this apart from the OTHER 503 (a missing key, which the user cannot wait out) is
+ * the `budgetExhausted` code beside it: the client renders that code's Polish copy, and a 503 with no
+ * code lands on the "not configured" sentence instead.
  */
 const BUDGET_EXHAUSTED_ERROR =
   "We've reached our transcript service limit for now, so new videos can't be processed. Please try again in a while.";
@@ -270,10 +272,11 @@ interface GenerationInput {
  * a balance while nothing moved at all. The rule is simply *report the balance whenever the server knows
  * it*: the ledger supplies one for `charged`, `replay` and `insufficient` (see
  * `ChargeFailedTranscriptResult`) and supplies none for `notCharged` or `ambiguous`, and the keyless
- * skip in `refuseAndCharge` never asks. The refusal REPLAY in `respondToRepeatedRequest` omits it for the
- * same reason: that branch answers from `get_refusal_replay`, which returns a reason and no balance, and
- * a second query to invent one would buy nothing — a replay moves no credit, so whatever the client
- * learned from the original refusal is still true.
+ * skip in `refuseAndCharge` never asks. The refusal REPLAY in `respondToRepeatedRequest` supplies one
+ * too, and must: it is reached by exactly the client that never saw the original refusal — the retry
+ * exists for a first attempt whose response was lost — so "whatever it learned from the original is
+ * still true" holds for every client except the one asking. `get_refusal_replay` returns the reason and
+ * the balance together for that reason.
  *
  * This is the unfinished half of the S-06 phase 9 supersession of D14, whose "the 422 carries no balance
  * field" no longer holds. Without it the client's balance is stale by exactly one credit after every
@@ -406,12 +409,12 @@ async function respondToRepeatedRequest(
       // same shape with no reason, and that row keeps the 409 below, which is the case its wording
       // describes. `lookupRefusalReplay` also returns null on any error — failing toward the existing
       // reply is right for a lookup whose only job is to improve one.
-      const reason = requestId === null ? null : await lookupRefusalReplay(admin, { userId, requestId });
+      const replay = requestId === null ? null : await lookupRefusalReplay(admin, { userId, requestId });
       // This key was closed by a refusal CHARGE (see the lookup's own contract), so the credit was
-      // taken by the original attempt — the replay reports `true`. No `creditsRemaining`: the lookup
-      // returns a reason and no balance, and a replay moves nothing, so the number the client already
-      // has is still correct (`refusalResponse`).
-      if (reason !== null) return refusalResponse(reason, true);
+      // taken by the original attempt — the replay reports `true`. It carries `creditsRemaining` as
+      // well: this branch is reached by a client retrying a request whose reply it never received, so
+      // it is the one client that did NOT learn the balance from the original refusal.
+      if (replay !== null) return refusalResponse(replay.reason, true, replay.balance);
 
       // Neither replayable nor safe to re-run against a closed charge; the client must start over.
       return Response.json(

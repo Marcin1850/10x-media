@@ -30,6 +30,16 @@
 
 The Windows checks were executed through `npm.cmd`; the first `npm` invocation was blocked by the host's PowerShell execution policy, not by the project.
 
+### Re-run after triage (2026-09-08, F1-F4 applied)
+
+| Command | Result | Evidence |
+|---------|--------|----------|
+| `npm run typecheck` | PASS | Exit 0 |
+| `npm run typecheck:astro` | PASS | 103 files, 0 errors, 0 warnings, 5 hints |
+| `npm run lint` | PASS | Exit 0 |
+| `npm test` | PASS | 7 files, 127 tests (was 120) |
+| `npm run test:integration` | PASS | 9 files, 101 tests, against a local stack with `20260908120000_refusal_replay_balance.sql` applied |
+
 ## Findings
 
 ### F1 — Refusal replay can never repair a balance lost with the first response
@@ -49,7 +59,7 @@ The Windows checks were executed through `npm.cmd`; the first `npm` invocation w
   - Tradeoff: Adds a second database round trip and a split failure policy; the endpoint must decide whether a balance-read failure still returns the reconstructed 422 without the field.
   - Confidence: MEDIUM — it uses an existing service but is less cohesive than returning the replay facts together.
   - Blind spot: The extra read has not been checked against all replay/failure timing cases.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A — `supabase/migrations/20260908120000_refusal_replay_balance.sql` drops and recreates `get_refusal_replay` as `returns table (refusal_reason text, balance integer)` (grants re-asserted after the drop); `lookupRefusalReplay` now resolves `RefusalReplay { reason, balance }` (missing credits row reads as 0); `respondToRepeatedRequest` passes that balance to `refusalResponse`. Covered by two new unit cases in `credits.test.ts` and a `creditsRemaining` assertion on the replay in `generate.db.int.test.ts`.
 
 ### F2 — Editing inputs while a paid refusal is in flight drops its balance update
 
@@ -63,7 +73,7 @@ The Windows checks were executed through `npm.cmd`; the first `npm` invocation w
   - Tradeoff: The ordering must remain explicit so a later refactor does not reapply stale advisory UI with the balance.
   - Confidence: HIGH — the success branch already applies paid state before checking staleness for the same reason.
   - Blind spot: Programmatic concurrent `generate()` calls outside the current disabled-while-loading UI were not exercised.
-- **Decision**: PENDING
+- **Decision**: FIXED — a single `creditsRemaining` application now sits directly above the stale non-success guard in `useGenerateSummary.ts`, so every balance-bearing non-2xx (402 and the charged 422s) syncs `credits` and the header event even when the inputs moved on; the 402 and 422 branches no longer re-apply it and still drop their stale advisory UI. Not unit-covered — the hook needs a DOM environment this repo does not have (see `useGenerateSummary.test.ts` header); verified by typecheck and the unchanged pure-mapper suite.
 
 ### F3 — Unknown or missing cause codes can still render English
 
@@ -82,7 +92,7 @@ The Windows checks were executed through `npm.cmd`; the first `npm` invocation w
   - Tradeoff: Reverses the recorded product decision and permits mixed-language error cards.
   - Confidence: MEDIUM — behavior is already implemented, but it conflicts with the accepted oracle.
   - Blind spot: User acceptance of mixed-language fallback would need to be reconfirmed.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A — `messageForStatus` is Polish on every branch and `messageForError`'s `serverError` parameter is REMOVED, so no path can render the English string; call sites pass `(status, code)`. Tests now parameterize the multi-cause statuses (400/422/429/500/503 plus the `default` arm) as code-less Polish, replacing the row that pinned the English 429. Nothing is lost in practice: every current 400/422/429/500/503 exit sends a code, and the two 502s and the 401 already had correct Polish status fallbacks. Comments in `generate.ts` (the D3 string pair and the budget 503) were re-synced to the code-carries-the-distinction rule.
 
 ### F4 — Phase 0 decisions were not propagated consistently through derived docs
 
@@ -92,7 +102,7 @@ The Windows checks were executed through `npm.cmd`; the first `npm` invocation w
 - **Location**: `context/changes/testing-phase-4-critical-flow-e2e/plan.md:54`, `plan.md:103`, `plan.md:526`, `plan.md:567`, `plan.md:668`, `context/changes/testing-phase-4-critical-flow-e2e/plan-brief.md:40`, `README.md:263`
 - **Detail**: The documents retain mutually contradictory instructions after items 6 and 7: non-refusal statuses are still called English; the 402 branch is called untouched; Phase 5 is told to document “header never updates”; Phase 3 summary/progress still requires an English refusal; and `plan-brief.md` puts non-refusal Polish copy both out of scope and back into scope. README additionally says every endpoint error has a code even though the accepted design deliberately exempts 401 and both 502s. This violates the accepted lesson to synchronize `plan.md`, `plan-brief.md`, and derived docs in the same pass, and can misdirect later phases.
 - **Fix**: Reconcile the listed lines with Phase 0 items 6/7 and narrow README's “every error” claim to the coded exits while documenting the 401/502 status-fallback exceptions.
-- **Decision**: PENDING
+- **Decision**: FIXED — `plan.md`: the "still English by decision" tail on the NOT-doing entry and the "402 branch untouched" contract are struck and dated; the §6.4 cookbook now names the `credits:changed` sync instead of the header-never-updates fact; the Phase 3 e2e bullet and manual item 3.6 now demand the Polish `copy.errors.codes.*` string; items 1 and 6 carry dated amendments for the F1 replay balance and the F3 signature change. `plan-brief.md`: the out-of-scope "Polish copy for the non-refusal exits" entry is struck and points at the moved-into-scope paragraph below it. `README.md`: the "every error carries a code" claim is narrowed to multi-cause statuses, the 401/502 exemption is stated, and the fallback is described as structural (the mapper no longer takes the English string).
 
 ### F5 — Manual completion has no reproducible verification record
 
@@ -102,4 +112,4 @@ The Windows checks were executed through `npm.cmd`; the first `npm` invocation w
 - **Location**: `context/changes/testing-phase-4-critical-flow-e2e/plan.md:615`
 - **Detail**: Manual items 0.5 and 0.11-0.14 are checked and the commit message says a manual pass occurred, but the change folder contains no verification artifact recording setup, observed UI values, routes, or results. The diff proves the intended code exists, not that the browser behaviors marked complete were observed. Items 0.6 and 0.7 are directly visible in the documentation/code diff.
 - **Fix**: Add a concise Phase 0 manual-verification note with the account setup, exercised paths, observed before/after balances and Polish copy/redirect results.
-- **Decision**: PENDING
+- **Decision**: SKIPPED (user, 2026-09-08) — the manual pass happened; a retroactive artifact reconstructed from the diff would record the reviewer's reading, not the observation.

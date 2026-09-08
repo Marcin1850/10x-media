@@ -51,7 +51,7 @@ Verify: with `npx supabase start` running, `npm run test:e2e` is green; a plain 
 - **No sign-in spec.** Auth is injected via `storageState`, per the `/10x-e2e` rule ("never log in through UI in individual tests"). Sign-in carries no risk-map row of its own, and every other spec exercises the real cookie path by using it. The gap is deliberate and gets recorded in §6.4.
 - **No e2e coverage of the `ambiguous` charge outcome.** Not browser-reachable (see Key Discoveries). Already covered at the unit layer (`credits.test.ts` via `stubRejecting`) and the integration layer.
 - **No UI for `ambiguousCharge`.** Ruled intentional 2026-09-07 — the silence is the desired behaviour. A spec that reaches that state asserts the *absence* of both charge lines; it never asserts a positive charge message.
-- ~~**No change to the English refusal copy.**~~ **Reversed 2026-09-08 (user)** — see Phase 0 item 6. Refusal copy is Polish, resolved from a server-sent cause `code` rather than translated from the English string, so the multi-cause distinction survives. Specs assert the **Polish** string from `copy.errors.codes`. The English `error` still travels on the body for logs and untranslated consumers, so a spec may assert its presence but must not assert it as what the user reads. Statuses outside the refusal set (400, 429, 500, 503) are still English by decision.
+- ~~**No change to the English refusal copy.**~~ **Reversed 2026-09-08 (user)** — see Phase 0 item 6. Refusal copy is Polish, resolved from a server-sent cause `code` rather than translated from the English string, so the multi-cause distinction survives. Specs assert the **Polish** string from `copy.errors.codes`. The English `error` still travels on the body for logs and untranslated consumers, so a spec may assert its presence but must not assert it as what the user reads. ~~Statuses outside the refusal set (400, 429, 500, 503) are still English by decision.~~ **Also reversed 2026-09-08 (user)** — item 6 was extended to every exit the card can render, and the impl review (F3) removed the English string from `messageForError`'s signature outright, so no status renders English.
 - **No Sentry or alerting.** Logging-without-alerting via Cloudflare Workers Logs ruled acceptable for now. §6.1's rule stands: never assert the `REFUSAL_CHARGE_AMBIGUOUS` marker strings.
 - **No RLS or cross-account assertions.** Phase 3 owns the data boundary through two purpose-built layers; the one prior browser-level cross-account check disclaims itself (`browse-summary-list/reviews/manual-verification-phase-1.md:67-75`).
 - **No Firefox project.** `prd.md:72-73` names Chrome and Firefox; none of the three flows carries an engine-specific risk. The gap is documented in the config, not silently left.
@@ -90,7 +90,9 @@ Pass `chargeFailedTranscript`'s already-computed balance through the 422 body as
 
 **Intent**: Stop discarding the balance `chargeFailedTranscript` already returns. `refuseAndCharge` currently collapses the service result to a boolean at `:293-294`; it should carry the number through to `refusalResponse` so the client can resynchronise without a second query.
 
-**Contract**: `refusalResponse` gains an optional balance parameter and emits `creditsRemaining: number` on the 422 body **whenever the ledger outcome supplies one** — `charged`, `replay` and `insufficient` (`credits.ts:305-310`). It is **omitted** for `notCharged`, for `ambiguous`, and for the `requestId === null` skip branch, none of which has a balance to report. The field means *"the user's current balance"*, not *"a charge happened"* — that distinction belongs in the doc comment, because `insufficient` sends a balance while nothing moved.
+**Contract**: `refusalResponse` gains an optional balance parameter and emits `creditsRemaining: number` on the 422 body **whenever the ledger outcome supplies one** — `charged`, `replay` and `insufficient` (`credits.ts:305-310`). It is **omitted** for `notCharged`, for `ambiguous`, and for the `requestId === null` skip branch, none of which has a balance to report.
+
+**Amended 2026-09-08 (impl review F1)**: the refusal REPLAY carries one too. It was omitted there on the reasoning that a replay moves no credit, so the client's number is still right — but the replay is reached by the retry of a request whose *response was lost*, which is the one client that never learned that number. `get_refusal_replay` now returns the balance beside the reason (migration `20260908120000_refusal_replay_balance.sql`), making the refusal replay symmetric with the successful one. The field means *"the user's current balance"*, not *"a charge happened"* — that distinction belongs in the doc comment, because `insufficient` sends a balance while nothing moved.
 
 The doc comments at `:258-259` and `:225-231` both assert the body carries no balance field, citing the pre-supersession D14. Both must be rewritten to the post-S-06 framing rather than left contradicting the code — `test-plan.md`'s stale-doc trap sprang here once already (`roadmap.md` S-09 D14, quoted verbatim into `test-plan.md:27` after it had become false).
 
@@ -100,7 +102,9 @@ The doc comments at `:258-259` and `:225-231` both assert the body carries no ba
 
 **Intent**: Apply the new field so the hook's `credits` stops over-stating the balance after a charged refusal. Today `setCredits` runs only inside the `response.ok` branch (`:274`).
 
-**Contract**: In the terminal-error branch (around `:332`, alongside the existing `setCharged`), apply `payload.creditsRemaining` through the same `typeof … === "number"` narrowing the success path uses. `payload` already declares `creditsRemaining?: number` at `:249`, so no type change is needed. The 402 branch is deliberately untouched — the endpoint embeds that balance in the `error` string, which `:322-324` already documents.
+**Contract**: Apply `payload.creditsRemaining` through the same `typeof … === "number"` narrowing the success path uses. `payload` already declares `creditsRemaining?: number` at `:249`, so no type change is needed.
+
+~~The 402 branch is deliberately untouched — the endpoint embeds that balance in the `error` string.~~ **Superseded twice on 2026-09-08.** Item 6 gave the 402 a `creditsRemaining` field of its own, so it syncs like every other status. Then the impl review (F2) moved the application ABOVE the stale non-success guard and made it single: a balance is a fact about the user's money, not advice about the submission it answered, so editing the inputs while a charged refusal is in flight must still drop the error card and must NOT drop the number — the same reason the paid success branch already applied before the staleness check. The 402 and 422 branches no longer apply it themselves.
 
 #### 3. Narrow the README's charge-visibility claim
 
@@ -166,7 +170,10 @@ Grouping mirrors `REFUSAL_COPY`, and therefore D3 — `unavailable` → `noCapti
 `transcriptFetchFailed` despite sharing an English string with the durable one, because one is
 permanent and charged and the other is our outage, free and retryable. An absent or unknown code falls
 back to the per-status message, so a cause shipped ahead of its translation degrades to a generic
-Polish sentence rather than an English one.
+Polish sentence rather than an English one. **Amended 2026-09-08 (impl review F3)**: that fallback was
+stated but not implemented — `messageForStatus` still preferred the English `error` on exactly the
+multi-cause statuses. `messageForError` no longer TAKES the English string, so the promise is now
+structural rather than a priority order a refactor can invert.
 
 Both 402s are included: the zero-balance one by code, and the insufficient-for-cost one by **fields** —
 `code`, `cost`, `creditsRemaining` — so the client rebuilds the sentence with
@@ -523,7 +530,7 @@ Upload the Playwright HTML report as an artifact on failure; a red e2e job with 
 
 **Intent**: §6.4 is the deliverable that lets the next contributor add a spec without re-deriving this phase.
 
-**Contract**: Replace `- TBD — see §3 Phase 4.` with the cookbook: file placement and the `*.spec.ts`-not-`*.test.ts` reason; the two-sided oracle rule; the LLM alias and its safety property; cache seeding as the Supadata answer; the separate registry and its accepted consequence; the auth fixture and the `sb-127-auth-token` derivation; the header-never-updates fact; the deliberate-break check as the definition of done; and what is deliberately not covered (sign-in, `ambiguous`, Firefox, component rendering).
+**Contract**: Replace `- TBD — see §3 Phase 4.` with the cookbook: file placement and the `*.spec.ts`-not-`*.test.ts` reason; the two-sided oracle rule; the LLM alias and its safety property; cache seeding as the Supadata answer; the separate registry and its accepted consequence; the auth fixture and the `sb-127-auth-token` derivation; the header's `credits:changed` sync and the rule for asserting it (wait for the expected value, never read it once — Phase 0 item 7 replaced the header-never-updates fact); the deliberate-break check as the definition of done; and what is deliberately not covered (sign-in, `ambiguous`, Firefox, component rendering).
 
 Add a §6.6 "Phase 4" entry for what would otherwise be rediscovered: that process separation — not Playwright — is what made this a design phase; that the alias reaches dev as well as build; that research's "header updates in place" claim was wrong and how it was caught. Flip §3's Phase 4 Status to `complete`, mark §5's e2e gate row wired, and add a §8 freshness-ledger line.
 
@@ -564,7 +571,7 @@ Add a §6.6 "Phase 4" entry for what would otherwise be rediscovered: that proce
 ### E2E Tests:
 
 - Happy flow: generate → saved card, card text + ledger debit of 1 (Phase 2)
-- Charged refusal: English error + charge line + real debit; transient refusal: no-charge line + unmoved balance (Phase 3)
+- Charged refusal: Polish `copy.errors.codes.*` error + charge line + real debit; transient refusal: no-charge line + unmoved balance (Phase 3)
 - Long video: 409 prompt → relabelled confirm → saved card + debit of 2 (Phase 4)
 
 ### Manual Testing Steps:
@@ -620,6 +627,18 @@ None — no schema change. Phase 0 **adds** an optional field to a 422 response 
 - [x] 0.13 No endpoint exit the card can render is English any more — ca954c4
 - [x] 0.14 A signed-in user opening `/auth/signin` lands on `/summaries` — ca954c4
 
+#### Added by the implementation review (`reviews/impl-review-phase-0.md`, 2026-09-08)
+
+Automated:
+
+- [x] 0.15 The refusal **replay** carries `creditsRemaining` — `get_refusal_replay` returns the balance beside the reason (F1) — pending commit
+- [x] 0.17 No unresolved or absent code renders English — `messageForError` no longer takes the server string (F3) — pending commit
+
+Manual:
+
+- [x] 0.16 A balance-bearing non-2xx still syncs the balance when the inputs changed mid-flight, while its error card is still dropped (F2) — pending commit
+- [x] 0.18 `plan.md`, `plan-brief.md` and README reconciled with items 6/7 and with F1-F3 (F4) — pending commit
+
 ### Phase 1: The Playwright runner and the LLM seam
 
 #### Automated
@@ -665,7 +684,7 @@ None — no schema change. Phase 0 **adds** an optional field to a 422 response 
 
 - [ ] 3.4 Deliberate-break check: UI half and ledger half each go red independently
 - [ ] 3.5 No `test.skip` / `test.fixme` remains
-- [ ] 3.6 The asserted refusal text is the server's English string
+- [ ] 3.6 The asserted refusal text is the Polish `copy.errors.codes.*` entry for the cause, never the English `error` still carried on the body
 
 ### Phase 4: The long-video confirmation spec
 
