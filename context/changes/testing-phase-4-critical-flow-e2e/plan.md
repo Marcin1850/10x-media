@@ -708,11 +708,20 @@ Make the suite a gate rather than a local convenience, and write down what the p
 
 **Intent**: Run the suite on every push and PR to `master`, in parallel with `ci` and `integration`, and block `deploy` on it.
 
-**Contract**: A third job that is effectively `integration`'s setup plus `ci`'s build: the same `supabase start -x <non-essential services>` invocation (its exclusion list is already hard-won — the valid names are container keys, not `config.toml` section names), `npx playwright install --with-deps chromium`, a build with `E2E_FAKE_LLM` set, then `npm run test:e2e`.
+**Contract**: A third job that is `integration`'s setup plus a browser: the same `supabase start -x <non-essential services>` invocation (its exclusion list is already hard-won — the valid names are container keys, not `config.toml` section names), `npx playwright install --with-deps chromium`, then `npm run test:e2e`.
 
-Env follows the `integration` job's established shape exactly (`ci.yml:67-71`): the Supabase CLI's fixed local demo JWTs and **literal placeholder vendor keys**. Placeholders are safe here for a different reason than in `integration`, and the comment must say which: `config-status.ts:17-35` checks key **presence only, never validity** (`generate.ts:111-113`), so a placeholder does not steer the app into the "generation disabled" notice — it proceeds into the real flow. What makes it safe is the alias plus cache seeding, not the key being fake. Never `secrets.SUPABASE_URL` — that is production.
+~~a build with `E2E_FAKE_LLM` set, then `npm run test:e2e`~~ — **amended 2026-09-09 (impl-review triage, F1/F2)**. The job must **not** carry its own build step: `webServer` now runs `npm run build && npm run preview` itself, in CI and locally alike, with `E2E_FAKE_LLM=1` **and `CLOUDFLARE_ENV=e2e`** from `webServer.env`. A separate earlier build would be both redundant and wrong — built without `CLOUDFLARE_ENV`, it would not bake the e2e vendor keys into `dist/server/.dev.vars`, and `webServer` would rebuild over it anyway.
 
-Extend `deploy`'s `needs` to `[ci, integration, e2e]`. `deploy`'s own build step must **not** set `E2E_FAKE_LLM` — that omission is the safety property, and it is worth one comment line where a future reader will see it.
+**Env, and which process each variable is for** — this is where the amended design is easy to get wrong, because the two halves no longer read from the same place:
+
+- **The Playwright Node process** needs `SUPABASE_URL`, `SUPABASE_KEY` and `SUPABASE_SERVICE_ROLE_KEY` in the job env, exactly as `integration` supplies them (`ci.yml:67-71`, the CLI's fixed publicly documented local demo JWTs — never `secrets.SUPABASE_URL`, that is production). They are consumed by `global-setup.ts`'s stale sweeps, the fixtures' admin client and the table-owner connection. There is no `.env` in CI, so `--env-file-if-exists=.env` is a no-op and the job env is the only source. `SUPABASE_URL` is additionally **load-bearing at config load**: the loopback guard runs while `playwright.config.ts` is read and refuses to start when it is unset, so omitting it fails the job before a single spec runs.
+- **The app server** takes its five values from the committed `.dev.vars.e2e`, selected by `CLOUDFLARE_ENV=e2e` and baked into `dist/server/.dev.vars` at build. ~~literal placeholder vendor keys~~ **`SUPADATA_API_KEY` and `OPENROUTER_API_KEY` therefore no longer belong in the job env at all** — the app would ignore them. Leaving them in is harmless but actively misleading, since it suggests a lever that is not connected to anything. The Supabase values in `.dev.vars.e2e` are the same local demo JWTs as the job env's, and both point at `http://127.0.0.1:54321`; they must stay in agreement.
+
+The reason placeholders are safe is unchanged and still worth its comment, only its location moved: `config-status.ts:17-35` checks key **presence only, never validity** (`generate.ts:111-113`), so a placeholder does not steer the app into the "generation disabled" notice — it proceeds into the real flow. What makes that safe is the alias plus cache seeding, not the key being fake; the non-billable key is the backstop for when one of those two is wrong.
+
+`.dev.vars.e2e` is committed, so `actions/checkout` supplies it and the job needs no step to create it. If `.gitignore`'s `.dev.vars` entry is ever broadened to a glob, the file vanishes from the checkout and `playwright.config.ts` refuses to start rather than silently falling back — which is the failure this design wants, and the reason the guard exists.
+
+Extend `deploy`'s `needs` to `[ci, integration, e2e]`. `deploy`'s own build step must **not** set `E2E_FAKE_LLM` **or `CLOUDFLARE_ENV`** — the first omission keeps the fake out of the bundle, the second keeps `.dev.vars.e2e`'s non-credentials out of it, and both are worth one comment line where a future reader will see them.
 
 Upload the Playwright HTML report as an artifact on failure; a red e2e job with no trace is a job people learn to re-run rather than read.
 
@@ -743,6 +752,7 @@ Add a §6.6 "Phase 4" entry for what would otherwise be rediscovered: that proce
 #### Automated Verification:
 
 - The `e2e` job passes on a PR to `master`
+- The `e2e` job carries no vendor keys in its env and no build step of its own — the app's keys come from `.dev.vars.e2e` via `webServer`
 - `ci` and `integration` still pass and still run in parallel
 - `deploy` is blocked while any of the three fails, and runs when all three pass
 - A failing spec uploads a readable HTML report artifact
@@ -903,6 +913,7 @@ Manual:
 #### Automated
 
 - [ ] 5.1 The `e2e` job passes on a PR to `master`
+- [ ] 5.9 The `e2e` job carries no vendor keys and no build step; the app's keys come from `.dev.vars.e2e`
 - [ ] 5.2 `ci` and `integration` still pass in parallel
 - [ ] 5.3 `deploy` is blocked while any of the three fails and runs when all pass
 - [ ] 5.4 A failing spec uploads a readable HTML report artifact
