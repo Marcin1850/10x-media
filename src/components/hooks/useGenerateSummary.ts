@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { copy } from "@/lib/copy";
+import { announceBalance } from "@/lib/credits-events";
 import type { ChannelCharacter } from "@/types";
 
 /**
@@ -100,8 +101,40 @@ export interface UseGenerateSummary {
 }
 
 /**
- * Maps a generate-endpoint HTTP status to a user-facing English message. The 402/409 paths carry
- * server-computed numbers, so they are built inline by the caller rather than here.
+ * Picks the user-facing message for an error response, preferring the server's machine-readable
+ * `code` over its English `error` string.
+ *
+ * This inverts what the client used to do, and the reason it used to do it is worth stating: several
+ * statuses answer with more than one cause (422 alone has three), the per-status table below has one
+ * entry each, so preferring the table would have collapsed distinctions a user must act on
+ * differently. The endpoint now sends a `code` per cause, which keeps the distinction AND lets the
+ * copy be Polish — the two things that were previously in conflict.
+ *
+ * Falls through to `messageForStatus` for an absent or unrecognised code, so an endpoint that adds a
+ * cause before its translation exists degrades to a correct-but-generic Polish sentence instead of
+ * an English one. Exported for unit test: it is pure, and it is where the localisation contract
+ * actually lives.
+ */
+export function messageForError(status: number, serverError?: string, code?: unknown): string {
+  if (typeof code === "string") {
+    // `string | undefined`, not `string`: `noUncheckedIndexedAccess` is off, so the honest type has
+    // to be written here or the miss below reads as dead code to both the compiler and the linter —
+    // while at runtime an unknown code is the whole reason this branch exists.
+    const byCode: Record<string, string | undefined> = copy.errors.codes;
+    const localised = byCode[code];
+    if (localised !== undefined) return localised;
+  }
+  return messageForStatus(status, serverError);
+}
+
+/**
+ * Maps a generate-endpoint HTTP status to a user-facing message when no `code` resolved it. The
+ * 402/409 paths carry server-computed numbers, so they are built inline by the caller rather than
+ * here.
+ *
+ * Still prefers `serverError` on the multi-cause statuses. That is now a LAST resort rather than the
+ * design: an English sentence that is at least specific beats a Polish one that is wrong about which
+ * of three things happened. Every cause that has a code has already been answered above.
  */
 function messageForStatus(status: number, serverError?: string): string {
   switch (status) {
@@ -251,6 +284,7 @@ export function useGenerateSummary({
       requiresConfirmation?: boolean;
       summaryId?: string;
       error?: string;
+      code?: unknown;
       charged?: unknown;
       ambiguousCharge?: unknown;
     };
@@ -271,7 +305,10 @@ export function useGenerateSummary({
     if (response.ok) {
       setResult({ summary: payload.summary ?? "", cost: payload.cost ?? 1, url: submittedUrl });
       setConfirm(null);
-      if (typeof payload.creditsRemaining === "number") setCredits(payload.creditsRemaining);
+      if (typeof payload.creditsRemaining === "number") {
+        setCredits(payload.creditsRemaining);
+        announceBalance(payload.creditsRemaining);
+      }
       setLoading(false);
       // The paid result and the new balance are applied above regardless. The success *event* needs
       // an id to be actionable, so a success answered without one — a contract the endpoint never
@@ -319,9 +356,22 @@ export function useGenerateSummary({
     }
 
     if (response.status === 402) {
-      setError(payload.error ?? copy.errors.noCredits);
-      // A 402 can arrive with a fresh authoritative balance in the message; if the server also sent a
-      // number, prefer it. The endpoint currently embeds the balance in `error`, so nothing to sync here.
+      // The endpoint sends the balance as a FIELD now, not only inside the English `error` sentence,
+      // so this path syncs like every other one instead of leaving the form's gate a request behind.
+      if (typeof payload.creditsRemaining === "number") {
+        setCredits(payload.creditsRemaining);
+        announceBalance(payload.creditsRemaining);
+      }
+      // The one refusal whose copy is arithmetic, so it is rebuilt from the numbers rather than looked
+      // up by code — and rebuilt with the SAME string the confirmation card uses, so a user who is
+      // told a video costs 2 and refused for having 1 reads one sentence, not two phrasings of it.
+      setError(
+        payload.code === "insufficientCredits" &&
+          typeof payload.cost === "number" &&
+          typeof payload.creditsRemaining === "number"
+          ? copy.generate.gate.tooExpensive(payload.cost, payload.creditsRemaining)
+          : messageForError(402, payload.error, payload.code),
+      );
       setConfirm(null);
       setLoading(false);
       return;
@@ -330,7 +380,16 @@ export function useGenerateSummary({
     // Only the 422 bodies this endpoint sends actually carry `charged`; every other status leaves it
     // `undefined`, which narrows to `null` here — silence about money rather than a guessed `false`.
     setCharged(typeof payload.charged === "boolean" ? payload.charged : null);
-    setError(messageForStatus(response.status, payload.error));
+    // A charged refusal took a credit, so the balance this hook feeds the form is now one behind. The
+    // 422 carries the post-charge number whenever the server knows it; apply it through the same
+    // narrowing the success path uses, and leave `credits` alone when it does not (`notCharged`, an
+    // ambiguous outcome, or any other status) rather than guessing a decrement. Without this the gate
+    // in GenerateSummaryForm over-states the balance and lets a zero-credit user submit into a 402.
+    if (typeof payload.creditsRemaining === "number") {
+      setCredits(payload.creditsRemaining);
+      announceBalance(payload.creditsRemaining);
+    }
+    setError(messageForError(response.status, payload.error, payload.code));
     setConfirm(null);
     setLoading(false);
   }

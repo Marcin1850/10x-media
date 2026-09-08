@@ -257,5 +257,59 @@ export const pl = {
     noCredits: "Nie masz wystarczającej liczby kredytów.",
     savedResponseInvalid:
       "Podsumowanie zostało zapisane i opłacone, ale odpowiedź serwera była niekompletna. Odśwież stronę, aby je zobaczyć.",
+    /**
+     * Keyed by the `code` the generate endpoint sends beside `error` — NOT translated from that
+     * English string, because the string is not what carries the meaning. One status covers several
+     * causes: 422 alone answers "this video has no caption track", "a transcript arrived with no
+     * words in it", and "we could not reach the transcript service", and a user must do something
+     * different about each. The per-status entries above would collapse all three into one sentence,
+     * which is exactly why the client used to prefer the server's English copy over them.
+     *
+     * An unknown or absent code falls back to the per-status entry, so a code added server-side
+     * before its translation lands degrades to a correct-but-generic Polish message rather than to
+     * an English one or an empty card.
+     */
+    codes: {
+      noCaptions:
+        "Ten film nie ma napisów, więc nie ma czego podsumować. Podsumowujemy tylko filmy, które mają ścieżkę napisów — spróbuj z innym filmem.",
+      transcriptUnavailable: "Brak dostępnego transkryptu dla tego filmu.",
+      // Deliberately NOT worded as "this video has no transcript". This is the one 422 the endpoint
+      // never charges for, because the failure is our outage or the vendor's — the video itself may
+      // summarize perfectly on the next attempt. Copy that blamed the video would send the user away
+      // from something that works, and would contradict the "nie pobrano kredytu" line beneath it.
+      transcriptFetchFailed: "Nie udało się pobrać transkryptu — spróbuj ponownie za chwilę.",
+      noCredits: "Nie masz już kredytów na podsumowania.",
+      // The numberless fallback for the one refusal whose real copy is arithmetic. When the 402 body
+      // carries `cost` and `creditsRemaining` the client renders `generate.gate.tooExpensive` with
+      // them instead; this covers the body arriving without them, which is the shape a truncated or
+      // older response has. Every code needs somewhere to land — see `error-codes.test.ts`.
+      insufficientCredits: "Nie masz wystarczającej liczby kredytów na ten film.",
+
+      // The generate endpoint's remaining exits. Same rule as above — one entry per thing a user must
+      // do something different about, not one per `return` statement. The five identical `generic`
+      // 500s and the three identical save 500s therefore share two codes between them, while the
+      // three 429s keep three: "something else of yours is running", "this exact one is running" and
+      // "you are asking too fast" are three different waits.
+      invalidRequest: "Żądanie było nieprawidłowe. Odśwież stronę i spróbuj ponownie.",
+      invalidUrl: "To nie jest poprawny adres filmu z YouTube. Sprawdź go i spróbuj ponownie.",
+      notConfigured: "Generowanie podsumowań nie jest skonfigurowane.",
+      // Deliberately not phrased as a fault the user can fix or has caused: the service is at a
+      // temporary capacity limit and will recover on its own. 503 is shared with the configuration
+      // exits above, which is exactly why this needs its own code — "it is broken" and "come back
+      // shortly" are the two answers a status alone cannot tell apart.
+      budgetExhausted:
+        "Osiągnęliśmy chwilowy limit usługi transkrypcji, więc nowe filmy nie mogą być teraz przetwarzane. Spróbuj ponownie za jakiś czas.",
+      generationBusy: "Generujesz już inne podsumowanie. Poczekaj, aż się zakończy, zanim zaczniesz kolejne.",
+      generationInProgress: "To podsumowanie jest już generowane. Poczekaj, aż się zakończy.",
+      transcriptRateLimited: "Zbyt wiele żądań o transkrypcję. Odczekaj chwilę i spróbuj ponownie.",
+      requestAlreadyProcessed: "To żądanie zostało już przetworzone. Rozpocznij nowe generowanie.",
+      transcriptTooLong: "Ten film jest zbyt długi, aby go podsumować.",
+      generic: "Coś poszło nie tak. Spróbuj ponownie.",
+      // Distinct from `generic` because the money is in a different place. The generic 500s fire
+      // before anything was saved or charged; this one fires after the summary was generated and
+      // paid for, so "spróbuj ponownie" means something different and the refund path is what the
+      // user is relying on.
+      saveFailed: "Coś poszło nie tak przy zapisywaniu podsumowania. Spróbuj ponownie.",
+    },
   },
 };

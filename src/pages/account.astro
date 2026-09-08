@@ -26,7 +26,9 @@ const { user, credits } = Astro.locals;
                   <span class="sr-only">{copy.nav.creditsUnavailable}</span>
                 </>
               ) : (
-                <span class="text-foreground font-medium">{credits}</span>
+                <span class="text-foreground font-medium" data-credit-balance>
+                  {credits}
+                </span>
               )
             }
           </div>

@@ -8,7 +8,12 @@ import {
   type ChargeFailedTranscriptParams,
   type ChargeFailedTranscriptResult,
 } from "@/lib/services/credits";
-import { stubFailing, stubRejecting, stubReturning } from "@/lib/services/__fixtures__/supabase-stub";
+import {
+  stubFailing,
+  stubRejecting,
+  stubReturning,
+  type SupabaseStub,
+} from "@/lib/services/__fixtures__/supabase-stub";
 
 /**
  * Risk #1 — who pays, and what the caller may claim about it.
@@ -48,6 +53,15 @@ import { stubFailing, stubRejecting, stubReturning } from "@/lib/services/__fixt
  *
  * The 25 uncovered mutants are all in `getBalance` and `refundReservation` — outside this rollout
  * phase's scope, which names only the three functions below.
+ *
+ * **Re-run 2026-09-08** after adding the balance-presence table ("which outcomes know a balance at
+ * all"): **98 killed / 26 survived / 25 uncovered — identical to the run above.** The new rows kill no
+ * mutant the value tables were not already killing, and that is recorded rather than hidden: their
+ * value is not extra mutation coverage. They state the presence rule as a rule across all five
+ * outcomes, which is what `generate.ts`'s `refusalResponse` now branches on, and they use
+ * `toHaveProperty` for the two absent cases — something `toEqual({ outcome: "notCharged" })` cannot
+ * express, since it accepts an explicit `balance: undefined` beside it. `credits.ts` itself is
+ * unchanged by that phase, so the identical score is the expected result, not a gap.
  */
 
 const CHARGE_PARAMS: ChargeFailedTranscriptParams = {
@@ -210,6 +224,76 @@ describe("chargeFailedTranscript — the notCharged/ambiguous boundary", () => {
     const stub = stubRejecting(new Error("connection reset"));
 
     await expect(chargeFailedTranscript(stub.client, CHARGE_PARAMS)).resolves.toBeDefined();
+  });
+});
+
+/**
+ * Which outcomes know a balance at all — the rule, stated once across all five.
+ *
+ * A different property from the tables above, not a restatement of them: those pin WHICH NUMBER each
+ * row returns, this pins WHETHER there is a number to return. That is the rule the endpoint branches
+ * on — `refuseAndCharge` forwards `result.balance` to `refusalResponse`, which emits
+ * `creditsRemaining` on the 422 exactly when one arrived — so the presence rule is now a wire
+ * contract, and a `notCharged` that started answering `balance: 0` would tell a user a credit left
+ * their account while every value assertion above stayed green.
+ *
+ * Oracle: README §Summary credits ("it carries the resulting balance as `creditsRemaining` whenever
+ * the server knows it") and `refusalResponse`'s documented contract, which supersedes roadmap S-09
+ * **D14**'s "no balance field" — the qualitative half of that supersession shipped as `charged` in
+ * S-06 phase 9 and the quantitative half lands with this rule. Read from those, not from the switch.
+ *
+ * Asserted with `toHaveProperty`, which the value tables cannot do for the two absent cases:
+ * `toEqual({ outcome: "notCharged" })` accepts an explicit `balance: undefined` alongside it. Each row
+ * stands on its own shape — `ambiguous` is "has no balance", never "is not `notCharged`" (§6.1).
+ */
+describe("chargeFailedTranscript — which outcomes know a balance at all", () => {
+  const rows: [string, string, () => SupabaseStub, boolean][] = [
+    // A real debit just happened and the RPC returned the balance it wrote.
+    [
+      "charged",
+      "the debit landed here, so the post-charge balance is known",
+      () => stubReturning([{ outcome: "charged", new_balance: 41 }]),
+      true,
+    ],
+    // Nothing moved on THIS attempt, but the RPC still re-reads user_credits (the migration's `replay`
+    // branch), so the number is just as authoritative — and the client is just as entitled to it.
+    [
+      "replay",
+      "no debit this time, yet the RPC still read the current balance",
+      () => stubReturning([{ outcome: "replay", new_balance: 17 }]),
+      true,
+    ],
+    // The case that proves a balance is not a claim about a charge: nothing moved, and the balance is
+    // reported anyway. Dropping this row would make `creditsRemaining` mean "you were charged".
+    [
+      "insufficient",
+      "nothing moved, and the balance is reported regardless — it is not a charge signal",
+      () => stubReturning([{ outcome: "insufficient", new_balance: 0 }]),
+      true,
+    ],
+    // A rolled-back statement learned nothing about the balance. Reporting one here would be inventing
+    // a number, which is worse than the staleness this whole rule exists to fix.
+    [
+      "notCharged",
+      "a rolled-back statement read no balance, so there is none to report",
+      () => stubFailing("relation does not exist"),
+      false,
+    ],
+    // Same absence, opposite reason: the statement may well have committed, so any number we could
+    // name might already be wrong by one credit.
+    [
+      "ambiguous",
+      "the outcome is unknown, so any balance we named could already be stale",
+      () => stubReturning([]),
+      false,
+    ],
+  ];
+
+  it.each(rows)("a %s outcome %s", async (_outcome, _why, makeStub, hasBalance) => {
+    const result = await chargeFailedTranscript(makeStub().client, CHARGE_PARAMS);
+
+    if (hasBalance) expect(result).toHaveProperty("balance", expect.any(Number));
+    else expect(result).not.toHaveProperty("balance");
   });
 });
 

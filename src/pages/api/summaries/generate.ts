@@ -88,6 +88,36 @@ const REFUSAL_COPY: Record<RefusalReason, string> = {
 };
 
 /**
+ * The machine-readable cause the client localises, sent beside `error` rather than instead of it.
+ *
+ * `error` stays because it is what a non-browser consumer, a log line and an untranslated client all
+ * read; `code` is what lets the UI say the same thing in the user's language WITHOUT losing the
+ * distinction between the causes that share a status. Before this existed the client preferred the
+ * English `error` over its own per-status Polish table for exactly that reason — the table had one
+ * entry per status and three different 422s to describe.
+ *
+ * The grouping mirrors `REFUSAL_COPY` above, and therefore D3, deliberately: `unavailable` is the
+ * caption-specific claim, while `empty` and `whitespace` share one code because "a transcript
+ * arrived and holds no words" is a single thing to tell a user. Charging, copy and code are three
+ * axes and this one tracks copy — a code per REASON would promise the client a distinction the copy
+ * does not make.
+ *
+ * Codes are a contract with `copy.errors.codes` in `src/lib/copy/pl.ts`. Renaming one without
+ * renaming it there degrades that exit to the generic per-status message — quietly, and only in the
+ * UI, so add the translation in the same change as the code.
+ *
+ * Every other error exit on this endpoint carries a `code` inline for the same reason; this constant
+ * exists separately only because the refusal exits pick theirs from a REASON rather than stating it
+ * at the `return`. The two 502s and the 401 deliberately carry none: their per-status Polish message
+ * is already the right one, and a code would only add a second place to keep that copy correct.
+ */
+const REFUSAL_CODE: Record<RefusalReason, "noCaptions" | "transcriptUnavailable"> = {
+  unavailable: "noCaptions",
+  empty: "transcriptUnavailable",
+  whitespace: "transcriptUnavailable",
+};
+
+/**
  * What an unusable submission costs the user (D14). One credit, flat — not `summaryCost`, which prices
  * DELIVERED work and stays S-05's (a long video that turns out to have no captions is refused just as
  * cheaply as a short one, because nothing was summarized either way).
@@ -109,7 +139,10 @@ const BUDGET_EXHAUSTED_ERROR =
 
 export const POST: APIRoute = async (context) => {
   if (!SUPADATA_API_KEY || !OPENROUTER_API_KEY) {
-    return Response.json({ error: "Transcript/LLM services are not configured" }, { status: 503 });
+    return Response.json(
+      { error: "Transcript/LLM services are not configured", code: "notConfigured" },
+      { status: 503 },
+    );
   }
 
   // The debit below happens before the paid LLM call, so the refund path is what upholds "failed
@@ -118,7 +151,7 @@ export const POST: APIRoute = async (context) => {
   // discovering it at compensation time.
   const admin = createAdminClient();
   if (!admin) {
-    return Response.json({ error: "Summary generation is not configured" }, { status: 503 });
+    return Response.json({ error: "Summary generation is not configured", code: "notConfigured" }, { status: 503 });
   }
 
   if (!context.locals.user) {
@@ -128,17 +161,17 @@ export const POST: APIRoute = async (context) => {
   const body: unknown = await context.request.json().catch(() => null);
   const parsed = generateSchema.safeParse(body);
   if (!parsed.success) {
-    return Response.json({ error: z.prettifyError(parsed.error) }, { status: 400 });
+    return Response.json({ error: z.prettifyError(parsed.error), code: "invalidRequest" }, { status: 400 });
   }
   const { url, character, allowLong, requestId } = parsed.data;
   const youtubeId = extractYoutubeId(url);
   if (!youtubeId) {
-    return Response.json({ error: "url must be a valid YouTube video URL" }, { status: 400 });
+    return Response.json({ error: "url must be a valid YouTube video URL", code: "invalidUrl" }, { status: 400 });
   }
 
   const supabase = createClient(context.request.headers, context.cookies);
   if (!supabase) {
-    return Response.json({ error: "Supabase is not configured" }, { status: 503 });
+    return Response.json({ error: "Supabase is not configured", code: "notConfigured" }, { status: 503 });
   }
 
   const userId = context.locals.user.id;
@@ -157,11 +190,14 @@ export const POST: APIRoute = async (context) => {
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("acquireGenerationLease failed:", error);
-    return Response.json({ error: "Something went wrong. Please try again." }, { status: 500 });
+    return Response.json({ error: "Something went wrong. Please try again.", code: "generic" }, { status: 500 });
   }
   if (lease === null) {
     return Response.json(
-      { error: "A summary is already being generated. Wait for it to finish before starting another." },
+      {
+        error: "A summary is already being generated. Wait for it to finish before starting another.",
+        code: "generationBusy",
+      },
       { status: 429 },
     );
   }
@@ -228,12 +264,28 @@ interface GenerationInput {
  * ledger outcome) — asserting `false` there would be a false statement about the user's money. The
  * companion `ambiguousCharge: true` flag is what tells the client this specific 422 is safe, and
  * necessary, to retry on the SAME idempotency key rather than a fresh one.
+ *
+ * `creditsRemaining` answers a DIFFERENT question from `charged`: it is the user's current balance, not
+ * a claim that a credit moved. `insufficient` is the case that proves the two are separate — it reports
+ * a balance while nothing moved at all. The rule is simply *report the balance whenever the server knows
+ * it*: the ledger supplies one for `charged`, `replay` and `insufficient` (see
+ * `ChargeFailedTranscriptResult`) and supplies none for `notCharged` or `ambiguous`, and the keyless
+ * skip in `refuseAndCharge` never asks. The refusal REPLAY in `respondToRepeatedRequest` omits it for the
+ * same reason: that branch answers from `get_refusal_replay`, which returns a reason and no balance, and
+ * a second query to invent one would buy nothing — a replay moves no credit, so whatever the client
+ * learned from the original refusal is still true.
+ *
+ * This is the unfinished half of the S-06 phase 9 supersession of D14, whose "the 422 carries no balance
+ * field" no longer holds. Without it the client's balance is stale by exactly one credit after every
+ * charged refusal, which does not merely mislabel a number: the form's own credit gate reads it, so a
+ * user at a true balance of zero is allowed to submit into a 402.
  */
-function refusalResponse(reason: RefusalReason, charged: boolean | "ambiguous"): Response {
-  const body =
+function refusalResponse(reason: RefusalReason, charged: boolean | "ambiguous", creditsRemaining?: number): Response {
+  const base =
     charged === "ambiguous"
-      ? { error: REFUSAL_COPY[reason], ambiguousCharge: true as const }
-      : { error: REFUSAL_COPY[reason], charged };
+      ? { error: REFUSAL_COPY[reason], code: REFUSAL_CODE[reason], ambiguousCharge: true as const }
+      : { error: REFUSAL_COPY[reason], code: REFUSAL_CODE[reason], charged };
+  const body = creditsRemaining === undefined ? base : { ...base, creditsRemaining };
   return Response.json(body, { status: 422 });
 }
 
@@ -253,9 +305,11 @@ function refusalResponse(reason: RefusalReason, charged: boolean | "ambiguous"):
  *
  * The charge is fired and its outcome never changes the refusal itself: `chargeFailedTranscript`
  * never throws, and a failure to bill costs the operator one credit while the user still gets the
- * 422 status and error string they were owed either way. The outcome DOES control one thing on the
- * response — the `charged` signal added by this phase (see below) — but never the status, the error
- * copy, or a balance field (D14, the user's explicit call that this ships without one).
+ * 422 status and error string they were owed either way. The outcome DOES control two things on the
+ * response — the `charged` signal (S-09 phase 9) and the `creditsRemaining` balance — but never the
+ * status and never the error copy. D14's "no balance field" is superseded: it was the quantitative
+ * half of the same call that shipped `charged`, and it lands here. See `refusalResponse` for which
+ * outcomes carry a balance and why the rest cannot.
  *
  * A `null` requestId SKIPS the charge rather than inventing a key. See the service: a generated key
  * would make the fee non-idempotent across exactly the retries `requestId` exists to absorb, and a
@@ -271,6 +325,10 @@ function refusalResponse(reason: RefusalReason, charged: boolean | "ambiguous"):
  * The `ambiguous` ledger outcome reports neither: it passes straight through to `refusalResponse` as
  * `"ambiguous"`, which omits `charged` and sends `ambiguousCharge: true` instead — the caller cannot
  * prove which way this one went, so it must not guess `false` and must let the client retry safely.
+ *
+ * `notCharged` gets its own branch below rather than sharing `insufficient`'s: the two agree on
+ * `charged: false` and disagree on everything else. `insufficient` read a real balance and reports it;
+ * `notCharged` is a rolled-back statement that learned nothing, so it has no number to send.
  */
 async function refuseAndCharge(
   admin: NonNullable<ReturnType<typeof createAdminClient>>,
@@ -290,8 +348,13 @@ async function refuseAndCharge(
   if (result.outcome === "ambiguous") {
     return refusalResponse(reason, "ambiguous");
   }
+  if (result.outcome === "notCharged") {
+    return refusalResponse(reason, false);
+  }
+  // Everything left — `charged`, `replay`, `insufficient` — carries the balance the RPC read, so the
+  // client resynchronises from this reply instead of guessing or issuing a second query.
   const charged = result.outcome === "charged" || result.outcome === "replay";
-  return refusalResponse(reason, charged);
+  return refusalResponse(reason, charged, result.balance);
 }
 
 /**
@@ -326,7 +389,7 @@ async function respondToRepeatedRequest(
       // Backstops the per-user generation lease: the lease can be released by a stale sweep while the
       // original attempt is still running, and it does not span Worker isolates the way the ledger does.
       return Response.json(
-        { error: "This summary is already being generated. Wait for it to finish." },
+        { error: "This summary is already being generated. Wait for it to finish.", code: "generationInProgress" },
         { status: 429 },
       );
     case "unavailable": {
@@ -345,11 +408,16 @@ async function respondToRepeatedRequest(
       // reply is right for a lookup whose only job is to improve one.
       const reason = requestId === null ? null : await lookupRefusalReplay(admin, { userId, requestId });
       // This key was closed by a refusal CHARGE (see the lookup's own contract), so the credit was
-      // taken by the original attempt — the replay reports `true`.
+      // taken by the original attempt — the replay reports `true`. No `creditsRemaining`: the lookup
+      // returns a reason and no balance, and a replay moves nothing, so the number the client already
+      // has is still correct (`refusalResponse`).
       if (reason !== null) return refusalResponse(reason, true);
 
       // Neither replayable nor safe to re-run against a closed charge; the client must start over.
-      return Response.json({ error: "This request was already processed. Start a new generation." }, { status: 409 });
+      return Response.json(
+        { error: "This request was already processed. Start a new generation.", code: "requestAlreadyProcessed" },
+        { status: 409 },
+      );
     }
     default:
       return null;
@@ -439,7 +507,7 @@ async function runGeneration({
       // guard exists to prevent, and nothing has been debited or fetched yet.
       // eslint-disable-next-line no-console
       console.error("begin_generation probe failed:", error);
-      return Response.json({ error: "Something went wrong. Please try again." }, { status: 500 });
+      return Response.json({ error: "Something went wrong. Please try again.", code: "generic" }, { status: 500 });
     }
 
     const settled = await respondToRepeatedRequest(admin, userId, requestId, probe);
@@ -461,10 +529,10 @@ async function runGeneration({
     // stable JSON 500 with a generic (non-persistence) message instead — nothing has been saved yet.
     // eslint-disable-next-line no-console
     console.error("getBalance failed:", error);
-    return Response.json({ error: "Something went wrong. Please try again." }, { status: 500 });
+    return Response.json({ error: "Something went wrong. Please try again.", code: "generic" }, { status: 500 });
   }
   if (balance === null || balance <= 0) {
-    return Response.json({ error: "You have no summary credits left" }, { status: 402 });
+    return Response.json({ error: "You have no summary credits left", code: "noCredits" }, { status: 402 });
   }
 
   // Transcript acquisition. The paid Supadata fetch is guarded two ways (F17), because the balance
@@ -538,7 +606,10 @@ async function runGeneration({
     // A `'too_long'` row is the 413 answer itself, cached. It holds no body by design (F6), so it is
     // answered here rather than falling through to the hard-cap gate below, which reads `content`.
     if (cachedTranscript.outcome === "too_long") {
-      return Response.json({ error: "This video's transcript is too long to summarize." }, { status: 413 });
+      return Response.json(
+        { error: "This video's transcript is too long to summarize.", code: "transcriptTooLong" },
+        { status: 413 },
+      );
     }
     //
     // Both negative outcomes CHARGE (D14), and this is the pair where the operator paid nothing —
@@ -574,7 +645,7 @@ async function runGeneration({
     // settle against a missing row is the one corruption the sweep cannot detect.
     const transcriptBudget = await reserveBudget(admin, supadataKey, TRANSCRIPT_BUDGET_CREDITS);
     if (transcriptBudget.outcome === "refused") {
-      return Response.json({ error: BUDGET_EXHAUSTED_ERROR }, { status: 503 });
+      return Response.json({ error: BUDGET_EXHAUSTED_ERROR, code: "budgetExhausted" }, { status: 503 });
     }
 
     /**
@@ -606,12 +677,12 @@ async function runGeneration({
       // eslint-disable-next-line no-console
       console.error("recordTranscriptAttempt failed:", error);
       await releaseUnspentTranscriptBudget();
-      return Response.json({ error: "Something went wrong. Please try again." }, { status: 500 });
+      return Response.json({ error: "Something went wrong. Please try again.", code: "generic" }, { status: 500 });
     }
     if (!allowed) {
       await releaseUnspentTranscriptBudget();
       return Response.json(
-        { error: "Too many transcript requests. Please wait a moment and try again." },
+        { error: "Too many transcript requests. Please wait a moment and try again.", code: "transcriptRateLimited" },
         { status: 429 },
       );
     }
@@ -675,7 +746,14 @@ async function runGeneration({
       // own ambiguity against a user who did nothing wrong. It branches on the same `reason` the copy
       // branches on, so the two decisions stay visibly aligned in one place. `charged: false` is not a
       // hardcoded guess: this branch is the one 422 site that never calls `chargeFailedTranscript`.
-      return Response.json({ error: TRANSCRIPT_UNAVAILABLE_ERROR, charged: false }, { status: 422 });
+      // Its own code, though it shares `error` with the `empty`/`whitespace` refusals: those describe
+      // the video, this describes our failure to reach the vendor. One is permanent and charged, the
+      // other transient and free, and the Polish copy says so — which the shared English string never
+      // did. See `copy.errors.codes.transcriptFetchFailed`.
+      return Response.json(
+        { error: TRANSCRIPT_UNAVAILABLE_ERROR, code: "transcriptFetchFailed", charged: false },
+        { status: 422 },
+      );
     }
 
     // Past the hard cap the BODY is not cached — only the verdict (F6). Storing it would put rows in
@@ -693,7 +771,10 @@ async function runGeneration({
         availableLangs: transcript.availableLangs,
         resolvedVia: transcript.resolvedVia,
       });
-      return Response.json({ error: "This video's transcript is too long to summarize." }, { status: 413 });
+      return Response.json(
+        { error: "This video's transcript is too long to summarize.", code: "transcriptTooLong" },
+        { status: 413 },
+      );
     }
 
     await cacheTranscriptOutcome(admin, userId, youtubeId, transcriptMs, {
@@ -742,7 +823,10 @@ async function runGeneration({
   // (F6). This one is NOT redundant: it still covers the quote-cache path and any `'ok'` cache row
   // written before that change, whose body can exceed the cap.
   if (transcriptLength > HARD_MAX_TRANSCRIPT_CHARS) {
-    return Response.json({ error: "This video's transcript is too long to summarize." }, { status: 413 });
+    return Response.json(
+      { error: "This video's transcript is too long to summarize.", code: "transcriptTooLong" },
+      { status: 413 },
+    );
   }
 
   // Long-video confirmation gate: a long video (cost > 1) that hasn't been pre-authorized returns a
@@ -795,8 +879,18 @@ async function runGeneration({
     if (settled) return settled;
 
     if (reserved.outcome === "insufficient") {
+      // The two numbers travel as fields, not only inside `error`. A translated client cannot reuse a
+      // sentence it did not build, and this is the one refusal whose copy is arithmetic — so the
+      // client renders `copy.generate.confirm.tooExpensive(cost, balance)`, the string it already
+      // shows on the confirmation card, and the two surfaces stop disagreeing about one price.
+      // `creditsRemaining` follows the same rule as the 422: report the balance whenever we know it.
       return Response.json(
-        { error: `You need ${cost} credits for this video; you have ${reserved.balance}` },
+        {
+          error: `You need ${cost} credits for this video; you have ${reserved.balance}`,
+          code: "insufficientCredits",
+          cost,
+          creditsRemaining: reserved.balance,
+        },
         { status: 402 },
       );
     }
@@ -810,7 +904,7 @@ async function runGeneration({
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("begin_generation failed:", error);
-    return Response.json({ error: "Something went wrong. Please try again." }, { status: 500 });
+    return Response.json({ error: "Something went wrong. Please try again.", code: "generic" }, { status: 500 });
   }
 
   // Paid work. On ANY failure past this point the user has been debited, so refund the reservation
@@ -960,7 +1054,10 @@ async function runGeneration({
     // eslint-disable-next-line no-console
     console.error("persist summary failed:", error);
     await refundReservation(admin, userId, reservationId);
-    return Response.json({ error: "Something went wrong saving your summary. Please try again." }, { status: 500 });
+    return Response.json(
+      { error: "Something went wrong saving your summary. Please try again.", code: "saveFailed" },
+      { status: 500 },
+    );
   }
 
   // The reservation was already resolved — a reconciliation sweep closed it while this request ran, so
@@ -970,7 +1067,10 @@ async function runGeneration({
   if (!persisted.ok) {
     // eslint-disable-next-line no-console
     console.error(`persist summary skipped: reservation ${reservationId} for ${userId} was ${persisted.reason}`);
-    return Response.json({ error: "Something went wrong saving your summary. Please try again." }, { status: 500 });
+    return Response.json(
+      { error: "Something went wrong saving your summary. Please try again.", code: "saveFailed" },
+      { status: 500 },
+    );
   }
 
   // `already_persisted`: an earlier call on THIS SAME reservation had already written the summary and
@@ -991,7 +1091,10 @@ async function runGeneration({
       // No refund: the work IS saved and the charge IS settled — only this response can't be built.
       // eslint-disable-next-line no-console
       console.error(`replayed summary ${persisted.summaryId} could not be read back:`, error);
-      return Response.json({ error: "Something went wrong saving your summary. Please try again." }, { status: 500 });
+      return Response.json(
+        { error: "Something went wrong saving your summary. Please try again.", code: "saveFailed" },
+        { status: 500 },
+      );
     }
   }
 

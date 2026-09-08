@@ -35,7 +35,9 @@ const isLanding = Astro.url.pathname === "/";
                   <span class="sr-only">{copy.nav.creditsUnavailable}</span>
                 </>
               ) : (
-                <span class="text-foreground font-medium">{credits}</span>
+                <span class="text-foreground font-medium" data-credit-balance>
+                  {credits}
+                </span>
               )}
             </div>
             <AccountMenu client:load />
@@ -54,3 +56,11 @@ const isLanding = Astro.url.pathname === "/";
     </div>
   </div>
 </header>
+
+<script>
+  // Keeps the server-rendered balance above honest for the rest of the page's life — see
+  // `src/lib/credits-events.ts` for why an event, and why that module imports nothing.
+  import { startCreditsBalanceSync } from "@/lib/credits-events";
+
+  startCreditsBalanceSync();
+</script>

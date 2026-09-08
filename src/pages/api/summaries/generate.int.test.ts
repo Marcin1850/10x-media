@@ -4,6 +4,7 @@ import {
   createFakeAdmin,
   createFakeSupabase,
   defaultAdminScript,
+  fail,
   generateRequestBody,
   loadEndpoint,
   makeContext,
@@ -28,6 +29,12 @@ import {
  * 125`), `REFUSAL_COPY` and `refusalResponse`'s `ambiguousCharge` shape (`generate.ts:83-94,231-237`),
  * and `refuseAndCharge`'s outcome mapping (`generate.ts:274-294`) — cross-checked against research.md
  * §2.3 and §4, not read off the branch under test.
+ *
+ * The `creditsRemaining` cases below cover the ABSENCE half of the balance rule plus the pass-through,
+ * because neither needs a real balance: a scripted `new_balance` is a stronger oracle than a real one
+ * for "the endpoint forwards the ledger's number rather than computing its own". That a real debit
+ * really produces that number is the real-database layer's job (`generate.db.int.test.ts`), per
+ * test-plan §6.2's split.
  */
 
 afterEach(() => {
@@ -50,6 +57,12 @@ function cachedTranscriptRow(
   };
 }
 
+// The three configuration 503s keep three distinct `error` strings and deliberately SHARE one
+// `code`. That is not a leak in the distinction — the strings are what an operator reads in a log and
+// they still say which secret is missing, while the code drives what a USER is told, and a user can
+// do exactly nothing different about any of the three. The 503 split that does matter to a user is
+// preserved by a separate code: `budgetExhausted` means "come back shortly", `notConfigured` means
+// "this is broken", and telling those apart is why the client used to prefer the server's string.
 describe("trust boundary — preflight exits (research.md §2.3, both 503s land before the 401)", () => {
   it("503s distinctly when a vendor key is unset — the FIRST preflight, before the admin client exists", async () => {
     const { POST } = await loadEndpoint({ env: { SUPADATA_API_KEY: null } });
@@ -57,7 +70,10 @@ describe("trust boundary — preflight exits (research.md §2.3, both 503s land 
     const response = await POST(makeContext({ body: generateRequestBody() }));
 
     expect(response.status).toBe(503);
-    await expect(readJson(response)).resolves.toEqual({ error: "Transcript/LLM services are not configured" });
+    await expect(readJson(response)).resolves.toEqual({
+      error: "Transcript/LLM services are not configured",
+      code: "notConfigured",
+    });
   });
 
   it("503s distinctly when the admin client cannot be built — a different message, same status", async () => {
@@ -66,7 +82,10 @@ describe("trust boundary — preflight exits (research.md §2.3, both 503s land 
     const response = await POST(makeContext({ body: generateRequestBody() }));
 
     expect(response.status).toBe(503);
-    await expect(readJson(response)).resolves.toEqual({ error: "Summary generation is not configured" });
+    await expect(readJson(response)).resolves.toEqual({
+      error: "Summary generation is not configured",
+      code: "notConfigured",
+    });
   });
 
   it("reaches that SAME 503 from a missing SUPABASE_SERVICE_ROLE_KEY, through the real createAdminClient", async () => {
@@ -81,7 +100,10 @@ describe("trust boundary — preflight exits (research.md §2.3, both 503s land 
     const response = await POST(makeContext({ body: generateRequestBody() }));
 
     expect(response.status).toBe(503);
-    await expect(readJson(response)).resolves.toEqual({ error: "Summary generation is not configured" });
+    await expect(readJson(response)).resolves.toEqual({
+      error: "Summary generation is not configured",
+      code: "notConfigured",
+    });
   });
 
   it("and does NOT 503 through that real constructor once the service-role key IS set", async () => {
@@ -275,15 +297,64 @@ describe("refusal exits — each charges (or doesn't) exactly as chargeFailedTra
       const { POST } = await loadEndpoint({ admin: admin.client, supabase, fetchTranscript });
 
       const response = await POST(makeContext({ body: generateRequestBody() }));
-      const json = (await readJson(response)) as { error: string; charged?: boolean };
+      const json = (await readJson(response)) as Record<string, unknown>;
 
       expect(response.status).toBe(422);
       expect(json.charged).toBe(false);
       expect(admin.callsTo("charge_failed_transcript")).toHaveLength(0);
       // Transient outcomes are never cached — D3/D4 only cache the durable `unavailable` verdict.
       expect(admin.callsTo("save_transcript_cache")).toHaveLength(0);
+      // No ledger call means no balance was read, and the rule is report-what-you-know: the client
+      // keeps the number it already had, which is still correct because nothing moved.
+      expect(json).not.toHaveProperty("creditsRemaining");
     },
   );
+
+  // The other half of the balance rule, and the shape the value tests cannot reach: the charge was
+  // ATTEMPTED and its statement rolled back, so `charged: false` is provable while the balance is
+  // simply unknown. An endpoint that answered 0 here — or echoed the pre-attempt balance — would be
+  // making up a number about someone's money on the one path that learned nothing.
+  it("omits `creditsRemaining` when the charge rolled back, though it can still prove `charged: false`", async () => {
+    const admin = createFakeAdmin({
+      ...defaultAdminScript(),
+      get_transcript_cache: [ok([cachedTranscriptRow("unavailable")])],
+      charge_failed_transcript: [fail('relation "credit_reservations" does not exist')],
+    });
+    admin.queue("begin_generation", ok([beginRow({ outcome: "fresh" })]));
+    const supabase = createFakeSupabase(5);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { POST } = await loadEndpoint({ admin: admin.client, supabase });
+
+    const response = await POST(makeContext({ body: generateRequestBody() }));
+    const json = (await readJson(response)) as Record<string, unknown>;
+
+    expect(response.status).toBe(422);
+    expect(json.charged).toBe(false);
+    expect(json).not.toHaveProperty("creditsRemaining");
+    spy.mockRestore();
+  });
+
+  // The pass-through, pinned by a number the endpoint could not have produced on its own. The account
+  // holds 5 credits, so anything that recomputed the post-charge balance locally would answer 4; only
+  // forwarding `chargeFailedTranscript`'s `new_balance` yields 41. That is the whole contract — the
+  // ledger owns the arithmetic, the endpoint owns nothing but the wire.
+  it("forwards the LEDGER's balance as `creditsRemaining`, never a number of its own", async () => {
+    const admin = createFakeAdmin({
+      ...defaultAdminScript(),
+      get_transcript_cache: [ok([cachedTranscriptRow("unavailable")])],
+      charge_failed_transcript: [ok([{ outcome: "charged", new_balance: 41 }])],
+    });
+    admin.queue("begin_generation", ok([beginRow({ outcome: "fresh" })]));
+    const supabase = createFakeSupabase(5);
+    const { POST } = await loadEndpoint({ admin: admin.client, supabase });
+
+    const response = await POST(makeContext({ body: generateRequestBody() }));
+    const json = (await readJson(response)) as { charged?: boolean; creditsRemaining?: number };
+
+    expect(response.status).toBe(422);
+    expect(json.charged).toBe(true);
+    expect(json.creditsRemaining).toBe(41);
+  });
 
   it("reports the ambiguous shape by its own fields — never `charged: false`", async () => {
     const admin = createFakeAdmin({
@@ -302,8 +373,55 @@ describe("refusal exits — each charges (or doesn't) exactly as chargeFailedTra
     expect(response.status).toBe(422);
     expect(json.ambiguousCharge).toBe(true);
     expect(json).not.toHaveProperty("charged");
+    // Silent about the balance for the same reason it is silent about `charged`: the statement may
+    // have committed, so any number here could already be one credit stale.
+    expect(json).not.toHaveProperty("creditsRemaining");
     spy.mockRestore();
   });
+
+  // The localisation contract at the wire. `error` is what a log or an untranslated consumer reads;
+  // `code` is what the UI localises, and the two 422s that deliberately SHARE an English string must
+  // not share a code — a video with no captions (charged, permanent) and a vendor outage (free,
+  // retryable) are different things to tell a user, and before codes existed the client had no way
+  // to say so in Polish. Which sentence each code renders is `useGenerateSummary.test.ts`'s job.
+  it.each([
+    ["unavailable", "noCaptions", "the caption-specific claim D3 keeps distinct"],
+    ["empty", "transcriptUnavailable", "a transcript arrived and holds no words — one thing to say"],
+  ] as const)("sends code `%s` → `%s`: %s", async (outcome, expectedCode, _why) => {
+    const admin = createFakeAdmin({
+      ...defaultAdminScript(),
+      get_transcript_cache: [ok([cachedTranscriptRow(outcome)])],
+      charge_failed_transcript: [ok([{ outcome: "charged", new_balance: 4 }])],
+    });
+    admin.queue("begin_generation", ok([beginRow({ outcome: "fresh" })]));
+    const supabase = createFakeSupabase(5);
+    const { POST } = await loadEndpoint({ admin: admin.client, supabase });
+
+    const response = await POST(makeContext({ body: generateRequestBody() }));
+    const json = (await readJson(response)) as { code?: string; error?: string };
+
+    expect(response.status).toBe(422);
+    expect(json.code).toBe(expectedCode);
+    // The English string stays on the body beside the code, never replaced by it.
+    expect(typeof json.error).toBe("string");
+  });
+
+  it.each(["failed", "timeout"] as const)(
+    "sends the transient `%s` exit its OWN code, though it shares the generic English string",
+    async (reason) => {
+      const admin = createFakeAdmin(defaultAdminScript());
+      admin.queue("begin_generation", ok([beginRow({ outcome: "fresh" })]));
+      const supabase = createFakeSupabase(5);
+      const fetchTranscript = vi.fn().mockResolvedValue({ ok: false, reason });
+      const { POST } = await loadEndpoint({ admin: admin.client, supabase, fetchTranscript });
+
+      const response = await POST(makeContext({ body: generateRequestBody() }));
+      const json = (await readJson(response)) as { code?: string };
+
+      expect(response.status).toBe(422);
+      expect(json.code).toBe("transcriptFetchFailed");
+    },
+  );
 
   it("REFUSAL_COPY differs between `unavailable` and the generic reasons, and is stable within a group", async () => {
     async function bodyFor(outcome: "unavailable" | "empty"): Promise<{ error: string }> {

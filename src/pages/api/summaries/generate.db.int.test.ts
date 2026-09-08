@@ -326,10 +326,21 @@ describe("charge-versus-delivery invariants (research.md §3, §5)", () => {
           generateRequestBody({ url: youtubeUrl(youtubeId), requestId: crypto.randomUUID(), allowLong: true }),
         ),
       );
-      const json = (await readJson(response)) as { error: string };
+      const json = (await readJson(response)) as {
+        error: string;
+        code?: string;
+        cost?: number;
+        creditsRemaining?: number;
+      };
 
       expect(response.status).toBe(402);
       expect(json.error).toBe("You need 2 credits for this video; you have 1");
+      // The same two numbers as FIELDS, so a translated client can rebuild the sentence instead of
+      // parsing that one. Asserted against the balance read independently below, not against the
+      // string above — echoing the string back would prove only that it was copied twice.
+      expect(json.code).toBe("insufficientCredits");
+      expect(json.cost).toBe(2);
+      expect(json.creditsRemaining).toBe(1);
       await expect(readBalance(account.userId)).resolves.toBe(1); // untouched — the conditional decrement never fired
     });
   });
@@ -381,6 +392,33 @@ describe("charge-versus-delivery invariants (research.md §3, §5)", () => {
       expect(secondResponse.status).toBe(422);
       expect(secondJson.charged).toBe(true);
       await expect(readBalance(account.userId)).resolves.toBe(4); // not charged twice
+    });
+  });
+
+  // The quantitative half of the same signal, against a balance that really moved. The stub layer
+  // already proves the endpoint forwards the ledger's number instead of computing one; what only a
+  // real database can prove is that the number forwarded is the balance the debit actually left
+  // behind — the two agree here or a user is being told the wrong thing about their money.
+  //
+  // Oracle: README §Summary credits (a refusal charge costs 1 credit; the body carries the resulting
+  // balance whenever the server knows it), and `user_credits` read independently through the admin
+  // client — never `5 - 1` recomputed the way the endpoint's own caller would.
+  it("a charged refusal reports the balance the debit actually left behind", async () => {
+    const youtubeId = DB_LAYER_YOUTUBE_IDS.chargedRefusalBalance;
+    await withAccount(youtubeId, async (account) => {
+      await seedUnavailableTranscriptCache(youtubeId);
+      const body = generateRequestBody({ url: youtubeUrl(youtubeId), requestId: crypto.randomUUID() });
+
+      const { POST } = await loadRealEndpoint();
+      const response = await POST(makeDbContext(account, body));
+      const json = (await readJson(response)) as { charged?: boolean; creditsRemaining?: number };
+
+      expect(response.status).toBe(422);
+      expect(json.charged).toBe(true);
+      await expect(readBalance(account.userId)).resolves.toBe(json.creditsRemaining);
+      // Pinned as a literal too, so a run where BOTH the debit and the report went missing (the body
+      // omitting the field, `readBalance` answering the untouched 5) cannot satisfy the line above.
+      expect(json.creditsRemaining).toBe(4);
     });
   });
 });

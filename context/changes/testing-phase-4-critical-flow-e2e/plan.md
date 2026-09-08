@@ -28,7 +28,7 @@ This is the unfinished half of S-06 Phase 9's supersession of roadmap D14 conseq
 
 ### Key Discoveries:
 
-- **The header credit balance never updates client-side on any path — success included.** `Topbar.astro:25` reads `Astro.locals.credits`, set once per request in `middleware.ts:22-29`. It is server-rendered per page load and there is no client-side sync anywhere (a grep for `addEventListener`/`CustomEvent`/`dispatchEvent` across `src/components/` and `src/layouts/` returns nothing). **This corrects `research.md` Finding 5b**, which states the header "does update in place" on success. It does not. What the hook's `credits` actually feeds is `GenerateSummaryForm` (`DashboardSummaries.tsx:361` → `GenerateSummaryForm.tsx:65,73-75,189`) and, through it, the confirmation card's cost/resulting-balance copy. Two consequences: Phase 0's user-visible effect is on the **form gate**, not the header; and any header assertion in any spec must follow a navigation, on every path.
+- **The header credit balance never updates client-side on any path — success included.** `Topbar.astro:25` reads `Astro.locals.credits`, set once per request in `middleware.ts:22-29`. It is server-rendered per page load and there is no client-side sync anywhere (a grep for `addEventListener`/`CustomEvent`/`dispatchEvent` across `src/components/` and `src/layouts/` returns nothing). **This corrects `research.md` Finding 5b**, which states the header "does update in place" on success. It does not. What the hook's `credits` actually feeds is `GenerateSummaryForm` (`DashboardSummaries.tsx:361` → `GenerateSummaryForm.tsx:65,73-75,189`) and, through it, the confirmation card's cost/resulting-balance copy. Two consequences were drawn from this — **both since superseded by Phase 0 item 7 (2026-09-08)**, which built the missing sync after the manual pass showed one page reading `Kredyty 1` beside "Nie masz już kredytów": Phase 0's user-visible effect now reaches the header as well as the form gate, and a header assertion no longer needs a navigation. The finding itself was correct about the code as found, and the correction to research Finding 5b stands — the sync did not exist, which is why it had to be written.
 - **Phase 0's real failure mode is sharper than a stale label.** The hook over-states the balance after a charged refusal, so `noCredits` (`GenerateSummaryForm.tsx:74`) and `confirmTooExpensive` (`:75`) under-block: a user at a true balance of 0 sees a hook balance of 1 and is allowed to submit into a 402.
 - **The alias reaches `astro dev` too.** `astro.config.mjs` is plain Node and its `vite.resolve.alias` is applied at **config-load** time, not build time — which is why the existing `cross-fetch` alias exists at all: to fix a failure in the *workerd dev module runner* (`astro.config.mjs:43-46`). So one mechanism serves both `npm run dev` locally and a built `preview` in CI, while `deploy`'s own `npm run build` (`ci.yml:83-87`, which sets only `SUPABASE_URL`/`SUPABASE_KEY`) bundles a Worker that cannot contain the fake.
 - **`summarize` has exactly one production import site** — `generate.ts:17`, `import { summarize } from "@/lib/services/llm"` — so the alias has a single, unambiguous target.
@@ -51,7 +51,7 @@ Verify: with `npx supabase start` running, `npm run test:e2e` is green; a plain 
 - **No sign-in spec.** Auth is injected via `storageState`, per the `/10x-e2e` rule ("never log in through UI in individual tests"). Sign-in carries no risk-map row of its own, and every other spec exercises the real cookie path by using it. The gap is deliberate and gets recorded in §6.4.
 - **No e2e coverage of the `ambiguous` charge outcome.** Not browser-reachable (see Key Discoveries). Already covered at the unit layer (`credits.test.ts` via `stubRejecting`) and the integration layer.
 - **No UI for `ambiguousCharge`.** Ruled intentional 2026-09-07 — the silence is the desired behaviour. A spec that reaches that state asserts the *absence* of both charge lines; it never asserts a positive charge message.
-- **No change to the English refusal copy.** Ruled intentional (`useGenerateSummary.ts:102-105,116-120`; roadmap S-06). Specs assert the **English server string**, never the Polish `errors.*` table.
+- ~~**No change to the English refusal copy.**~~ **Reversed 2026-09-08 (user)** — see Phase 0 item 6. Refusal copy is Polish, resolved from a server-sent cause `code` rather than translated from the English string, so the multi-cause distinction survives. Specs assert the **Polish** string from `copy.errors.codes`. The English `error` still travels on the body for logs and untranslated consumers, so a spec may assert its presence but must not assert it as what the user reads. Statuses outside the refusal set (400, 429, 500, 503) are still English by decision.
 - **No Sentry or alerting.** Logging-without-alerting via Cloudflare Workers Logs ruled acceptable for now. §6.1's rule stands: never assert the `REFUSAL_CHARGE_AMBIGUOUS` marker strings.
 - **No RLS or cross-account assertions.** Phase 3 owns the data boundary through two purpose-built layers; the one prior browser-level cross-account check disclaims itself (`browse-summary-list/reviews/manual-verification-phase-1.md:67-75`).
 - **No Firefox project.** `prd.md:72-73` names Chrome and Firefox; none of the three flows carries an engine-specific risk. The gap is documented in the config, not silently left.
@@ -68,7 +68,7 @@ Six phases, in dependency order.
 
 ## Critical Implementation Details
 
-**Timing & lifecycle.** The header balance is server-rendered per request and never updates client-side (see Key Discoveries). Any spec assertion on the header must follow a `page.reload()` or a navigation — on the success path as well as the refusal path. Reading the header *in place* after an action asserts a value the app held *before* the action: the `/10x-e2e` "hallucinated assertion" anti-pattern, syntactically valid, semantically empty, green against a real regression.
+**Timing & lifecycle.** ~~The header balance is server-rendered per request and never updates client-side.~~ **Superseded by Phase 0 item 7 (2026-09-08):** the header now syncs on the `credits:changed` event, so a spec may read it in place. The reason the original rule existed still matters, though, and it generalises: reading any server-rendered value *in place* after an action asserts what the app held *before* the action unless something explicitly re-rendered it — the `/10x-e2e` "hallucinated assertion" anti-pattern, syntactically valid, semantically empty, green against a real regression. Waiting for the header to reach the expected value (`toHaveText`) rather than reading it once is what makes the in-place assertion safe here.
 
 **State sequencing (cleanup).** Cache rows first, `dispose()` second — always. `supadata_calls` is `on delete set null`, so it survives account deletion and must be deleted by `youtube_id` *before* the `auth.users` row, or the rows orphan into exactly the ledger risk #2 sums. `dispose()` throws by design (impl-review F3), so a fixture teardown must not swallow it.
 
@@ -140,6 +140,100 @@ The doc comments at `:258-259` and `:225-231` both assert the body carries no ba
 - With a 1-credit account, submit a URL that hits a charged refusal; the form's "Za mało kredytów" gate now reflects the post-charge balance instead of the pre-attempt one, and a second submit is blocked client-side rather than bouncing off a 402
 - `README.md` §Summary credits no longer claims the UI shows the ambiguous case
 - `refuseAndCharge`'s doc comment no longer cites the superseded D14 "no balance field" rationale
+
+**Implementation Note**: Pause here for manual confirmation before Phase 1.
+
+### Added during implementation (2026-09-08, user decisions on the manual pass)
+
+The manual pass on 0.5 surfaced two things the plan had either ruled the other way or scoped out, and
+the user reversed both. Recorded here rather than in a new phase because they close the same defect
+Phase 0 exists to close — *the client tells the user something the request has already made untrue* —
+and because later phases assert against them.
+
+#### 6. Polish refusal copy, via a cause code
+
+**Files**: `src/pages/api/summaries/generate.ts`, `src/lib/copy/pl.ts`,
+`src/components/hooks/useGenerateSummary.ts`
+
+**Contract**: The endpoint sends a machine-readable `code` **beside** `error`, never instead of it, and
+the client localises the code. A translation of the string was not an option: several statuses answer
+with more than one cause (422 alone has three), which is precisely why the client preferred the
+server's English sentence over its own one-entry-per-status Polish table. The code carries the
+distinction the status cannot.
+
+Grouping mirrors `REFUSAL_COPY`, and therefore D3 — `unavailable` → `noCaptions`; `empty` and
+`whitespace` share `transcriptUnavailable` — while the transient 422 gets its **own**
+`transcriptFetchFailed` despite sharing an English string with the durable one, because one is
+permanent and charged and the other is our outage, free and retryable. An absent or unknown code falls
+back to the per-status message, so a cause shipped ahead of its translation degrades to a generic
+Polish sentence rather than an English one.
+
+Both 402s are included: the zero-balance one by code, and the insufficient-for-cost one by **fields** —
+`code`, `cost`, `creditsRemaining` — so the client rebuilds the sentence with
+`copy.generate.gate.tooExpensive`, the string the confirmation card already shows. That also extends
+item 1's balance rule to the 402, which previously synced nothing.
+
+**Extended 2026-09-08 (user) to every remaining exit**: 400, 429, 500, 503 and the "already processed"
+409 are coded too, so nothing the card can render is English any more. Where several `return`s say the
+same thing to a user they share a code — the five generic 500s, the three save 500s, the three
+configuration 503s — while the three 429s keep three, because "something else of yours is running",
+"this exact one is running" and "you are asking too fast" are three different waits. The two 502s and
+the 401 carry no code by design: their per-status Polish message is already the right one, and a code
+would only add a second place to keep that copy correct.
+
+`src/lib/copy/error-codes.test.ts` guards the half of this contract nothing else can see — it reads the
+endpoint's source and fails if a code has no translation, the one regression that otherwise ships
+silently. It earned its place immediately, catching `insufficientCredits` with no entry.
+
+#### 6b. Signed-in users redirected away from the auth forms
+
+**File**: `src/middleware.ts`
+
+**Intent**: Noticed while verifying 0.5, and reported by the user as a suspected credit leak: a
+signed-in user opening `/auth/signin` got the sign-in form rendered under their own topbar, balance and
+account menu. It was never a leak — `Topbar.astro` renders the balance only inside its `user ?` branch
+and `locals.credits` stays null without a user, both confirmed empirically against a signed-out
+session — but the page invites exactly that reading and cost a round of investigation to rule out.
+
+**Contract**: A `SIGNED_OUT_ONLY_ROUTES` list (`/auth/signin`, `/auth/signup`) redirected to
+`/summaries` when `locals.user` is set — the mirror of `PROTECTED_ROUTES`, which redirected one way
+only. `/auth/callback` is excluded because it *establishes* a session and redirecting it would break
+the email-confirmation link; `/auth/confirm-email` is excluded because a user can plausibly reach it
+with another account's stale session still in the jar.
+
+#### 7. A client-side sync for the header balance
+
+**Files**: `src/lib/credits-events.ts` (new), `src/components/Topbar.astro`, `src/pages/account.astro`
+
+**Intent**: Item 1 made the form's gate truthful and left the server-rendered topbar on its
+pre-request number, so one page could read `Kredyty 1` next to "Nie masz już kredytów".
+
+**Contract**: The hook announces every balance the server reports on a `credits:changed` window event;
+an inline script in `Topbar.astro` applies it to every `[data-credit-balance]` node, which is why the
+account page carries the same attribute — the two render one number and must not disagree. The event
+module **imports nothing**: `Topbar.astro` renders on every page, so pulling the constant from the hook
+would drag React and the copy table into a site-wide bundle to move one integer. A skeleton (balance
+unavailable at request time) has no such node and is deliberately left alone.
+
+This fixes the success path too, which had the same staleness.
+
+**Supersedes two statements above**: "Phase 0's user-visible effect is on the **form gate**, not the
+header" and "any header assertion in any spec must follow a navigation, on every path" (Key
+Discoveries, Critical Implementation Details). Both were true of the code as found; neither is true
+now.
+
+### Added success criteria
+
+#### Automated
+
+- `npm run typecheck:astro` passes (Phase 0 now touches `.astro` files)
+- The refusal, transient-422 and both 402 bodies carry their documented `code`
+- `messageForError` prefers the code, and falls back to the per-status message on an unknown one
+
+#### Manual
+
+- A charged refusal renders **Polish** copy, and no English string remains on the page
+- The topbar balance updates in place, with no reload, on both the refusal and the success path
 
 **Implementation Note**: Pause here for manual confirmation before Phase 1.
 
@@ -282,7 +376,9 @@ Teardown disposes the account. `dispose()` throws by design, so the fixture must
 
 **Intent**: Prove the rig works, and stand as the exemplar `/10x-e2e` models Phases 3 and 4 on. *What you show is what you get*: if this file uses `getByRole` and waits on state, so will every generated test; one `waitForTimeout` here propagates to all of them.
 
-**Contract**: Signed in via the fixture, on `/summaries` with a short transcript seeded. Fill `getByLabel("Adres URL z YouTube")`, pick a character radio in the `Charakter kanału` radiogroup, submit `Generuj podsumowanie`. Wait for the pending card's `role="status"`, then for the saved card. Assert **both sides of the oracle**: the card shows the fake summarizer's distinctive text, *and* the ledger recorded exactly one settled reservation with the balance moved by exactly 1 — read through `getDbOwnerConnection()`, which is what makes this a claim about the request rather than about the card's self-consistency. Any header-balance assertion follows a reload (see Critical Implementation Details).
+**Contract**: Signed in via the fixture, on `/summaries` with a short transcript seeded. Fill `getByLabel("Adres URL z YouTube")`, pick a character radio in the `Charakter kanału` radiogroup, submit `Generuj podsumowanie`. Wait for the pending card's `role="status"`, then for the saved card. Assert **both sides of the oracle**: the card shows the fake summarizer's distinctive text, *and* the ledger recorded exactly one settled reservation with the balance moved by exactly 1 — read through `getDbOwnerConnection()`, which is what makes this a claim about the request rather than about the card's self-consistency. Any header-balance assertion waits for the expected value rather than reading it once (see Critical Implementation Details).
+
+Any header-balance assertion waits for the value rather than reading it once (Phase 0 item 7 replaced the reload workaround).
 
 Cleanup: cache rows, then `dispose([youtubeId])`.
 
@@ -292,7 +388,7 @@ Cleanup: cache rows, then `dispose([youtubeId])`.
 
 **Intent**: `/10x-e2e` creates this on its first phase if absent; creating it here instead means Phase 3 starts with the rules already tuned to this app's real routes, locators and seam.
 
-**Contract**: The rules from `references/e2e-quality-rules.md`, plus the three project-specific facts a generated spec cannot infer: the header balance never updates client-side (assert only after a navigation); refusal text is the **English** server string; the two-sided oracle is mandatory. CLAUDE.md's existing Lesson-4 section already matches the skill's rules nearly verbatim, so this is an extension, not a reconciliation.
+**Contract**: The rules from `references/e2e-quality-rules.md`, plus the three project-specific facts a generated spec cannot infer: the header balance updates on the `credits:changed` event, so assert it by waiting for the expected value rather than reading it once (Phase 0 item 7); refusal text is the **Polish** `copy.errors.codes.*` entry for the cause, never the English `error` still carried on the body (Phase 0 item 6); the two-sided oracle is mandatory. CLAUDE.md's existing Lesson-4 section already matches the skill's rules nearly verbatim, so this is an extension, not a reconciliation.
 
 #### 9. Ignore the Playwright CLI scratch directory
 
@@ -337,11 +433,11 @@ Driven by `/10x-e2e`, against risk #6's sharpest case: a refusal that took a cre
 
 **Intent**: Prove that when the server charges for a refusal, the card says so — and that when it does not charge, the card says that instead. This is the exact contract S-06 Phase 9 shipped and that risk #6 exists to protect.
 
-**Contract**: Seed a cache row whose transcript is unavailable or empty, so the endpoint reaches a charged 422 without any vendor call. Assert, inside the failure card's `role="alert"`: the **English** server error string (`useGenerateSummary.ts:116-120` prefers it over the Polish fallback by design), the charge line `Za tę operację pobrano kredyt.` (`pl.ts:196`), and the dismiss control. Then assert the other side of the oracle — the ledger actually recorded the debit, balance down by exactly 1, read through the owner connection.
+**Contract**: Seed a cache row whose transcript is unavailable or empty, so the endpoint reaches a charged 422 without any vendor call. Assert, inside the failure card's `role="alert"`: the **Polish** copy for the cause — `copy.errors.codes.noCaptions` for a cached `unavailable`, `copy.errors.codes.transcriptUnavailable` for `empty` (Phase 0 item 6) — the charge line `Za tę operację pobrano kredyt.` (`pl.ts:196`), and the dismiss control. Then assert the other side of the oracle — the ledger actually recorded the debit, balance down by exactly 1, read through the owner connection.
 
-A second case covers the transient `failed`/`timeout` exit, which hardcodes `charged: false` (`generate.ts:678`): the card shows `Nie pobrano kredytu za tę operację.` and the balance is **unmoved**. Assert each by its own shape — "charged" is not "not un-charged".
+A second case covers the transient `failed`/`timeout` exit, which hardcodes `charged: false` (`generate.ts:678`): the card shows `copy.errors.codes.transcriptFetchFailed` — **a different string from the durable refusal**, which is the point of giving that exit its own code — plus `Nie pobrano kredytu za tę operację.`, and the balance is **unmoved**. Assert each by its own shape — "charged" is not "not un-charged".
 
-With Phase 0 landed, the form's balance gate now reflects the post-charge number, so a balance assertion needs no reload workaround at that surface; a **header** assertion still does.
+With Phase 0 landed, both balance surfaces are live: the form's gate reflects the post-charge number, and so does the **header**, which now syncs on the `credits:changed` event (Phase 0 item 7). Neither needs a reload.
 
 ### Success Criteria:
 
@@ -355,7 +451,7 @@ With Phase 0 landed, the form's balance gate now reflects the post-charge number
 
 - **Deliberate-break check**: invert the `charged` boolean on the response and confirm the spec goes red; separately, make the ledger debit silently fail and confirm the ledger half goes red independently of the UI half
 - No `test.skip` or `test.fixme` remains
-- The refusal text asserted is the server's English string, not a Polish `errors.*` entry
+- The refusal text asserted is the Polish `copy.errors.codes.*` entry for that cause, and the two 422s that share an English string assert different Polish ones
 
 **Implementation Note**: Pause here for manual confirmation before Phase 4.
 
@@ -506,16 +602,23 @@ None — no schema change. Phase 0 **adds** an optional field to a 422 response 
 
 #### Automated
 
-- [ ] 0.1 `npm run typecheck` passes
-- [ ] 0.2 `npm run lint` passes
-- [ ] 0.3 `npm test` passes, including the new `credits.test.ts` rows
-- [ ] 0.4 `npm run test:integration` passes, including the new 422-body assertions
+- [x] 0.1 `npm run typecheck` passes
+- [x] 0.2 `npm run lint` passes
+- [x] 0.3 `npm test` passes, including the new `credits.test.ts` rows
+- [x] 0.4 `npm run test:integration` passes, including the new 422-body assertions
+- [x] 0.8 `npm run typecheck:astro` passes with the header sync in the tree
+- [x] 0.9 Refusal, transient-422 and both 402 bodies carry their documented `code`
+- [x] 0.10 `messageForError` prefers the code and falls back on an unknown one
 
 #### Manual
 
-- [ ] 0.5 Form balance gate reflects the post-charge balance on a 1-credit account
-- [ ] 0.6 README §Summary credits no longer claims the UI shows the ambiguous case
-- [ ] 0.7 `refuseAndCharge`'s doc comment no longer cites the superseded D14 rationale
+- [x] 0.5 Form balance gate reflects the post-charge balance on a 1-credit account
+- [x] 0.6 README §Summary credits no longer claims the UI shows the ambiguous case
+- [x] 0.7 `refuseAndCharge`'s doc comment no longer cites the superseded D14 rationale
+- [x] 0.11 A charged refusal renders Polish copy, with no English string left on the page
+- [x] 0.12 The topbar balance updates in place, with no reload
+- [x] 0.13 No endpoint exit the card can render is English any more
+- [x] 0.14 A signed-in user opening `/auth/signin` lands on `/summaries`
 
 ### Phase 1: The Playwright runner and the LLM seam
 

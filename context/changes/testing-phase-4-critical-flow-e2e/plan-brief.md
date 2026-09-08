@@ -30,12 +30,16 @@ Playwright is absent entirely — no config, no specs, not in `package.json`. Ph
 | Long-video depth | Drive through to a saved summary | The relabelled submit replaying frozen inputs is the actual risk-#6 surface, and only confirming proves the 2-credit cost. | Plan |
 | Fixture registries | Separate ids, prefix and sweep from the integration suite | Keeps the suites from aborting each other; the loopback guard is still *imported*, never re-written. | Plan |
 | Ambiguous charge | No UI, no e2e coverage | Ruled intentional; it has no browser-reachable trigger and stays an integration concern. | Research |
+| Refusal copy language | Polish, resolved from a server-sent cause `code` | A translation would have collapsed three 422 causes into one sentence, which is why the client preferred the English string; the code keeps the distinction and the copy. | User, 2026-09-08 |
+| Header balance staleness | Fixed with a `credits:changed` DOM event | A page that contradicts itself is worse than one uniformly stale, and the seam fixes the success path too. | User, 2026-09-08 |
 
 ## Scope
 
-**In scope:** Phase 0 balance fix (endpoint + hook + README + unit/integration coverage) · Playwright runner and config · the LLM alias seam and fake module · an isolated e2e harness (registry, auth fixture, cache seeding, global setup) · an accessible name on the credit balance · three specs · a blocking CI job · `test-plan.md` §6.4.
+**In scope:** Phase 0 balance fix (endpoint + hook + README + unit/integration coverage) · Polish refusal copy via a server-sent cause `code` · a client-side header-balance sync · Playwright runner and config · the LLM alias seam and fake module · an isolated e2e harness (registry, auth fixture, cache seeding, global setup) · an accessible name on the credit balance · three specs · a blocking CI job · `test-plan.md` §6.4.
 
-**Out of scope:** Astro component rendering · a sign-in spec · e2e coverage of the `ambiguous` outcome · any UI for `ambiguousCharge` · Polish refusal copy · Sentry/alerting · RLS and cross-account checks (Phase 3 owns them) · Firefox · snapshot and pixel assertions.
+**Out of scope:** Astro component rendering · a sign-in spec · e2e coverage of the `ambiguous` outcome · any UI for `ambiguousCharge` · Sentry/alerting · RLS and cross-account checks (Phase 3 owns them) · Firefox · snapshot and pixel assertions · Polish copy for the non-refusal exits (400, 429, 500, 503, the "already processed" 409).
+
+**Moved INTO scope 2026-09-08 (user, after Phase 0's manual pass):** Polish copy for **every** generate-endpoint error the card can render, via a server-sent cause `code` (Phase 0 item 6); a redirect for signed-in users on the auth forms (item 6b, noticed during the same pass); and a client-side sync for the header balance (item 7). The first two reverse decisions recorded above; see `change.md` for the reasoning.
 
 ## Architecture / Approach
 
@@ -45,10 +49,10 @@ Playwright runs in its own process and drives a real HTTP server, so both vendor
 
 | Phase | What it delivers | Key risk |
 | --- | --- | --- |
-| 0. Balance on refusal | `creditsRemaining` on the 422 body, hook applies it, README narrowed | Touches a paid-path response body; must not disturb the `ambiguous` silence |
+| 0. Balance on refusal | `creditsRemaining` on the 422 body, hook applies it, README narrowed — plus Polish refusal copy via a cause `code` and a live header balance | Touches a paid-path response body; must not disturb the `ambiguous` silence |
 | 1. Runner + LLM seam | `@playwright/test`, `playwright.config.ts`, the alias and the fake module | The alias must win over Astro's tsconfig-derived `@/*`; proof is the bundle, not the config |
 | 2. Harness + seed spec | Registry, auth fixture, cache seeding, a11y fix, the happy-flow spec | The exemplar propagates — one bad pattern here reaches every later spec |
-| 3. Charged-refusal spec | Charged and transient 422s, both sides of the oracle | Asserting the Polish fallback instead of the English server string |
+| 3. Charged-refusal spec | Charged and transient 422s, both sides of the oracle | Asserting the generic per-status fallback instead of the cause's own `copy.errors.codes.*` entry |
 | 4. Long-video spec | 409 prompt → relabelled confirm → 2-credit debit | Asserting a Cancel control that does not exist |
 | 5. CI gate + close-out | `e2e` job, `deploy` needs it, §6.4 written | `deploy` must never set `E2E_FAKE_LLM` |
 
@@ -57,7 +61,7 @@ Playwright runs in its own process and drives a real HTTP server, so both vendor
 
 ## Open Risks & Assumptions
 
-- **Research's Finding 5b is wrong on one point, and the plan corrects it.** The header balance does *not* update in place on the success path — `Topbar.astro` is server-rendered from `Astro.locals.credits` and never syncs client-side on any path. Every header assertion needs a navigation; Phase 0's visible effect is on the form's balance gate, not the header.
+- **Research's Finding 5b was wrong, the plan corrected it, and Phase 0 then made it true.** The header balance did *not* update in place on any path — `Topbar.astro` is server-rendered from `Astro.locals.credits` and had no client-side sync at all. Phase 0 item 7 built one (`src/lib/credits-events.ts`), because leaving it meant a page reading `Kredyty 1` beside "Nie masz już kredytów". Header assertions no longer need a navigation, but must wait for the expected value rather than reading it once.
 - The alias must take precedence over Astro's own `@/*` mapping, which is derived from `tsconfig.json` by a different code path. The array form with an anchored regex is the fallback, and the build-output check is what settles it either way.
 - Separate registries mean an e2e leak is invisible to the integration suite's sweep (and vice versa) — accepted at planning as the price of the two suites not aborting each other.
 - The `e2e` CI job's placeholder vendor keys do **not** trigger the "generation disabled" notice: `config-status.ts` checks presence, never validity. Safety comes from the alias and cache seeding, not from the key being fake.
