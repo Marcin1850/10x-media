@@ -55,7 +55,7 @@ Playwright runs in its own process and drives a real HTTP server, so both vendor
 | 0. Balance on refusal | `creditsRemaining` on the 422 body (the refusal **replay** included, via a `get_refusal_replay` migration), hook applies it above the staleness guard, README narrowed — plus Polish copy via a cause `code` on every renderable exit, and a live header balance | Touches a paid-path response body; must not disturb the `ambiguous` silence |
 | 1. Runner + LLM seam | `@playwright/test`, `playwright.config.ts`, the alias and the fake module | The alias must win over Astro's tsconfig-derived `@/*` — it did **not** as a plain alias entry; proof is the bundle, not the config |
 | 2. Harness + seed spec | Registry, auth fixture, cache seeding, ledger reads, a11y fix, the happy-flow spec | The exemplar propagates — one bad pattern here reaches every later spec; and the island-hydration window, which fails as a broken form rather than a race |
-| 3. Charged-refusal spec | Charged and transient 422s, both sides of the oracle | Asserting the generic per-status fallback instead of the cause's own `copy.errors.codes.*` entry |
+| 3. Charged-refusal spec | The two **charged** 422s (`unavailable`, `empty`), both sides of the oracle — the cause the card names paired with the `refusal_reason` the ledger recorded. The transient 422 is **not browser-reachable** (2026-09-09) and stays an integration-layer case | Asserting the generic per-status fallback instead of the cause's own `copy.errors.codes.*` entry |
 | 4. Long-video spec | 409 prompt → relabelled confirm → 2-credit debit | Asserting a Cancel control that does not exist |
 | 5. CI gate + close-out | `e2e` job, `deploy` needs it, §6.4 written | `deploy` must never set `E2E_FAKE_LLM` |
 

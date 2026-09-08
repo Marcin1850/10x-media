@@ -1,7 +1,7 @@
 ---
 change_id: testing-phase-4-critical-flow-e2e
 title: Critical-flow e2e — test-plan Phase 4
-status: impl_reviewed
+status: implementing
 created: 2026-09-07
 updated: 2026-09-09
 archived_at: null
@@ -63,5 +63,23 @@ public local demo keys plus deliberate non-credentials for Supadata and OpenRout
 reaches the app under `preview`, which is the second reason the local runner changed. The cost the user
 accepted is a ~30 s build in front of every run; the same change also removed the cold-start flake that
 made the seed spec fail on a clean dev server.
+
+**Ruling taken during Phase 3 implementation, 2026-09-09 (user).**
+
+6. **The transient `failed`/`timeout` 422 is dropped from the e2e layer — it is not browser-reachable.**
+The plan's Phase 3 contract paired the two charged refusals with this one uncharged exit, which is the
+only producer of the card's `Nie pobrano kredytu za tę operację.` line. It cannot be reached without a
+real vendor call: the exit sits in the cache-**MISS** branch after a live `fetchTranscript`, those two
+outcomes are never cached by design, `failed` comes only from a Supadata job the vendor reports failed
+and `timeout` only from the poll loop expiring, and the non-credential key in `.dev.vars.e2e` yields a
+401 that throws to a **502** rather than to this 422. A transcript seam mirroring `E2E_FAKE_LLM` was
+weighed and rejected — it is Phase-1-shaped work landing in Phase 3, and it dissolves the documented
+"Supadata falls to data, OpenRouter falls to code" split. Substituting the 402 insufficient-credits
+refusal was also rejected: the card says "not charged" there by *silence*, not by the line. The gap is
+recorded in `test-plan.md` §6.4 beside `ambiguous`, with its consequence stated — that line's rendering
+has no coverage at any layer; the server-side contract stays pinned at the integration layer.
+**Consequence: Phase 3 ships the two charged causes**, and the distinction between them is asserted on
+BOTH sides — the Polish copy the card resolves from the server's `code`, and the `refusal_reason` the
+ledger actually recorded.
 
 Linear: MAR-22.

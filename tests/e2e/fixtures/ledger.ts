@@ -25,18 +25,32 @@ export interface ReservationRow {
   id: string;
   amount: number;
   status: string;
+  /**
+   * Why this row is a REFUSAL charge rather than a generation debit — `'unavailable'`, `'empty'` or
+   * `'whitespace'`, and `null` on every row `begin_generation` writes
+   * (`20260731110000_charge_failed_transcript.sql`).
+   *
+   * It is the ledger-side partner of the card's cause-specific Polish copy. A refusal card names ONE
+   * cause, and the client resolves that name from the server's `code`; without this column a card
+   * announcing "no caption track" for a row the database charged as `empty` would satisfy every other
+   * assertion here — the card self-consistent, the balance right, the cause wrong. That is risk #6 in
+   * the shape only the refusal specs can reach.
+   */
+  refusalReason: string | null;
 }
 
 /**
  * Every credit reservation this user has, oldest first. A generation's full paper trail is one row:
  * `reserved` while the paid work runs, then `settled` (the credit was spent) or `refunded` (it was
  * not). A spec asserts the row's `status` AND its `amount` — a settled 1 and a settled 2 are the
- * difference between the documented cost of a short video and of a long one.
+ * difference between the documented cost of a short video and of a long one — and, on a refusal, its
+ * `refusalReason`, which is the only place the CAUSE the app charged for is recorded.
  */
 export async function readReservations(userId: string): Promise<ReservationRow[]> {
   const sql = getDbOwnerConnection();
   return await sql<ReservationRow[]>`
-    select id, amount, status from credit_reservations where user_id = ${userId} order by created_at
+    select id, amount, status, refusal_reason as "refusalReason"
+    from credit_reservations where user_id = ${userId} order by created_at
   `;
 }
 

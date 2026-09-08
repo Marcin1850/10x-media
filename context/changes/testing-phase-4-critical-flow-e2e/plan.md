@@ -654,6 +654,66 @@ With Phase 0 landed, both balance surfaces are live: the form's gate reflects th
 
 **Implementation Note**: Pause here for manual confirmation before Phase 4.
 
+### Added during implementation (2026-09-09)
+
+Recorded rather than rewritten into the contract above, the form Phases 0-2 used.
+
+#### A. The transient `failed`/`timeout` case was dropped — it is not browser-reachable (user ruling, 2026-09-09)
+
+The contract's second case cannot be built. That exit lives in the cache-**MISS** branch, after a real
+`fetchTranscript`: `failed`/`timeout` are never cached by design (`generate.ts:723-724`), `reason:
+"failed"` arises only from a Supadata job the vendor reports failed and `"timeout"` only from the poll
+loop expiring (`transcript.ts:456,465`), and the placeholder key in `.dev.vars.e2e` produces a 401 that
+throws to a **502**, not this 422 (`transcript.ts:352-359` → `generate.ts:707`). `SUPADATA_BASE_URL` is
+a hardcoded constant, so the app cannot be pointed at a local stub either, and the fetch is server-side
+so `page.route` never sees it. Reaching it would take a real vendor call, which this layer may not make.
+
+Options weighed with the user: extend the `E2E_FAKE_LLM` alias pattern to `@/lib/services/transcript`
+(rejected — Phase-1-shaped work in Phase 3, and it dissolves the documented "Supadata falls to data,
+OpenRouter falls to code" split), or substitute the 402 insufficient-credits refusal (rejected — the
+card says "not charged" there by *silence*, not by the line). **The ruling is to drop the case and
+document the gap**: `test-plan.md` §6.4's "Deliberately not covered here" now carries it beside
+`ambiguous`, and states the consequence plainly — the card's `Nie pobrano kredytu za tę operację.` line
+has no coverage at any layer. The server-side contract stays pinned at the integration layer
+(`generate.int.test.ts:290,409`).
+
+#### B. The ledger oracle grew a column, and it is what the second case now turns on
+
+`readReservations` selects `refusal_reason`
+(`20260731110000_charge_failed_transcript.sql`) as `refusalReason`. Without it the two cases were
+distinguishable only by their Polish copy — that is, only by the card — so a card naming one cause over
+a row charged for the other would have been self-consistent, correctly priced, and wrong. That is risk
+#6 in the one shape only a refusal spec can reach, and it is now the ledger, not the card, that says
+which cause was charged. `generate-summary.spec.ts` is unaffected (`objectContaining`).
+
+#### C. The two cases carry different balances, so each catches a different regression
+
+Case 1 runs at `accountCredits: 1` — the refusal spends the user's last credit, which puts the
+post-charge balance on a **second** surface: the capture bar's own gate (`copy.generate.noCredits`, the
+submit disabled). That is precisely the state Phase 0 existed to fix, so the spec now guards it end to
+end. Case 2 runs at 3, where the only thing that can make it pass is the balance moving by exactly one
+from where it stood — an assertion a run that can only ever land on zero cannot make.
+
+#### D. No request gate, unlike the seed spec
+
+Phase 2 needed `gateRequest` because the pending card is transient. The failure card is a **resting**
+state that survives until dismissed, so an ordinary web-first assertion cannot outrun it. The gate is
+correctly absent rather than forgotten.
+
+#### E. The deliberate-break check was run three ways
+
+Each broke a different link, and each went red on its own assertion:
+
+1. **The charge line** — `refuseAndCharge` reporting `charged: false`: red on
+   `copy.generate.charged` in **both** cases, while the cause copy stayed correct and the ledger was
+   untouched. This is the plan's named "invert the `charged` boolean" break.
+2. **The ledger alone** — `chargeFailedTranscript` recording `refusal_reason: "whitespace"`: red on the
+   reservation row *after every card assertion had passed*, with nothing visible on the page wrong at
+   all. The ledger half going red independently of the UI half, which item 3.4 asks for.
+3. **The cause collapse** — `REFUSAL_CODE` mapping `empty` onto `noCaptions`: case 1 **green**, case 2
+   red on `copy.errors.codes.transcriptUnavailable`. Proof the two cases discriminate, and the exact
+   regression the cause code exists to prevent (`change.md` ruling 1, 2026-09-08).
+
 ---
 
 ## Phase 4: The long-video confirmation spec
@@ -884,15 +944,15 @@ Manual:
 
 #### Automated
 
-- [ ] 3.1 `npm run test:e2e` passes with both refusal cases
-- [ ] 3.2 `npm run typecheck` and `npm run lint` pass
-- [ ] 3.3 The spec passes standalone and under `--repeat-each=2`
+- [x] 3.1 `npm run test:e2e` passes with both refusal cases
+- [x] 3.2 `npm run typecheck` and `npm run lint` pass
+- [x] 3.3 The spec passes standalone and under `--repeat-each=2`
 
 #### Manual
 
-- [ ] 3.4 Deliberate-break check: UI half and ledger half each go red independently
-- [ ] 3.5 No `test.skip` / `test.fixme` remains
-- [ ] 3.6 The asserted refusal text is the Polish `copy.errors.codes.*` entry for the cause, never the English `error` still carried on the body
+- [x] 3.4 Deliberate-break check: UI half and ledger half each go red independently
+- [x] 3.5 No `test.skip` / `test.fixme` remains
+- [x] 3.6 The asserted refusal text is the Polish `copy.errors.codes.*` entry for the cause, never the English `error` still carried on the body
 
 ### Phase 4: The long-video confirmation spec
 
