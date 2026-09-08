@@ -48,6 +48,22 @@ export default defineConfig({
 
   forbidOnly: isCI,
 
+  /**
+   * Double Playwright's 30s default. Locally the app server is `astro dev`, which compiles routes on
+   * first request — the first spec's page load pays a one-off ~20s of Vite work that has nothing to do
+   * with the flow under test, and a 30s budget leaves almost nothing for the flow itself.
+   */
+  timeout: 60_000,
+
+  /**
+   * 15s per web-first assertion, up from Playwright's 5s. The generation round-trip is genuinely slow
+   * the first time it runs under `astro dev`, which compiles `/api/summaries/generate` and its
+   * dependency graph on first request; 5s expires while the pending card is still, correctly, showing
+   * a spinner. This raises the CEILING on a wait for state — it is not a wait for time, and nothing
+   * here ever sleeps.
+   */
+  expect: { timeout: 15_000 },
+
   reporter: isCI ? [["list"], ["html", { open: "never" }]] : [["list"]],
 
   use: {

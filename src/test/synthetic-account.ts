@@ -30,6 +30,16 @@ export interface SyntheticAccount {
   /** `name=value; name2=value2` — feed this to a request's `Cookie` header. */
   cookieHeader: string;
   /**
+   * The same session cookies as individual `{ name, value }` pairs, for a consumer that needs the
+   * entries rather than a header — Playwright's `context.addCookies` is the one that does (the e2e
+   * auth fixture, `tests/e2e/fixtures/account.ts`).
+   *
+   * Exposed here rather than re-split from `cookieHeader` at the call site on purpose: the joining
+   * format is a decision this file owns, and a second place that knows how to undo it is a second
+   * place to get chunked values (`sb-…-auth-token.0`, `.1`, …) wrong.
+   */
+  cookies: readonly CookieJarEntry[];
+  /**
    * Deletes `supadata_calls` rows for the given youtube ids FIRST (`on delete set null` means they
    * would otherwise survive the account and orphan into the ledger — research.md §5, plan's "Critical
    * Implementation Details"), then deletes the `auth.users` row, whose cascade removes everything else
@@ -43,7 +53,7 @@ export interface SyntheticAccount {
   dispose: (youtubeIds?: readonly string[]) => Promise<void>;
 }
 
-interface CookieJarEntry {
+export interface CookieJarEntry {
   name: string;
   value: string;
 }
@@ -51,9 +61,19 @@ interface CookieJarEntry {
 /**
  * Creates one synthetic account, signs it in, and returns what a test needs to drive the endpoint as
  * that user. `admin` must be a real service-role client against the local stack — the guard in
- * `integration-setup.ts` has already refused to run this suite against anything else.
+ * `integration-setup.ts` (or, for the e2e layer, `tests/e2e/fixtures/global-setup.ts`, which imports
+ * the same guard) has already refused to run against anything else.
+ *
+ * `emailPrefix` defaults to the integration suite's own constant, so every existing call site is
+ * unchanged. The e2e layer passes `E2E_ACCOUNT_EMAIL_PREFIX` instead, which is what keeps the two
+ * suites' stale-account sweeps from seeing each other's leaks — see `tests/e2e/fixtures/registry.ts`.
+ * The prefix a run creates accounts with and the prefix its guard sweeps for must be the same one, or
+ * a hard-killed run's orphan is invisible.
  */
-export async function createSyntheticAccount(admin: SupabaseClient): Promise<SyntheticAccount> {
+export async function createSyntheticAccount(
+  admin: SupabaseClient,
+  emailPrefix: string = SYNTHETIC_ACCOUNT_EMAIL_PREFIX,
+): Promise<SyntheticAccount> {
   const url = process.env.SUPABASE_URL;
   const anonKey = process.env.SUPABASE_KEY;
   if (!url || !anonKey) {
@@ -63,7 +83,7 @@ export async function createSyntheticAccount(admin: SupabaseClient): Promise<Syn
     );
   }
 
-  const email = `${SYNTHETIC_ACCOUNT_EMAIL_PREFIX}${crypto.randomUUID()}@local.test`;
+  const email = `${emailPrefix}${crypto.randomUUID()}@local.test`;
   const password = crypto.randomUUID();
 
   const { data: created, error: createError } = await admin.auth.admin.createUser({
@@ -104,6 +124,7 @@ export async function createSyntheticAccount(admin: SupabaseClient): Promise<Syn
   return {
     userId,
     cookieHeader,
+    cookies: jar,
     async dispose(youtubeIds = []) {
       if (youtubeIds.length > 0) {
         const sql = getDbOwnerConnection();

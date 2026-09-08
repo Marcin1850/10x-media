@@ -14,6 +14,8 @@ reports/
 test-results/
 playwright-report/
 blob-report/
+# The Playwright CLI's scratch directory (snapshot dumps, traces it writes ad hoc).
+.playwright-cli/
 
 # Environment variables
 .env

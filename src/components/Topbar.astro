@@ -28,14 +28,19 @@ const isLanding = Astro.url.pathname === "/";
         user ? (
           <>
             <div class="text-muted-foreground flex items-center gap-2 text-sm">
-              <span>{copy.nav.credits}</span>
+              {/* The number is a bare figure on its own — "5" says nothing without "Kredyty" beside
+                  it. `aria-labelledby` points at the visible label rather than restating it in an
+                  `aria-label`, so the two cannot drift apart and no second Polish string is needed.
+                  It is also what makes the balance addressable in a test by its meaning
+                  (`getByLabel(copy.nav.credits)`) instead of by walking from a sibling node. */}
+              <span id="topbar-credits-label">{copy.nav.credits}</span>
               {credits === null ? (
                 <>
                   <span class="bg-muted h-4 w-8 animate-pulse rounded" aria-hidden="true" />
                   <span class="sr-only">{copy.nav.creditsUnavailable}</span>
                 </>
               ) : (
-                <span class="text-foreground font-medium" data-credit-balance>
+                <span class="text-foreground font-medium" data-credit-balance aria-labelledby="topbar-credits-label">
                   {credits}
                 </span>
               )}

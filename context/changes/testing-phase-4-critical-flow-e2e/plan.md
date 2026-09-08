@@ -502,6 +502,102 @@ Cleanup: cache rows, then `dispose([youtubeId])`.
 
 **Implementation Note**: Pause here for manual confirmation before Phase 3. The deliberate-break check is the gate.
 
+### Added during implementation (2026-09-08)
+
+Recorded rather than rewritten into the contract above, the form Phases 0 and 1 used.
+
+#### A. The rules block went to `test-plan.md` §6.4 — user ruling, 2026-09-08
+
+The contract offered `CLAUDE.md` or a dedicated file under `tests/e2e/`. Both were written and both
+were wrong, and the user rejected them for the right reason: **§6.4 already exists for exactly this**,
+as the sibling of §6.1 (unit) and §6.2 (integration), and it is where a contributor already looks. The
+two rejected homes each fail differently — `CLAUDE.md`'s Lesson-4 section is course scaffolding that
+the next lesson overwrites (and the file is gitignored, so it reaches neither CI nor another
+checkout), while a standalone `tests/e2e/RULES.md` splits the cookbook across two documents that would
+drift.
+
+Both were removed and `test-plan.md` §6.4 now carries the full cookbook, replacing its
+`- TBD — see §3 Phase 4.` placeholder.
+
+**Consequence for Phase 5**, whose item 2 owned §6.4: the bulk of it is written. What is left there is
+genuinely Phase 5's — the CI job, whatever Phases 3 and 4 add, the §6.6 Phase 4 notes, the §3 status
+flip, the §5 gate row and the §8 freshness-ledger line.
+
+**Deferred to Phase 5 by the same ruling**: the short-form e2e paragraph in
+`CLAUDE.md` / `AGENTS.md` / `README.md`, alongside the existing unit and integration ones. It should
+describe the finished layer — three specs and a blocking CI job — so writing it now would describe a
+one-spec suite with no gate and be rewritten sentence by sentence in Phase 5.
+
+#### B. `npm run test:e2e` had to load `.env`
+
+Phase 1 shipped `"test:e2e": "playwright test"`. That is enough to run a browser and not enough to run
+this harness: `global-setup.ts` and the account fixture execute in the **Playwright Node process**,
+where `SUPABASE_URL`, `SUPABASE_KEY` and `SUPABASE_SERVICE_ROLE_KEY` must be set — `.dev.vars` reaches
+only the app server. The script is now
+`node --env-file-if-exists=.env node_modules/@playwright/test/cli.js test`, the shape `test:integration`
+already uses for exactly this reason.
+
+#### C. The hydration wait — and why no retry could replace it
+
+Not anticipated, and it cost the most time. These pages are server-rendered HTML with `client:load`
+React islands, so after `goto` the capture bar is on screen, looks interactive, and is not wired.
+Typing in that window does not merely get ignored: React installs its **value tracker** at hydration
+from whatever the DOM then holds, so the island comes up believing the input already contains the
+typed URL while its own state is empty. Every later `fill()` of that same string is then a no-op —
+React raises `onChange` only when the *tracked* value changes — the submit button never enables, and
+the failure reads like a broken form. A retry loop around the fill was tried first and failed for
+precisely this reason; it is the shape of bug that would otherwise have been "fixed" with a sleep.
+
+`tests/e2e/fixtures/hydration.ts` waits for Astro's own hydration contract (`<astro-island ssr>`
+disappearing) and is **the one deliberate exception** to the no-DOM-locators rule, confined to that
+helper so no spec ever writes a selector: there is no user-visible signal for "hydrated", which is
+exactly what makes the window dangerous.
+
+#### D. Scope taken on beyond the four planned files
+
+- **`fixtures/admin.ts`** — one service-role client, its type inferred rather than annotated
+  `SupabaseClient` (the wider generic default is what produced an `no-unsafe-return`), so account,
+  seeding and global-setup all agree on one shape.
+- **`fixtures/ledger.ts`** — the oracle's second side: `readBalance`, `readReservations`,
+  `readSummaries`, `readSupadataCalls`, all through the table-owner connection.
+- **`fixtures/test.ts`** — the composed spec entry point. `seedVideo` depends on `account`, so
+  Playwright's teardown graph *enforces* "cache rows first, `dispose()` second" rather than leaving it
+  to a comment.
+- **`transcriptFingerprint`** is now exported from `src/test/e2e/fake-llm.ts`, so a spec names the one
+  token distinguishing this video's summary from any other by calling the same function the response
+  came from, instead of restating the hash.
+- **`eslint.config.js`** — `react-hooks/rules-of-hooks` off for `tests/e2e/**`. Playwright's fixture
+  idiom (`async ({ page }, use) => { await use(value) }`) reads to that rule as a call to React 19's
+  `use()` hook outside a component. Nothing here renders; the alternative was contorting every fixture
+  to dodge a false positive.
+- **`playwright.config.ts`** — `timeout: 60_000` and `expect: { timeout: 15_000 }`. Under `astro dev`
+  the first request compiles `/api/summaries/generate` and its graph, which expires a 5s web-first
+  assertion while the pending card is still, correctly, spinning. Both raise a ceiling on a wait for
+  *state*; nothing sleeps.
+- **`fixtures/registry.ts`** registers Phase 3's and Phase 4's ids alongside Phase 2's, one per
+  scenario shape as the contract asks. They are inert until a spec seeds them.
+
+#### E. The accessibility fix needed no new Polish string
+
+The contract named `src/lib/copy/pl.ts` as a file to change. `aria-labelledby` against the **existing**
+visible label was used instead of an `aria-label` built from `copy.nav.credits`, so there is no second
+copy of the word to keep in sync — and the balance became addressable by meaning
+(`getByLabel(copy.nav.credits)`) rather than by walking from a sibling node. `account.astro` carries
+its own id because the topbar renders on that page too.
+
+#### F. The deliberate-break check was run three ways
+
+Each broke a different link in the chain, and each went red on its own assertion:
+
+1. **Card body** — `SummaryCard` rendering a constant instead of `item.content`: red on the
+   fingerprint assertion, ledger assertions untouched.
+2. **Reported balance** — the endpoint's success body sending `creditsRemaining + 1`: red on the header
+   assertion, while the database balance was correct. This is risk #6 in its purest form — the number
+   the app *says* diverging from the number it *holds*.
+3. **Ledger only** — the fake summarizer recording a different `model`: red on the stored-row
+   assertion, with nothing visible on the page wrong at all. Proof that the second side of the oracle
+   is live rather than decorative.
+
 ---
 
 ## Phase 3: The charged-refusal spec
@@ -607,6 +703,12 @@ Upload the Playwright HTML report as an artifact on failure; a red e2e job with 
 **File**: `context/foundation/test-plan.md`
 
 **Intent**: §6.4 is the deliverable that lets the next contributor add a spec without re-deriving this phase.
+
+**Amended 2026-09-08 (user ruling during Phase 2)**: §6.4 was **written in Phase 2** — the rules block
+had to exist before Phase 3 generated a spec against it, and §6.4 is where it belongs rather than in
+`CLAUDE.md` or a standalone file. What remains here is revising it for what Phases 3-5 add (the CI job,
+the other two specs) and the short-form paragraph in `CLAUDE.md` / `AGENTS.md` / `README.md` beside the
+existing unit and integration ones, which was deferred here so it can describe the finished layer.
 
 **Contract**: Replace `- TBD — see §3 Phase 4.` with the cookbook: file placement and the `*.spec.ts`-not-`*.test.ts` reason; the two-sided oracle rule; the LLM alias and its safety property; cache seeding as the Supadata answer; the separate registry and its accepted consequence; the auth fixture and the `sb-127-auth-token` derivation; the header's `credits:changed` sync and the rule for asserting it (wait for the expected value, never read it once — Phase 0 item 7 replaced the header-never-updates fact); the deliberate-break check as the definition of done; and what is deliberately not covered (sign-in, `ambiguous`, Firefox, component rendering).
 
@@ -721,34 +823,34 @@ Manual:
 
 #### Automated
 
-- [x] 1.1 Playwright resolves and Chromium installs
-- [x] 1.2 `npm run typecheck`, `npm run lint` pass with the new files
-- [x] 1.3 `npm test` and `npm run test:integration` still pass — neither collects `tests/e2e/`
-- [x] 1.4 Safety proof: plain `npm run build`, no fake marker in `dist/`
-- [x] 1.5 Seam proof: `E2E_FAKE_LLM=1 npm run build`, fake marker present
+- [x] 1.1 Playwright resolves and Chromium installs — 1b88bb3
+- [x] 1.2 `npm run typecheck`, `npm run lint` pass with the new files — 1b88bb3
+- [x] 1.3 `npm test` and `npm run test:integration` still pass — neither collects `tests/e2e/` — 1b88bb3
+- [x] 1.4 Safety proof: plain `npm run build`, no fake marker in `dist/` — 1b88bb3
+- [x] 1.5 Seam proof: `E2E_FAKE_LLM=1 npm run build`, fake marker present — 1b88bb3
 
 #### Manual
 
-- [x] 1.6 `E2E_FAKE_LLM=1 npm run dev` serves the fake summary with no OpenRouter call
-- [x] 1.7 Plain `npm run dev` still reaches the real provider
-- [x] 1.8 `playwright.config.ts` records the Firefox gap and the `reuseExistingServer` rationale
+- [x] 1.6 `E2E_FAKE_LLM=1 npm run dev` serves the fake summary with no OpenRouter call — 1b88bb3
+- [x] 1.7 Plain `npm run dev` still reaches the real provider — 1b88bb3
+- [x] 1.8 `playwright.config.ts` records the Firefox gap and the `reuseExistingServer` rationale — 1b88bb3
 
 ### Phase 2: The e2e harness and the seed spec
 
 #### Automated
 
-- [ ] 2.1 `npm run typecheck`, `npm run typecheck:astro`, `npm run lint` pass
-- [ ] 2.2 `npm test` and `npm run test:integration` still pass
-- [ ] 2.3 `npm run test:e2e` runs `generate-summary.spec.ts` green
-- [ ] 2.4 The spec passes twice in a row and under `--repeat-each=2`
-- [ ] 2.5 A killed run is caught by the next run's stale-row abort
+- [x] 2.1 `npm run typecheck`, `npm run typecheck:astro`, `npm run lint` pass
+- [x] 2.2 `npm test` and `npm run test:integration` still pass
+- [x] 2.3 `npm run test:e2e` runs `generate-summary.spec.ts` green
+- [x] 2.4 The spec passes twice in a row and under `--repeat-each=2`
+- [x] 2.5 A killed run is caught by the next run's stale-row abort
 
 #### Manual
 
-- [ ] 2.6 Deliberate-break check: the spec goes red when the card or the balance is wrong
-- [ ] 2.7 No vendor call during a run
-- [ ] 2.8 The credit balance is announced with its label on `/summaries` and `/account`
-- [ ] 2.9 No e2e-registry rows survive a run
+- [x] 2.6 Deliberate-break check: the spec goes red when the card or the balance is wrong
+- [x] 2.7 No vendor call during a run
+- [x] 2.8 The credit balance is announced with its label on `/summaries` and `/account`
+- [x] 2.9 No e2e-registry rows survive a run
 
 ### Phase 3: The charged-refusal spec
 

@@ -35,8 +35,11 @@ export const E2E_FAKE_MODEL_SLUG = "e2e-fake/summarizer";
  * FNV-1a over the transcript, as 8 hex chars. The point is that the summary text is a function of the
  * *input*: a spec asserting the card shows `fakeSummaryText(seededTranscript, character)` fails if the
  * card renders some other video's summary. A fixed lorem string would pass against exactly that bug.
+ *
+ * Exported so a spec can name the one token that distinguishes THIS video's summary from any other,
+ * by calling the same function the app's own response came from rather than restating the hash.
  */
-function fingerprint(transcript: string): string {
+export function transcriptFingerprint(transcript: string): string {
   let hash = 0x811c9dc5;
   for (let index = 0; index < transcript.length; index += 1) {
     hash ^= transcript.charCodeAt(index);
@@ -63,7 +66,7 @@ export function fakeSummaryText({
     `Podsumowanie wygenerowane przez atrapę (${E2E_FAKE_SUMMARIZER}) na potrzeby testów e2e.`,
     "",
     `- Charakter kanału: **${character}**`,
-    `- Odcisk transkryptu: **${fingerprint(transcript)}**`,
+    `- Odcisk transkryptu: **${transcriptFingerprint(transcript)}**`,
     `- Długość transkryptu: **${transcript.length}** znaków`,
   ].join("\n");
 }
