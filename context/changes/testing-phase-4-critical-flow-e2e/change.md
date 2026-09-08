@@ -29,4 +29,24 @@ Not reopened, and worth restating because they look similar: the `Za tę operacj
 **Extended the same day, on the user's follow-up**, to every remaining generate-endpoint exit — 400, 429, 500, 503 and the "already processed" 409 — so nothing the card can render is English. Codes are shared where several `return`s say the same thing to a user and kept separate where they do not; the two 502s and the 401 carry no code because their per-status Polish message is already correct.
 
 3. **Signed-in users are redirected away from `/auth/signin` and `/auth/signup`** (`SIGNED_OUT_ONLY_ROUTES` in `src/middleware.ts`). Noticed during the same manual pass and reported as a suspected credit leak: the sign-in form rendered under a signed-in user's own topbar and balance. Verified it was **not** a leak — a genuinely signed-out session shows "Zaloguj się / Zarejestruj się" and zero balance nodes — but the page invited the reading, so the redirect closes it. `/auth/callback` and `/auth/confirm-email` are deliberately excluded; see the constant's doc comment.
+
+**Ruling taken during Phase 1 implementation, 2026-09-08 (user).**
+
+4. **No `setup` project and no `storageState` — auth is injected by a per-test account fixture.** The
+plan's Phase 1 config contract named a Playwright `setup` project, and "What We're NOT Doing" said auth
+arrives via `storageState`; Phase 2's own contract meanwhile injects it through a per-test `test.extend`
+fixture, which leaves a `setup` project with nothing to produce. Raised before the config was written.
+The user's call is the per-test fixture, because the dimension the specs vary is the credit **balance**,
+and the balance is state the specs themselves spend — Phase 3 wants 1 credit, Phase 4 wants 2+, and each
+oracle is a delta read for its own `user_id`, so one shared session stops being deterministic under the
+`--repeat-each=2` the plan requires. The rule that mattered is untouched: the sign-in form is still never
+driven, cookies are minted server-side by `createSyntheticAccount`.
+
+Not a ruling but recorded with them, because it reverses something the plan asserted: **the LLM seam
+could not be a `vite.resolve.alias` entry**, nor the array-form fallback the plan named. Astro contributes
+its own `@/*` alias from a plugin `config()` hook, Vite merges plugin aliases ahead of user ones by
+design, and the first match wins — so the entry was never consulted and `E2E_FAKE_LLM=1 npm run build`
+kept bundling the real module. The seam is an `enforce: "post"` plugin instead. Caught by the plan's own
+build-output check rather than by reading the config, which is exactly what that check was for.
+
 Linear: MAR-22.

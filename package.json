@@ -17,6 +17,7 @@
     "test:watch": "vitest --project unit",
     "test:integration": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run --project integration",
     "test:coverage": "vitest run --project unit --coverage",
+    "test:e2e": "playwright test",
     "format": "prettier --write .",
     "db:sync-from-prod": "node scripts/sync-prod-to-local.mjs",
     "grant-credits": "node --env-file=.env scripts/grant-credits.mjs"
@@ -53,6 +54,7 @@
   "devDependencies": {
     "@eslint/compat": "^2.0.3",
     "@eslint/js": "^9.29.0",
+    "@playwright/test": "^1.63.0",
     "@stryker-mutator/core": "^10.0.0",
     "@stryker-mutator/vitest-runner": "^10.0.0",
     "@vitest/coverage-v8": "^4.1.11",

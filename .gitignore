@@ -8,6 +8,12 @@ dist/
 coverage/
 reports/
 .stryker-tmp/
+# Playwright run artifacts (traces, HTML report). Note that .gitignore feeds ESLint through
+# `includeIgnoreFile` (eslint.config.js), so anything listed here is also unlinted — correct for
+# generated scratch output, and the reason `coverage/` had to be listed too.
+test-results/
+playwright-report/
+blob-report/
 
 # Environment variables
 .env

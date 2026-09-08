@@ -48,7 +48,7 @@ Verify: with `npx supabase start` running, `npm run test:e2e` is green; a plain 
 ## What We're NOT Doing
 
 - **No Astro component-rendering layer.** The `getViteConfig()`/Cloudflare-adapter conflict `test-plan.md:284` handed forward is still live in the installed tree (`@cloudflare/vite-plugin/dist/index.mjs:48499-48513`), but it gates *in-process Astro rendering only*, which Playwright never needs. Opening that layer would mean an upstream adapter fight or a dependency on `experimental_AstroContainer`. Scope is e2e alone (`test-plan.md:69`, research Finding 1).
-- **No sign-in spec.** Auth is injected via `storageState`, per the `/10x-e2e` rule ("never log in through UI in individual tests"). Sign-in carries no risk-map row of its own, and every other spec exercises the real cookie path by using it. The gap is deliberate and gets recorded in §6.4.
+- **No sign-in spec.** Auth is injected as cookies minted server-side by `createSyntheticAccount`, per the `/10x-e2e` rule ("never log in through UI in individual tests"). ~~via `storageState`~~ — **narrowed 2026-09-08 (user)**: no `storageState` file and no `setup` project, see Phase 1's implementation note. Sign-in carries no risk-map row of its own, and every other spec exercises the real cookie path by using it. The gap is deliberate and gets recorded in §6.4.
 - **No e2e coverage of the `ambiguous` charge outcome.** Not browser-reachable (see Key Discoveries). Already covered at the unit layer (`credits.test.ts` via `stubRejecting`) and the integration layer.
 - **No UI for `ambiguousCharge`.** Ruled intentional 2026-09-07 — the silence is the desired behaviour. A spec that reaches that state asserts the *absence* of both charge lines; it never asserts a positive charge message.
 - ~~**No change to the English refusal copy.**~~ **Reversed 2026-09-08 (user)** — see Phase 0 item 6. Refusal copy is Polish, resolved from a server-sent cause `code` rather than translated from the English string, so the multi-cause distinction survives. Specs assert the **Polish** string from `copy.errors.codes`. The English `error` still travels on the body for logs and untranslated consumers, so a spec may assert its presence but must not assert it as what the user reads. ~~Statuses outside the refusal set (400, 429, 500, 503) are still English by decision.~~ **Also reversed 2026-09-08 (user)** — item 6 was extended to every exit the card can render, and the impl review (F3) removed the English string from `messageForError`'s signature outright, so no status renders English.
@@ -314,6 +314,84 @@ Keep the identifiers greppable (`FAKE`, or similar) so Phase 1's build-output ch
 - `playwright.config.ts` reads as a decision record: the Firefox gap and the `reuseExistingServer` rationale are both stated
 
 **Implementation Note**: Pause here for manual confirmation before Phase 2. The safety proof is the gate — do not proceed on a config that looks correct but has not been checked against `dist/`.
+
+### Added during implementation (2026-09-08)
+
+Two things diverged from the contract above. Recorded here rather than rewritten into it, so the
+reasoning stays visible — the same form Phase 0 used.
+
+#### A. The alias could not be a `vite.resolve.alias` entry (corrected, not a decision)
+
+The contract said to add a conditional key under `vite.resolve.alias`, with "Vite's array form with an
+anchored `find` regex" as the fallback if it did not take precedence. **Both are wrong**, and the
+build-output check is what caught it: with the plain entry, `E2E_FAKE_LLM=1 npm run build` still bundled
+the real module. The plan's own instinct — *the acceptance test is the build output, not the config* —
+is what made this a ten-minute correction instead of a Phase 2 mystery.
+
+The cause is merge **order**, not alias **form**, so no form of the entry would have worked:
+
+- Astro's `astro:tsconfig-alias` plugin derives `@/*` from `tsconfig.json` and contributes it through a
+  `config()` hook as `{ find: /^@\/(.+)$/, replacement: "$1", customResolver }`
+  (`node_modules/astro/dist/vite-plugin-config-alias/index.js`).
+- Vite's `mergeAlias` places plugin-contributed aliases **ahead of** user ones deliberately — its own
+  comment reads *"the order is flipped because the alias is resolved from top-down, where the later
+  should have higher priority"*.
+- `@rollup/plugin-alias` stops at the **first** matching entry. Astro's `@/*` matches
+  `@/lib/services/llm`, so a user entry for that specifier is never consulted.
+- A plugin `resolveId` hook cannot win either: Vite's alias plugin runs *before* all user plugins,
+  `enforce: "pre"` included.
+
+The seam is therefore contributed by an `enforce: "post"` plugin of our own (`e2e:fake-llm-alias`).
+Astro lists its internal plugins before the user's in `create-vite.js`, so among `post` plugins ours
+runs later, merges later, and lands first. `find` is the anchored RegExp the plan wanted, which is what
+keeps it from shadowing anything else under `@/lib/services/`.
+
+`cross-fetch` is unaffected and stays where it is — it never collides with `@/*`, which is why it has
+worked all along and why it looked like a safe precedent.
+
+**The proof was strengthened while fixing it.** Grepping `dist/` for the fake's marker only shows the
+fake is *present*; it cannot show the real module is *gone*, and "both bundled" is a passing grep with a
+broken seam. Each build is now checked in both directions: flag off → no marker **and** the real
+system prompt present; flag on → marker present **and** the real system prompt absent. The first
+attempt passed the marker half of 1.4 while the seam was entirely inert.
+
+#### B. No `setup` project and no `storageState` (user decision, 2026-09-08)
+
+The contract said "one `chromium` project, plus a `setup` project it depends on", and "What We're NOT
+Doing" said auth is injected via `storageState`. That collides with Phase 2 §4, which injects auth
+through a per-test `test.extend` fixture — nothing for a `setup` project to produce, and a
+`dependencies: ["setup"]` with no matching `*.setup.ts` fails the runner at startup.
+
+Raised before writing the config; the user chose the per-test fixture. The reason is that the dimension
+the specs vary is the credit **balance**, and the balance is state the specs themselves spend: Phase 3
+wants an account at 1 credit, Phase 4 an account at 2+, and each spec's oracle is a *delta* read for its
+own `user_id`. One shared session gives one balance, mutated by whichever spec ran first, which stops
+being deterministic under the `--repeat-each=2` that 2.4 / 3.3 / 4.3 require. Three further consequences
+were weighed: a shared account would have to be exempted from the global setup's stale-account guard
+(weakening the one thing that makes the layer safe to run), `dispose()` — which throws by design — would
+have no natural call site without a `teardown` project, and a `storageState` file on disk carries a real
+Supabase JWT that expires, which combined with `reuseExistingServer` fails as a silently signed-out run.
+
+The rule that actually mattered is kept: the sign-in **form** is still never driven. `createSyntheticAccount`
+signs in from the Node process and the cookies reach the browser through `context.addCookies`, so the cost
+is two loopback round-trips per test (~200-400 ms, bcrypt-dominated), not a browser session.
+
+#### C. Scope taken on beyond the contract
+
+- **`src/test/e2e/fake-llm.test.ts`** (new). The fake cannot import `SummarizeResult` — under the alias
+  that specifier resolves back to the fake itself — so it restates the shape, and a restated contract
+  drifts. A bidirectional assignability pair fails `npm run typecheck` if the real `summarize` changes
+  shape; verified by narrowing `costUsd` to `number` and watching the build break. The runtime cases pin
+  the one property no type expresses: the summary text is a function of the input, which is what lets a
+  spec tell the fake's output for *this* video from its output for any other.
+- **`.gitignore`**: `test-results/`, `playwright-report/`, `blob-report/`. Phase 1 introduces the runner
+  that writes them. `.playwright-cli/` stays with Phase 2 §9 as planned.
+
+#### D. Left deliberately incomplete
+
+`playwright.config.ts` points `globalSetup` at `./tests/e2e/fixtures/global-setup.ts`, which **Phase 2
+lands**. Until then `npm run test:e2e` cannot run — there are no specs either, so nothing is lost, but the
+failure would read as a missing module rather than an unfinished phase. Noted in the config itself.
 
 ---
 
@@ -643,17 +721,17 @@ Manual:
 
 #### Automated
 
-- [ ] 1.1 Playwright resolves and Chromium installs
-- [ ] 1.2 `npm run typecheck`, `npm run lint` pass with the new files
-- [ ] 1.3 `npm test` and `npm run test:integration` still pass — neither collects `tests/e2e/`
-- [ ] 1.4 Safety proof: plain `npm run build`, no fake marker in `dist/`
-- [ ] 1.5 Seam proof: `E2E_FAKE_LLM=1 npm run build`, fake marker present
+- [x] 1.1 Playwright resolves and Chromium installs
+- [x] 1.2 `npm run typecheck`, `npm run lint` pass with the new files
+- [x] 1.3 `npm test` and `npm run test:integration` still pass — neither collects `tests/e2e/`
+- [x] 1.4 Safety proof: plain `npm run build`, no fake marker in `dist/`
+- [x] 1.5 Seam proof: `E2E_FAKE_LLM=1 npm run build`, fake marker present
 
 #### Manual
 
-- [ ] 1.6 `E2E_FAKE_LLM=1 npm run dev` serves the fake summary with no OpenRouter call
-- [ ] 1.7 Plain `npm run dev` still reaches the real provider
-- [ ] 1.8 `playwright.config.ts` records the Firefox gap and the `reuseExistingServer` rationale
+- [x] 1.6 `E2E_FAKE_LLM=1 npm run dev` serves the fake summary with no OpenRouter call
+- [x] 1.7 Plain `npm run dev` still reaches the real provider
+- [x] 1.8 `playwright.config.ts` records the Firefox gap and the `reuseExistingServer` rationale
 
 ### Phase 2: The e2e harness and the seed spec
 
