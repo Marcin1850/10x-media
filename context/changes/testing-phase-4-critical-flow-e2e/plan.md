@@ -839,18 +839,18 @@ Manual:
 
 #### Automated
 
-- [x] 2.1 `npm run typecheck`, `npm run typecheck:astro`, `npm run lint` pass
-- [x] 2.2 `npm test` and `npm run test:integration` still pass
-- [x] 2.3 `npm run test:e2e` runs `generate-summary.spec.ts` green
-- [x] 2.4 The spec passes twice in a row and under `--repeat-each=2`
-- [x] 2.5 A killed run is caught by the next run's stale-row abort
+- [x] 2.1 `npm run typecheck`, `npm run typecheck:astro`, `npm run lint` pass — d2efca1
+- [x] 2.2 `npm test` and `npm run test:integration` still pass — d2efca1
+- [x] 2.3 `npm run test:e2e` runs `generate-summary.spec.ts` green — d2efca1
+- [x] 2.4 The spec passes twice in a row and under `--repeat-each=2` — d2efca1
+- [x] 2.5 A killed run is caught by the next run's stale-row abort — d2efca1
 
 #### Manual
 
-- [x] 2.6 Deliberate-break check: the spec goes red when the card or the balance is wrong
-- [x] 2.7 No vendor call during a run
-- [x] 2.8 The credit balance is announced with its label on `/summaries` and `/account`
-- [x] 2.9 No e2e-registry rows survive a run
+- [x] 2.6 Deliberate-break check: the spec goes red when the card or the balance is wrong — d2efca1
+- [x] 2.7 No vendor call during a run — d2efca1
+- [x] 2.8 The credit balance is announced with its label on `/summaries` and `/account` — d2efca1
+- [x] 2.9 No e2e-registry rows survive a run — d2efca1
 
 ### Phase 3: The charged-refusal spec
 
