@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { RESERVED_YOUTUBE_IDS } from "./synthetic-fixtures";
 import { SYNTHETIC_ACCOUNT_EMAIL_PREFIX } from "./synthetic-account";
 import { closeDbOwnerConnection, getDbOwnerConnection } from "./db-owner";
+import { assertLoopbackSupabaseUrl } from "./loopback-guard";
 
 /** Shared by both stale-row guards below — a service-role client against the (already loopback-checked) local stack. */
 function getAdminClientOrThrow(checking: string) {
@@ -17,48 +18,12 @@ function getAdminClientOrThrow(checking: string) {
 }
 
 /**
- * WHATWG `new URL(...).hostname` reports an IPv6 literal WITH its brackets (`"[::1]"`, not `"::1"`) —
- * verified against Node's URL implementation. Shared by `assertLoopbackSupabaseUrl` below and
- * `fetch-firewall.ts`, so both guards recognize the same loopback shapes.
+ * The loopback guard lives in `./loopback-guard` — a module with no imports, so `playwright.config.ts`
+ * can evaluate it before it starts `webServer` without dragging in `@supabase/supabase-js` and a
+ * Postgres pool (impl-review F1). Re-exported here because this is the path `test-plan.md` §6.2
+ * documents and the path `db-owner.ts` / `fetch-firewall.ts` / the smoke test have always used.
  */
-export function isLoopbackHostname(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
-}
-
-/**
- * The one irreversible failure mode in this phase (plan.md, "Critical Implementation Details"): the
- * `ci` job's `build` step uses `secrets.SUPABASE_URL`, which points at production. This suite creates
- * and deletes `auth.users` rows, so a copied-in env line would do that against production. Exported
- * separately from `setup` below so it can be exercised directly, without a database, by the smoke test.
- */
-export function assertLoopbackSupabaseUrl(rawUrl: string | undefined): void {
-  if (!rawUrl) {
-    throw new Error(
-      "SUPABASE_URL is unset. The integration suite creates and deletes auth.users rows and refuses " +
-        "to run without a URL this guard can verify is local. Start the local stack (`npx supabase " +
-        "start`) and set SUPABASE_URL to the printed API URL, e.g. http://127.0.0.1:54321.",
-    );
-  }
-
-  let hostname: string;
-  try {
-    hostname = new URL(rawUrl).hostname;
-  } catch {
-    throw new Error(
-      `SUPABASE_URL ("${rawUrl}") is not a valid URL. Point it at your local Supabase stack, e.g. ` +
-        "http://127.0.0.1:54321.",
-    );
-  }
-
-  if (!isLoopbackHostname(hostname)) {
-    throw new Error(
-      `SUPABASE_URL ("${rawUrl}") does not resolve to loopback. The integration suite creates and ` +
-        "deletes auth.users rows — running it against anything but your local stack (including " +
-        "production, reached via secrets.SUPABASE_URL in CI's `ci` job) would do that for real. Point " +
-        "SUPABASE_URL at your local stack instead (`npx supabase start`), e.g. http://127.0.0.1:54321.",
-    );
-  }
-}
+export { assertLoopbackSupabaseUrl, isLoopbackHostname } from "./loopback-guard";
 
 /**
  * Catches a stale fixture row an earlier, interrupted run left behind. `transcript_cache` and

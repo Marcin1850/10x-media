@@ -79,9 +79,28 @@ export async function seedMetadataCache(admin: AdminClient, youtubeId: string, t
 /**
  * Deletes both cache rows for a video. Called in a test's teardown BEFORE the account is disposed —
  * see the ordering note in `account.ts`'s `trackYoutubeId`.
+ *
+ * **Every delete is attempted, even after one fails** (impl-review F7). Failing fast here is actively
+ * harmful: a failed `transcript_cache` delete used to skip its own `metadata_cache` delete too, turning
+ * one database error into two stale rows — and stale rows are not a cosmetic leak, they abort the NEXT
+ * run through `global-setup.ts`'s guard. So both statements run, and the failures are reported together
+ * rather than the first one hiding the rest.
  */
 export async function deleteCacheRows(youtubeId: string): Promise<void> {
   const sql = getDbOwnerConnection();
-  await sql`delete from transcript_cache where youtube_id = ${youtubeId}`;
-  await sql`delete from metadata_cache where youtube_id = ${youtubeId}`;
+  const failures: Error[] = [];
+
+  for (const table of ["transcript_cache", "metadata_cache"] as const) {
+    try {
+      await sql`delete from ${sql(table)} where youtube_id = ${youtubeId}`;
+    } catch (error) {
+      failures.push(
+        new Error(`deleteCacheRows(${youtubeId}): ${table}: ${error instanceof Error ? error.message : String(error)}`),
+      );
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `deleteCacheRows(${youtubeId}) left ${failures.length} row(s) behind`);
+  }
 }

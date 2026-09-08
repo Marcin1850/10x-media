@@ -34,7 +34,32 @@ export const E2E_YOUTUBE_IDS = {
   longVideo: "e2elongvid1",
 } as const;
 
-export const E2E_RESERVED_YOUTUBE_IDS: readonly string[] = Object.values(E2E_YOUTUBE_IDS);
+/**
+ * The ids above, as a type. `seedVideo.seed` accepts only this, so a typo or an invented id is a
+ * compile error rather than a row nothing sweeps (impl-review F5).
+ */
+export type E2eYoutubeId = (typeof E2E_YOUTUBE_IDS)[keyof typeof E2E_YOUTUBE_IDS];
+
+export const E2E_RESERVED_YOUTUBE_IDS: readonly E2eYoutubeId[] = Object.values(E2E_YOUTUBE_IDS);
+
+/**
+ * The same rule again, at runtime, because the type alone is not a safety property: a cast, a JS
+ * caller, or an id built from a variable all slip past `tsc`, and the consequence is not a failed test
+ * — it is a `transcript_cache` row under an id `global-setup.ts` does not sweep. After a hard kill that
+ * row survives invisibly, and if the id happened to be a REAL YouTube id it can then answer a real
+ * user's request with fabricated transcript text. Called before the first write, never after.
+ */
+export function assertReservedYoutubeId(youtubeId: string): asserts youtubeId is E2eYoutubeId {
+  if (!(E2E_RESERVED_YOUTUBE_IDS as readonly string[]).includes(youtubeId)) {
+    throw new Error(
+      `e2e seed: "${youtubeId}" is not in E2E_YOUTUBE_IDS (registry.ts). Every seeded id must be ` +
+        "registered there FIRST, because `global-setup.ts` sweeps only registered ids — an unregistered " +
+        "row left by a hard-killed run is invisible to the next run, and a real YouTube id would put " +
+        "fabricated transcript text under a real video. Add the id to E2E_YOUTUBE_IDS instead of " +
+        `passing a literal. Registered: ${E2E_RESERVED_YOUTUBE_IDS.join(", ")}.`,
+    );
+  }
+}
 
 /**
  * Every e2e synthetic account's email starts with this. Distinct from `synthetic-db-int-` so the two

@@ -55,6 +55,20 @@ export function transcriptFingerprint(transcript: string): string {
  * Polish, and shaped like a real summary (Markdown, a lead sentence, bullets), so it exercises the
  * card's `react-markdown` rendering rather than a degenerate one-line string.
  */
+/**
+ * The ONE fragment of the fake's body that depends on the channel character, in exactly the form the
+ * card renders it (no Markdown emphasis, so the string a spec asserts is the string in the DOM).
+ *
+ * It is exported, and `fakeSummaryText` below builds its line from it, because a spec has to be able
+ * to prove the user's radio choice reached the LLM call. Asserting only `transcriptFingerprint` cannot:
+ * the fingerprint is a function of the transcript alone, so a card rendering an `informational` body
+ * for the same video passes it (impl-review F3). Two sources for one string would drift, hence one
+ * function used by both sides.
+ */
+export function fakeCharacterLine(character: ChannelCharacter): string {
+  return `Charakter kanału: ${character}`;
+}
+
 export function fakeSummaryText({
   transcript,
   character,
@@ -65,7 +79,10 @@ export function fakeSummaryText({
   return [
     `Podsumowanie wygenerowane przez atrapę (${E2E_FAKE_SUMMARIZER}) na potrzeby testów e2e.`,
     "",
-    `- Charakter kanału: **${character}**`,
+    // NOT bolded, unlike the two lines below: this one is asserted verbatim against the card's rendered
+    // text, and `**` would be consumed by react-markdown. The other two keep their emphasis, so the
+    // body still exercises the card's Markdown rendering rather than degenerating into plain text.
+    `- ${fakeCharacterLine(character)}`,
     `- Odcisk transkryptu: **${transcriptFingerprint(transcript)}**`,
     `- Długość transkryptu: **${transcript.length}** znaków`,
   ].join("\n");

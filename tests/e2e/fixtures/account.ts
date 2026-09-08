@@ -79,36 +79,42 @@ export const accountTest = base.extend<E2eAccountOptions & { account: E2eAccount
     const account = await createSyntheticAccount(admin, E2E_ACCOUNT_EMAIL_PREFIX);
     const touchedYoutubeIds = new Set<string>();
 
-    /**
-     * Two cookie facts have to be right SIMULTANEOUSLY or the session silently does not exist — the
-     * app just renders signed-out and the failure looks like a routing bug:
-     *
-     *  - The cookie NAME derives from the SUPABASE hostname, not the app's: `@supabase/ssr` defaults to
-     *    `sb-${hostname.split(".")[0]}-auth-token`, so a local stack at `127.0.0.1:54321` produces
-     *    `sb-127-auth-token`. Nothing here hardcodes that — the names come from the jar the app's own
-     *    client just filled, which is the only copy that cannot be wrong. Values above ~3180 chars
-     *    arrive CHUNKED as `.0`, `.1`, …, and every chunk is a separate cookie that must be added;
-     *    iterating the jar gets that right for free.
-     *  - The cookie carries NO `domain`, so it is scoped to the host the browser navigates —
-     *    `localhost:4321`, not the Supabase host. Passing `url` lets Playwright derive domain and path
-     *    from `baseURL` rather than restating them.
-     */
-    if (!baseURL) throw new Error("e2e account fixture: `use.baseURL` must be set in playwright.config.ts.");
-    await context.addCookies(
-      account.cookies.map(({ name, value }) => ({
-        name,
-        value,
-        url: baseURL,
-        sameSite: "Lax" as const,
-        httpOnly: false,
-      })),
-    );
-
-    if (accountCredits !== null) {
-      await setBalance(admin, account.userId, accountCredits);
-    }
+    // The `try` opens HERE, not just before `use` — the `auth.users` row exists from the line above, so
+    // every step after it is already cleanup-relevant. Cookie injection and `setBalance` can both
+    // reject, and a rejection between creation and the old `try` left the row behind for the NEXT run's
+    // stale-account guard to find, long after the run that caused it (impl-review F4). Matches the
+    // integration helpers, which open their `try` immediately after creation for the same reason.
 
     try {
+      /**
+       * Two cookie facts have to be right SIMULTANEOUSLY or the session silently does not exist — the
+       * app just renders signed-out and the failure looks like a routing bug:
+       *
+       *  - The cookie NAME derives from the SUPABASE hostname, not the app's: `@supabase/ssr` defaults
+       *    to `sb-${hostname.split(".")[0]}-auth-token`, so a local stack at `127.0.0.1:54321` produces
+       *    `sb-127-auth-token`. Nothing here hardcodes that — the names come from the jar the app's own
+       *    client just filled, which is the only copy that cannot be wrong. Values above ~3180 chars
+       *    arrive CHUNKED as `.0`, `.1`, …, and every chunk is a separate cookie that must be added;
+       *    iterating the jar gets that right for free.
+       *  - The cookie carries NO `domain`, so it is scoped to the host the browser navigates —
+       *    `localhost:4321`, not the Supabase host. Passing `url` lets Playwright derive domain and path
+       *    from `baseURL` rather than restating them.
+       */
+      if (!baseURL) throw new Error("e2e account fixture: `use.baseURL` must be set in playwright.config.ts.");
+      await context.addCookies(
+        account.cookies.map(({ name, value }) => ({
+          name,
+          value,
+          url: baseURL,
+          sameSite: "Lax" as const,
+          httpOnly: false,
+        })),
+      );
+
+      if (accountCredits !== null) {
+        await setBalance(admin, account.userId, accountCredits);
+      }
+
       await use({
         userId: account.userId,
         setBalance: (balance) => setBalance(admin, account.userId, balance),

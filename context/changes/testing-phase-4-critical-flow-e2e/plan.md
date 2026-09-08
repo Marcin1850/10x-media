@@ -271,7 +271,7 @@ Install the runner, write the config, and cut the one seam the codebase does not
 **Contract**:
 - `testDir: "tests/e2e"`, spec glob `*.spec.ts` — **never `*.test.ts`**, which `vitest.config.ts`'s `unit` project would collect (see Key Discoveries).
 - One `chromium` project, plus a `setup` project it depends on. A comment records that `prd.md:72-73` also names Firefox and why no project exists for it, so the gap is a decision on the record rather than an omission.
-- `webServer`: `npm run dev` locally, a built `npm run preview` under `process.env.CI`, both with `E2E_FAKE_LLM` set; `url: "http://localhost:4321/"`; `reuseExistingServer: !process.env.CI` — which is the codified form of `lessons.md`'s dev-server rule, learned by losing time to a stale process on :4321.
+- ~~`webServer`: `npm run dev` locally, a built `npm run preview` under `process.env.CI`, both with `E2E_FAKE_LLM` set; `url: "http://localhost:4321/"`; `reuseExistingServer: !process.env.CI` — which is the codified form of `lessons.md`'s dev-server rule, learned by losing time to a stale process on :4321.~~ **Superseded by impl-review triage, 2026-09-09 (F1/F2).** `webServer` is now `npm run build && npm run preview` in **both** environments and `reuseExistingServer` is **`false`** in both. Two independent reasons, and neither was visible at planning: (a) under `astro dev` a cold run raced Vite's dependency optimizer and lost the generation mid-request, and (b) the e2e vendor keys only reach the app under `preview` — @astrojs/cloudflare re-reads the fixed-name `.dev.vars` into `process.env` in dev, so the developer's real keys win. Reuse was the concrete path by which a bare `npm run dev` in another terminal — no fake-LLM alias, no e2e secrets — could make the suite call OpenRouter for real. `lessons.md`'s dev-server rule is not weakened by this but enforced: an occupied :4321 is now a loud startup error instead of a silently reused, wrongly configured server. The keys arrive via `CLOUDFLARE_ENV=e2e` and a committed `.dev.vars.e2e`.
 - `globalSetup` pointing at the harness's setup (Phase 2).
 - `forbidOnly: !!process.env.CI`, and workers pinned so parallel specs cannot collide on the singleton vendor-budget row.
 
@@ -309,7 +309,7 @@ Keep the identifiers greppable (`FAKE`, or similar) so Phase 1's build-output ch
 
 #### Manual Verification:
 
-- `E2E_FAKE_LLM=1 npm run dev` serves the app and a generation attempt against a pre-seeded video returns the fake's text without contacting OpenRouter (confirm by network inactivity or by an unchanged OpenRouter dashboard)
+- `E2E_FAKE_LLM=1 npm run dev` serves the app and a generation attempt against a pre-seeded video returns the fake's text without contacting OpenRouter (confirm by network inactivity or by an unchanged OpenRouter dashboard) — still true of the alias, though since the 2026-09-09 triage the **suite** no longer runs against `astro dev` at all (see the `webServer` supersession above)
 - Plain `npm run dev` still reaches the real provider — the seam is off by default in the developer's normal loop
 - `playwright.config.ts` reads as a decision record: the Firefox gap and the `reuseExistingServer` rationale are both stated
 
@@ -570,10 +570,13 @@ exactly what makes the window dangerous.
   idiom (`async ({ page }, use) => { await use(value) }`) reads to that rule as a call to React 19's
   `use()` hook outside a component. Nothing here renders; the alternative was contorting every fixture
   to dodge a false positive.
-- **`playwright.config.ts`** — `timeout: 60_000` and `expect: { timeout: 15_000 }`. Under `astro dev`
+- **`playwright.config.ts`** — `timeout: 60_000` and `expect: { timeout: 15_000 }`. ~~Under `astro dev`
   the first request compiles `/api/summaries/generate` and its graph, which expires a 5s web-first
-  assertion while the pending card is still, correctly, spinning. Both raise a ceiling on a wait for
-  *state*; nothing sleeps.
+  assertion while the pending card is still, correctly, spinning.~~ **Rationale corrected 2026-09-09
+  (F2)**: the values are unchanged, but the compile-on-first-request justification died with `astro dev`
+  — the server is a finished bundle now, and that cost moved into `webServer`, in front of the whole
+  run. They are honest headroom for a real generation round-trip through workerd plus isolate spin-up.
+  Both raise a ceiling on a wait for *state*; nothing sleeps.
 - **`fixtures/registry.ts`** registers Phase 3's and Phase 4's ids alongside Phase 2's, one per
   scenario shape as the contract asks. They are inert until a spec seeds them.
 
@@ -585,7 +588,7 @@ copy of the word to keep in sync — and the balance became addressable by meani
 (`getByLabel(copy.nav.credits)`) rather than by walking from a sibling node. `account.astro` carries
 its own id because the topbar renders on that page too.
 
-#### F. The deliberate-break check was run three ways
+#### F. The deliberate-break check was run five ways
 
 Each broke a different link in the chain, and each went red on its own assertion:
 
@@ -597,6 +600,21 @@ Each broke a different link in the chain, and each went red on its own assertion
 3. **Ledger only** — the fake summarizer recording a different `model`: red on the stored-row
    assertion, with nothing visible on the page wrong at all. Proof that the second side of the oracle
    is live rather than decorative.
+
+Two more were added by impl-review triage (2026-09-09), because the first three left one false green
+and one unenforced rule:
+
+4. **Card body vs. the CHOSEN CHARACTER** (impl-review F3) — asserting `fakeCharacterLine("informational")`
+   against a run that selected `educational`: red on the new character assertion
+   (`- Charakter kanału: informational` / `+ Charakter kanału: educational`). Break 1 could not reach
+   this case: `transcriptFingerprint` is a function of the transcript alone, so a card rendering the
+   wrong character for the right video satisfied it while Postgres held the correct row. This is risk
+   #6 in the one shape the original three missed.
+5. **The seed registry rule** (impl-review F5) — seeding a real YouTube id (`dQw4w9WgXcQ`, cast past
+   the new `E2eYoutubeId` type): red in 1.1s, before any database write, on
+   `assertReservedYoutubeId`. Proof the registry contract is now enforced rather than merely
+   documented — the failure mode it prevents is a fabricated transcript row surviving a hard kill
+   under a real video's id, which `global-setup.ts` would never sweep.
 
 ---
 
@@ -765,7 +783,7 @@ Add a §6.6 "Phase 4" entry for what would otherwise be rediscovered: that proce
 
 The `e2e` job adds a third parallel CI job whose wall time is a Supabase stack plus a build plus browser install — comparable to `integration`, so it should not extend total CI time much beyond the slower of the existing two. Chromium-only is half the reason that holds. Playwright's browser cache should be keyed in CI so the install is not paid on every run.
 
-Locally, `reuseExistingServer` keeps a warm dev server across runs; the build cost is paid only under `CI`.
+~~Locally, `reuseExistingServer` keeps a warm dev server across runs; the build cost is paid only under `CI`.~~ **Superseded 2026-09-09 (F1/F2)**: the build cost is now paid on every run in both environments — measured at ~30 s, once per `npm run test:e2e` rather than per spec, against which the suite itself runs in ~3 s. That is the price of a deterministic server that cannot be holding the developer's real vendor keys.
 
 ## Migration Notes
 

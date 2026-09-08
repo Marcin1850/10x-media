@@ -3,7 +3,7 @@ change_id: testing-phase-4-critical-flow-e2e
 title: Critical-flow e2e — test-plan Phase 4
 status: impl_reviewed
 created: 2026-09-07
-updated: 2026-09-08
+updated: 2026-09-09
 archived_at: null
 ---
 
@@ -48,5 +48,20 @@ its own `@/*` alias from a plugin `config()` hook, Vite merges plugin aliases ah
 design, and the first match wins — so the entry was never consulted and `E2E_FAKE_LLM=1 npm run build`
 kept bundling the real module. The seam is an `enforce: "post"` plugin instead. Caught by the plan's own
 build-output check rather than by reading the config, which is exactly what that check was for.
+
+**Ruling taken during impl-review triage of Phases 1-2, 2026-09-09 (user).**
+
+5. **The e2e suite runs against a built `preview` in every environment, never a reused server.** The
+plan had `npm run dev` locally for the fast loop with `reuseExistingServer`, which the review found
+could spend real vendor credit: a bare `npm run dev` in another terminal is reused as-is, without the
+fake-LLM alias, so the first spec calls OpenRouter for real. Fixing that exposed a second fact only
+measurement could reveal — **the e2e vendor keys cannot be passed through `webServer.env` at all**,
+because @astrojs/cloudflare re-reads the fixed-name `.dev.vars` into `process.env` and the developer's
+real keys win. A worker-side probe confirmed it both ways. The keys therefore arrive as a wrangler
+environment: `CLOUDFLARE_ENV=e2e` selects a **committed** `.dev.vars.e2e` holding the Supabase CLI's
+public local demo keys plus deliberate non-credentials for Supadata and OpenRouter — and that file only
+reaches the app under `preview`, which is the second reason the local runner changed. The cost the user
+accepted is a ~30 s build in front of every run; the same change also removed the cold-start flake that
+made the seed spec fail on a clean dev server.
 
 Linear: MAR-22.

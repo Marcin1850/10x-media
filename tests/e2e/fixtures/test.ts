@@ -3,6 +3,7 @@ import { accountTest } from "./account";
 import { adminClient } from "./admin";
 import { deleteCacheRows, seedMetadataCache, seedTranscriptCache, youtubeWatchUrl } from "./seed-cache";
 import type { SeedTranscriptOptions } from "./seed-cache";
+import { assertReservedYoutubeId, type E2eYoutubeId } from "./registry";
 
 /**
  * The spec entry point: `import { test, expect } from "./fixtures/test"`.
@@ -27,9 +28,11 @@ export interface SeededVideo {
 export interface VideoSeeder {
   /**
    * Makes both Supadata checkpoints cache hits for one registry id, and registers it for cleanup.
-   * `youtubeId` must come from `registry.ts` — `global-setup.ts` only sweeps ids listed there.
+   * `youtubeId` is restricted to `E2eYoutubeId` — `global-setup.ts` only sweeps ids listed in
+   * `registry.ts`, so an id from anywhere else is a row nothing cleans up. Enforced twice: here at
+   * compile time, and again at runtime inside `seed` for the callers a type cannot reach.
    */
-  seed(youtubeId: string, options: SeedTranscriptOptions & { title?: string }): Promise<SeededVideo>;
+  seed(youtubeId: E2eYoutubeId, options: SeedTranscriptOptions & { title?: string }): Promise<SeededVideo>;
 }
 
 export const test = accountTest.extend<{ seedVideo: VideoSeeder }>({
@@ -39,6 +42,9 @@ export const test = accountTest.extend<{ seedVideo: VideoSeeder }>({
 
     await use({
       async seed(youtubeId, { title = "Testowy film e2e", ...transcriptOptions }) {
+        // Before ANY write and before tracking: an id that is about to be rejected must not reach the
+        // database, and an id that never reached the database must not enter the cleanup list.
+        assertReservedYoutubeId(youtubeId);
         seeded.push(youtubeId);
         // Registered BEFORE the write, not after: a seed that throws half-way still has to be cleaned
         // up, and an id the teardown never heard of is a row the next run aborts on.
@@ -49,8 +55,22 @@ export const test = accountTest.extend<{ seedVideo: VideoSeeder }>({
       },
     });
 
+    // Same rule as `deleteCacheRows` itself, one level up: every seeded id is cleaned up even after an
+    // earlier one fails, because a skipped id is a row that aborts the next run (impl-review F7). The
+    // failures are still loud — they are collected and thrown together once nothing is left to try.
+    const cleanupFailures: unknown[] = [];
     for (const youtubeId of seeded) {
-      await deleteCacheRows(youtubeId);
+      try {
+        await deleteCacheRows(youtubeId);
+      } catch (error) {
+        cleanupFailures.push(error);
+      }
+    }
+    if (cleanupFailures.length > 0) {
+      throw new AggregateError(
+        cleanupFailures,
+        `seedVideo teardown: cleanup failed for ${cleanupFailures.length} of ${seeded.length} seeded video(s)`,
+      );
     }
   },
 });

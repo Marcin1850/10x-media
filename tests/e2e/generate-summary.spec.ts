@@ -1,8 +1,9 @@
-import { E2E_FAKE_MODEL_SLUG, fakeSummaryText, transcriptFingerprint } from "@/test/e2e/fake-llm";
+import { E2E_FAKE_MODEL_SLUG, fakeCharacterLine, fakeSummaryText, transcriptFingerprint } from "@/test/e2e/fake-llm";
 import { copy } from "@/lib/copy";
 import { E2E_YOUTUBE_IDS } from "./fixtures/registry";
 import { awaitIslandsHydrated } from "./fixtures/hydration";
 import { readBalance, readReservations, readSummaries, readSupadataCalls } from "./fixtures/ledger";
+import { gateRequest } from "./fixtures/request-gate";
 import { expect, test } from "./fixtures/test";
 
 /**
@@ -70,13 +71,24 @@ test("a generated summary reaches the card, and the card matches what was charge
   await characters.getByText(copy.summaries.character.educational, { exact: true }).click();
   await expect(characters.getByRole("radio", { name: copy.summaries.character.educational })).toBeChecked();
 
+  // The pending card is a TRANSIENT state, and the fake summarizer resolves immediately — the whole
+  // round-trip lands in a few hundred milliseconds. A retrying assertion cannot recover a state that
+  // has already passed, so the request is held open while the assertion runs (impl-review F6). The gate
+  // delays; it never answers. After `release()` the real endpoint serves the real response, so every
+  // assertion below is about an ordinary, ungated generation.
+  const generateGate = await gateRequest(page, "**/api/summaries/generate");
+
   await submit.click();
+
+  await generateGate.waitUntilRequested();
 
   // Wait for STATE, never for time: the in-flight card's own live region, then the saved card that
   // replaces it. `toBeVisible` retries until the condition holds, so a slower machine waits longer
   // rather than failing.
   const pendingCard = page.getByRole("article").filter({ hasText: video.url });
   await expect(pendingCard.getByRole("status")).toContainText(copy.generate.status.generating);
+
+  await generateGate.release();
 
   // The saved card replaces the pending one only once the list re-read can prove the row is there
   // (`DashboardSummaries.refreshSummaries`), so waiting for it waits for the whole flow to settle.
@@ -93,6 +105,12 @@ test("a generated summary reaches the card, and the card matches what was charge
     .getByRole("button", { name: `${copy.summaries.card.expand} ${copy.summaries.card.summaryOf(VIDEO_TITLE)}` })
     .click();
   await expect(savedCard).toContainText(transcriptFingerprint(video.transcript));
+  // ...and the character, which the fingerprint CANNOT prove: it is a function of the transcript alone,
+  // so a card rendering an `informational` body for this same video would satisfy the line above while
+  // Postgres held the correct `educational` row — a card-versus-saved mismatch (risk #6) that passed
+  // every assertion here until impl-review F3. `fakeCharacterLine` is the same function the app's
+  // response was built from, so this cannot drift into asserting a stale literal.
+  await expect(savedCard).toContainText(fakeCharacterLine("educational"));
 
   // The header balance updates in place on the `credits:changed` event (Phase 0 item 7) — no reload.
   // Waited FOR, not read once: reading a server-rendered value immediately after an action asserts

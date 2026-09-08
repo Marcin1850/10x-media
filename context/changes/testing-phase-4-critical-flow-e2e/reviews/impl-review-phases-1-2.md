@@ -62,7 +62,11 @@ The Windows checks were executed through `npm.cmd` / `npx.cmd`; direct PowerShel
   - Tradeoff: Adds production-visible or test-only handshake surface and is materially easier to misconfigure than owning the server process.
   - Confidence: MEDIUM — it can be safe, but only if the handshake proves configuration rather than echoing a runtime flag.
   - Blind spot: The correct place for a health signal in the workerd/Astro lifecycle has not been prototyped.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A, with its vendor-key half replaced after measurement.
+  - **Landed as specified**: the loopback guard moved to a new dependency-free `src/test/loopback-guard.ts` (re-exported from `integration-setup.ts`, which also breaks its import cycle with `db-owner.ts`) and now runs while `playwright.config.ts` loads — before `webServer` starts and is probed. `reuseExistingServer` is `false` in both environments, so the bare-`npm run dev` reuse path that could reach OpenRouter no longer exists; an occupied :4321 is a loud startup error.
+  - **Changed after measurement**: Fix A's "placeholder vendor keys in `webServer.env`" is impossible. A throwaway probe route reading `astro:env/server` from inside the Worker showed the app still saw the REAL keys (35 and 73 chars) — @astrojs/cloudflare re-reads the fixed-name `.dev.vars` into `process.env` at `astro:config:done`, overwriting anything `webServer.env` passes. Replaced (user decision) with a wrangler environment: `CLOUDFLARE_ENV=e2e` on `webServer` makes wrangler load a committed `.dev.vars.e2e` whose Supadata/OpenRouter values are deliberate non-credentials. Re-probed: `isPlaceholder: true` for both. No `env.e2e` section was added to `wrangler.jsonc` on purpose — absent, wrangler warns once and keeps the top-level config, so bindings stay identical; adding one would drop every non-inheritable binding.
+  - **Second guard**: wrangler's fallback from `.dev.vars.e2e` to `.dev.vars` is silent, so the config also refuses to start when the file is missing. Both guards verified firing (`does not resolve to loopback`; `` `.dev.vars.e2e` is missing ``).
+  - **Depends on F2**: the `.dev.vars.e2e` mechanism only reaches the app under `build + preview`. Under `astro dev` the adapter's `process.env` assignment wins. F2's fix makes local runs use `preview`, which is what makes this protection real locally rather than CI-only.
 
 ### F2 — The seed spec fails on a cold dev server
 
@@ -81,7 +85,7 @@ The Windows checks were executed through `npm.cmd` / `npx.cmd`; direct PowerShel
   - Tradeoff: Couples the harness to Vite optimizer behavior and may require maintenance as dependency graphs change.
   - Confidence: MEDIUM — the observed dependencies are known, but future lazy imports can recreate the same failure.
   - Blind spot: The minimum reliable warm-up for the POST route has not been established without mutating application state.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A. `webServer.command` is now `npm run build && npm run preview` in BOTH environments — the `isCI` split is gone. This removes the dev dependency-optimizer that caused the cold-run failure, and it is also the only measured way F1's non-billable vendor keys reach the app (probed: `astro dev` → real keys, `preview` → placeholders). The stale rationale on `timeout` and `expect.timeout`, which justified both by `astro dev`'s compile-on-first-request, was rewritten rather than left to mislead; the values are unchanged and are now honestly described as headroom. Verified: `npm run test:e2e` passes, the spec itself in 3.6s (7.6s under dev), ~1.5 min wall clock including the build.
 
 ### F3 — The visible content oracle does not prove the selected channel character reached the card
 
@@ -91,7 +95,7 @@ The Windows checks were executed through `npm.cmd` / `npx.cmd`; direct PowerShel
 - **Location**: `tests/e2e/generate-summary.spec.ts:57`, `tests/e2e/generate-summary.spec.ts:88`, `tests/e2e/generate-summary.spec.ts:95`
 - **Detail**: The spec deliberately selects `educational` and says the visible assertion proves that choice reached the LLM call, but the card assertion checks only `transcriptFingerprint`, which is independent of character. If the card displays an `informational` fake summary for the same transcript while Postgres stores the correct educational row, every current assertion remains green. That is a direct card-versus-saved mismatch under risk #6. The deliberate-break record replaced the whole body with a constant and did not exercise this false-green case.
 - **Fix**: In the expanded summary body, assert a character-dependent visible fragment (for example the fake's exact `educational` line) in addition to the transcript fingerprint, and add this mismatch to the deliberate-break proof.
-- **Decision**: PENDING
+- **Decision**: FIXED. `fake-llm.ts` now exports `fakeCharacterLine(character)` and builds that body line from it, so the spec asserts the character through the SAME function the app's response came from rather than a literal that can drift. That line lost its `**` emphasis (it is now asserted against rendered text, where `**` does not survive react-markdown); the fingerprint and length lines keep theirs, so the body still exercises Markdown rendering. Recorded as deliberate-break #4 in the plan's section F: asserting `informational` against an `educational` run goes red with `- Charakter kanału: informational` / `+ Charakter kanału: educational`.
 
 ### F4 — Account setup failures can leak a synthetic auth user
 
@@ -101,7 +105,7 @@ The Windows checks were executed through `npm.cmd` / `npx.cmd`; direct PowerShel
 - **Location**: `tests/e2e/fixtures/account.ts:79`
 - **Detail**: `createSyntheticAccount()` completes before the fixture enters `try/finally`. If `context.addCookies()` or the optional `setBalance()` rejects, `account.dispose()` is never reached and the run leaks an `auth.users` row. Existing integration helpers start the `try` immediately after account creation.
 - **Fix**: Begin `try/finally` immediately after `createSyntheticAccount()` and include cookie injection, balance setup, and `await use(...)` inside it.
-- **Decision**: PENDING
+- **Decision**: FIXED. The `try` now opens on the line after `createSyntheticAccount()`, so cookie injection, `setBalance` and `await use(...)` are all covered by the existing `finally`. Matches the shape the integration helpers already use.
 
 ### F5 — The seed registry safety rule is comment-only
 
@@ -111,7 +115,7 @@ The Windows checks were executed through `npm.cmd` / `npx.cmd`; direct PowerShel
 - **Location**: `tests/e2e/fixtures/test.ts:27`, `tests/e2e/fixtures/registry.ts:14`
 - **Detail**: `seedVideo.seed()` accepts any `string` although its contract says the ID must come from the registry. A copied spec can typo an ID, use an unregistered synthetic ID, or seed a real YouTube ID. After a hard kill, `globalSetup` scans only registered IDs, so that fabricated user-agnostic cache row is invisible and can later answer a real request.
 - **Fix**: Export an `E2eYoutubeId` union from the registry, accept only that type in `VideoSeeder.seed`, and runtime-reject values absent from `E2E_RESERVED_YOUTUBE_IDS` before any write.
-- **Decision**: PENDING
+- **Decision**: FIXED, both halves. `registry.ts` exports `E2eYoutubeId` (derived from `E2E_YOUTUBE_IDS`, so it cannot drift from the roster) plus an `assertReservedYoutubeId` assertion function; `VideoSeeder.seed` accepts only the union, and calls the runtime check before the first write AND before the id enters the cleanup list. The runtime half is not redundant: a cast, a JS caller, or an id built from a variable all pass `tsc`. Recorded as deliberate-break #5 - seeding the real id `dQw4w9WgXcQ` (cast past the type) goes red in 1.1 s, before any database write, naming the registered ids in the error.
 
 ### F6 — The pending-card assertion races an immediately resolving fake
 
@@ -130,7 +134,7 @@ The Windows checks were executed through `npm.cmd` / `npx.cmd`; direct PowerShel
   - Tradeoff: Adds another test if pending state is still considered contract-critical.
   - Confidence: HIGH — no current ledger oracle depends on observing the transient card.
   - Blind spot: Product ownership of the pending state as a required behavior should be confirmed.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A. New `tests/e2e/fixtures/request-gate.ts` holds the generate request open (`page.route` on `**/api/summaries/generate`); the spec asserts the pending card while it is held, then releases it with `route.fallback()` so the REAL endpoint serves the real response - the gate delays, it never answers, so every assertion after it describes an ordinary generation. The pattern matches that one URL, so documents, assets and the follow-up `GET /api/summaries` are never held. Proved non-decorative by removing `release()`: the saved card then never arrives and the spec fails on the heading assertion, which also demonstrates that the pending assertion ran while the request was genuinely in flight.
 
 ### F7 — Cleanup stops after the first deletion error
 
@@ -144,7 +148,7 @@ The Windows checks were executed through `npm.cmd` / `npx.cmd`; direct PowerShel
   - Tradeoff: Slightly more teardown code and a combined error message.
   - Confidence: HIGH — all cleanup targets are already known before teardown begins.
   - Blind spot: If the owner connection itself is lost, all attempts may fail for the same root cause.
-- **Decision**: PENDING
+- **Decision**: FIXED at both levels, since fixing one alone would leave the other failing fast. `deleteCacheRows` now attempts `transcript_cache` and `metadata_cache` independently and throws a single `AggregateError`; the `seedVideo` teardown loops every seeded id the same way and aggregates across ids. Failures stay loud - they are collected, never swallowed - but nothing is skipped, which matters because a skipped row aborts the NEXT run through `global-setup.ts`'s guard.
 
 ### F8 — The canonical cookbook contradicts the implemented ESLint exception
 
@@ -154,7 +158,33 @@ The Windows checks were executed through `npm.cmd` / `npx.cmd`; direct PowerShel
 - **Location**: `context/foundation/test-plan.md:285`, `eslint.config.js:91`
 - **Detail**: The cookbook says `tests/` needs no `eslint.config.js` change, while Phase 2 added a targeted override for Playwright fixture callbacks misread as React `use()`. The plan addendum documents why the override is legitimate, but the canonical document future contributors are told to read remains stale.
 - **Fix**: Rewrite the cookbook sentence to say the base coverage required no inclusion change, but Playwright fixtures need the scoped `react-hooks/rules-of-hooks` exception already present.
-- **Decision**: PENDING
+- **Decision**: FIXED, and extended (user decision) to the rest of section 6.4 that this triage invalidated. The sentence now separates **inclusion** (unchanged - `**/*` still covers `tests/`) from the scoped **exception** `eslint.config.js` carries, with the Playwright-fixture-versus-React-`use()` reason. Section 6.4 also gained a four-rule "the runner fails closed" block covering the F1/F2 changes: always `build + preview`, never reuse a server, vendor keys via `CLOUDFLARE_ENV=e2e` / `.dev.vars.e2e` (and why `webServer.env` cannot do it), and both guards evaluated at config load rather than in `globalSetup`. The stale half-truth "`.dev.vars` reaches only the app server" was replaced by a pointer to those rules.
+
+## Triage outcome (2026-09-09)
+
+All eight findings resolved: **F1, F2, F6 fixed via Fix A** (F1's vendor-key mechanism was replaced after measurement disproved it - see its Decision), **F3, F4, F5, F7, F8 fixed** as proposed. Nothing skipped, accepted or dismissed.
+
+The verdict table above is left as the record of what the review found; the table below is the state after triage.
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| `npm run lint` | PASS | Exit 0 |
+| `npm run typecheck` | PASS | Exit 0 |
+| `npm run typecheck:astro` | PASS | 0 errors, 0 warnings, 6 hints |
+| `npm test` | PASS | 8 files, 132 tests |
+| `npm run test:integration` | PASS | 9 files, 101 tests - covers the `loopback-guard.ts` extraction |
+| `npm run test:e2e` | PASS | 1 spec in 2.9 s under the new `build + preview` harness |
+| `npm run test:e2e -- --repeat-each=2` | PASS | 2/2 in one worker, 47 s including the build |
+| Loopback guard fires at config load | PASS | A non-loopback `SUPABASE_URL` refuses before `webServer` starts |
+| Missing `.dev.vars.e2e` refuses to start | PASS | Verified by moving the file aside |
+| Vendor keys under `preview` | PASS | Worker-side probe: `isPlaceholder: true` for both keys |
+| Deliberate break #4 (character) | RED as intended | `- Charakter kanału: informational` / `+ ... educational` |
+| Deliberate break #5 (registry) | RED as intended | A real YouTube id is rejected in 1.1 s, before any write |
+| The request gate genuinely holds | PASS | Without `release()` the saved card never arrives |
+
+One environmental interruption, unrelated to the code: the local Supabase gateway (Kong) stopped accepting connections mid-session and was restored with `docker restart supabase_kong_10x-media`.
+
+**Residual, deliberately not done**: `README.md` still describes secrets as living in two files and does not mention `.dev.vars.e2e`. The README documents no e2e workflow at all yet, so that belongs with the Phase 6 documentation work rather than to this triage.
 
 ## Seed exemplar assessment
 
