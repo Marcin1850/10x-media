@@ -30,7 +30,7 @@
 
 The Windows checks were executed through `npm.cmd`; the first `npm` invocation was blocked by the host's PowerShell execution policy, not by the project.
 
-### Re-run after triage (2026-09-08, F1-F4 applied)
+### Re-run after triage (2026-09-08, F1-F4 applied in `1fc8a5f`)
 
 | Command | Result | Evidence |
 |---------|--------|----------|

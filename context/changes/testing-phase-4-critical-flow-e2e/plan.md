@@ -631,13 +631,13 @@ None — no schema change. Phase 0 **adds** an optional field to a 422 response 
 
 Automated:
 
-- [x] 0.15 The refusal **replay** carries `creditsRemaining` — `get_refusal_replay` returns the balance beside the reason (F1) — pending commit
-- [x] 0.17 No unresolved or absent code renders English — `messageForError` no longer takes the server string (F3) — pending commit
+- [x] 0.15 The refusal **replay** carries `creditsRemaining` — `get_refusal_replay` returns the balance beside the reason (F1) — 1fc8a5f
+- [x] 0.17 No unresolved or absent code renders English — `messageForError` no longer takes the server string (F3) — 1fc8a5f
 
 Manual:
 
-- [x] 0.16 A balance-bearing non-2xx still syncs the balance when the inputs changed mid-flight, while its error card is still dropped (F2) — pending commit
-- [x] 0.18 `plan.md`, `plan-brief.md` and README reconciled with items 6/7 and with F1-F3 (F4) — pending commit
+- [x] 0.16 A balance-bearing non-2xx still syncs the balance when the inputs changed mid-flight, while its error card is still dropped (F2) — 1fc8a5f
+- [x] 0.18 `plan.md`, `plan-brief.md` and README reconciled with items 6/7 and with F1-F3 (F4) — 1fc8a5f
 
 ### Phase 1: The Playwright runner and the LLM seam
 
