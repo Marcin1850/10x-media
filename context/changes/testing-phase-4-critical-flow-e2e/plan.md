@@ -602,23 +602,23 @@ None — no schema change. Phase 0 **adds** an optional field to a 422 response 
 
 #### Automated
 
-- [x] 0.1 `npm run typecheck` passes
-- [x] 0.2 `npm run lint` passes
-- [x] 0.3 `npm test` passes, including the new `credits.test.ts` rows
-- [x] 0.4 `npm run test:integration` passes, including the new 422-body assertions
-- [x] 0.8 `npm run typecheck:astro` passes with the header sync in the tree
-- [x] 0.9 Refusal, transient-422 and both 402 bodies carry their documented `code`
-- [x] 0.10 `messageForError` prefers the code and falls back on an unknown one
+- [x] 0.1 `npm run typecheck` passes — ca954c4
+- [x] 0.2 `npm run lint` passes — ca954c4
+- [x] 0.3 `npm test` passes, including the new `credits.test.ts` rows — ca954c4
+- [x] 0.4 `npm run test:integration` passes, including the new 422-body assertions — ca954c4
+- [x] 0.8 `npm run typecheck:astro` passes with the header sync in the tree — ca954c4
+- [x] 0.9 Refusal, transient-422 and both 402 bodies carry their documented `code` — ca954c4
+- [x] 0.10 `messageForError` prefers the code and falls back on an unknown one — ca954c4
 
 #### Manual
 
-- [x] 0.5 Form balance gate reflects the post-charge balance on a 1-credit account
-- [x] 0.6 README §Summary credits no longer claims the UI shows the ambiguous case
-- [x] 0.7 `refuseAndCharge`'s doc comment no longer cites the superseded D14 rationale
-- [x] 0.11 A charged refusal renders Polish copy, with no English string left on the page
-- [x] 0.12 The topbar balance updates in place, with no reload
-- [x] 0.13 No endpoint exit the card can render is English any more
-- [x] 0.14 A signed-in user opening `/auth/signin` lands on `/summaries`
+- [x] 0.5 Form balance gate reflects the post-charge balance on a 1-credit account — ca954c4
+- [x] 0.6 README §Summary credits no longer claims the UI shows the ambiguous case — ca954c4
+- [x] 0.7 `refuseAndCharge`'s doc comment no longer cites the superseded D14 rationale — ca954c4
+- [x] 0.11 A charged refusal renders Polish copy, with no English string left on the page — ca954c4
+- [x] 0.12 The topbar balance updates in place, with no reload — ca954c4
+- [x] 0.13 No endpoint exit the card can render is English any more — ca954c4
+- [x] 0.14 A signed-in user opening `/auth/signin` lands on `/summaries` — ca954c4
 
 ### Phase 1: The Playwright runner and the LLM seam
 
