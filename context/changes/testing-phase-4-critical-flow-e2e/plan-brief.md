@@ -28,7 +28,7 @@ Playwright is absent entirely — no config, no specs, not in `package.json`. Ph
 | Balance locator | A real accessible name, no `data-testid` | Fixes a genuine a11y defect (a screen reader reads a naked number) instead of adding the codebase's first test-only hook. | Plan |
 | Oracle | The card's claim **and** the real ledger | Risk #6 is a mismatch between the two; asserting only the UI proves self-consistency, which is what a refactor keeps true while breaking the truth. | Plan |
 | Phase 0 contract | `creditsRemaining` on every outcome that has a balance | One rule — report the balance whenever the server knows it — rather than a per-outcome club a future reader has to memorise. | Plan |
-| Long-video depth | Drive through to a saved summary | The relabelled submit replaying frozen inputs is the actual risk-#6 surface, and only confirming proves the 2-credit cost. | Plan |
+| Long-video depth | Drive through to a saved summary, plus a second case on quote transferability | Only confirming proves the 2-credit cost. The frozen-input replay was the planned risk surface, but it turned out **not browser-observable** — every input edit drops the quote, so live and frozen inputs are equal in every reachable state (measured: the substitution stays green). The reachable half is that the quote is withdrawn when the video changes, which is where the money risk actually lives. | Plan; amended during implementation, 2026-09-09 |
 | Fixture registries | Separate ids, prefix and sweep from the integration suite | Keeps the suites from aborting each other; the loopback guard is still *imported*, never re-written. | Plan |
 | Ambiguous charge | No UI, no e2e coverage | Ruled intentional; it has no browser-reachable trigger and stays an integration concern. | Research |
 | Error copy language | Polish for **every** exit the card can render, resolved from a server-sent cause `code` | A translation would have collapsed three 422 causes into one sentence, which is why the client preferred the English string; the code keeps the distinction and the copy. Extended from the refusals to all coded exits the same day, and the client's mapper no longer takes the English string at all (impl review F3), so the fallback is structural. | User, 2026-09-08 |
@@ -73,6 +73,6 @@ Playwright runs in its own process and drives a real HTTP server, so both vendor
 
 ## Success Criteria (Summary)
 
-- A card that misreports a charge, a wrong cost, or a dropped frozen-input replay makes the suite go **red** — verified by deliberately breaking each one, not assumed.
+- A card that misreports a charge, a wrong quoted price, a wrong debit, or a quote that outlives the video it was priced for makes the suite go **red** — verified by deliberately breaking each one, not assumed. The one break that does **not** go red is the frozen-input substitution, and that is recorded as a gap rather than a pass (`plan.md` Phase 4 §A).
 - A full run touches no paid vendor, and a plain `npm run build` produces a Worker that cannot contain the fake summarizer.
 - `deploy` will not run unless the e2e suite passes, and §6.4 lets the next contributor add a spec without reading this plan.

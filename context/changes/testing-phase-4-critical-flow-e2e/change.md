@@ -82,4 +82,23 @@ has no coverage at any layer; the server-side contract stays pinned at the integ
 BOTH sides — the Polish copy the card resolves from the server's `code`, and the `refusal_reason` the
 ledger actually recorded.
 
+**Ruling taken during Phase 4 implementation, 2026-09-09 (user).**
+
+7. **The frozen-input replay is recorded as an e2e gap, and success criterion 4.4 is reformulated around
+what was actually proved.** The plan named `GenerateSummaryForm`'s replay of `confirm.url` /
+`confirm.character` as Phase 4's risk-#6 surface and asked the deliberate break to catch a replay that
+sends the live form instead. It cannot: `DashboardSummaries` calls `inputsChanged()` on every URL and
+character edit, which drops the quote outright, so in every state a user can reach with a quote standing
+the live and frozen values are equal by construction — the substitution was run and left **both cases
+green**. Forcing a divergence would need DOM manipulation to reach a state no user can, which is also the
+one place a spec in this suite would have written a selector. Options weighed: amend 4.4, accept it with
+an annotation, or keep hunting for a reachable divergence. **The user's call is to reformulate 4.4** to
+the four breaks that do go red (a wrong quoted price, a wrong debit, a mis-stored row, and a quote
+outliving the video it was priced for), with the gap carried into `test-plan.md` §6.4's "Deliberately not
+covered here" at Phase 5 — the same treatment ruling 6 gave the transient 422.
+
+**Consequence: the spec gained a second case** covering the reachable half of the same contract — that
+editing the URL withdraws the confirmed price, so a different video cannot be generated on the previous
+one's consent. That is where the money risk actually lives, and it is what break 4 turns red.
+
 Linear: MAR-22.

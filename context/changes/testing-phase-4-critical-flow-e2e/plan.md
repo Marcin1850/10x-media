@@ -752,6 +752,81 @@ Then click the relabelled submit `Generuj mimo to (2 kr.)` and drive through to 
 
 **Implementation Note**: Pause here for manual confirmation before Phase 5.
 
+### Added during implementation (2026-09-09)
+
+Recorded rather than rewritten into the contract above, the form Phases 0-3 used.
+
+#### A. The frozen-input replay is not browser-observable — measured, not argued
+
+The contract named the replay of `confirm.url` / `confirm.character` as "the real risk-#6 surface here",
+and item 4.4 asks for a deliberate break that "submits the current form value". **That break cannot go
+red**, and the reason is the app being correct twice over: `DashboardSummaries` calls `inputsChanged()`
+on every URL and character edit (`:336-351`), which drops the quote outright, and the hook additionally
+discards a 409 that lands after a newer submit (`useGenerateSummary.ts:350-358`). So in every state a
+user can reach with a quote standing, the live inputs and the frozen ones are **equal by construction**,
+and substituting one for the other changes nothing observable.
+
+Confirmed by running it: `generate(true, url, character)` in place of
+`generate(true, confirm.url, confirm.character)` leaves **both cases green**. Recording that rather than
+inventing a DOM-level manipulation to force the divergence — a test that reaches a state the user cannot
+is testing a fiction, and it would have been the one place in this suite where a spec wrote a selector.
+
+The freeze stays as defence in depth against the late-409 race, whose own staleness guard is pinned at
+the unit layer. What this phase covers instead is the half that **can** fail — see B.
+
+#### B. A second case: a quote is not transferable (scope taken on)
+
+Because of A, the spec would otherwise have had no assertion covering consent-versus-price at all beyond
+the happy path. The second case covers the property that makes the freeze unobservable and that is
+itself the real money risk: **editing the URL withdraws the confirmed price**, so a different video
+cannot be generated on the previous one's consent — a card quoting video A's cost against a charge for
+video B, which is risk #6 in the shape only this flow reaches.
+
+It costs nothing to run: every exit it takes is above the debit, so its ledger oracle is that **no
+reservation exists at all** after two quotes and a video switch. `registry.ts` gains
+`longVideoSwitched` (`e2elongvid2`) for it — long as well, so the second submit answers 409 rather than
+generating and charging.
+
+#### C. The deliberate-break check was run five ways
+
+Each broke a different link, and each went red on its own assertion:
+
+1. **The quoted price** — the 409 body sending `cost: cost - 1`: red on the amber card's copy
+   (`Koszt: 1 kr. Saldo po potwierdzeniu: 2 kr.` against the expected `2`/`1`), before any ledger
+   assertion ran, while the debit would still have been 2. The purest form of risk #6 on this flow —
+   a card quoting a price the app does not charge.
+2. **The stored character** — `persistSummaryAndSettle` receiving the opposite character: red on the
+   saved row *after every card assertion had passed*, including `fakeCharacterLine("educational")` and
+   the header balance. The ledger half going red independently of the UI half, which §6.4 requires.
+3. **The confirmed cost** — `beginGeneration` debiting `cost - 1`: red on the header
+   (`Expected "1", Received "2"`), the first surface that sees an under-charge; the balance and
+   `amount: 2` assertions behind it cover the same break from the database side.
+4. **The quote surviving an input change** — `inputsChanged` no longer clearing `confirm`: case 2 red,
+   case 1 **green**. Proof the two cases discriminate, and the exact regression case 2 exists for.
+5. **The frozen-input replay** (A above) — both cases green, deliberately. Recorded as a gap, not a
+   pass.
+
+#### D. No request gate, and no request-payload introspection
+
+The amber gate is a **resting** state that waits on the user, so an ordinary web-first assertion cannot
+outrun it — the seed spec's `gateRequest` is correctly absent, as in Phase 3. Asserting the confirm
+request's own JSON body (`allowLong: true`) was considered and dropped: every regression it would catch
+is already caught by an outcome assertion — a replay that forwarded the unticked checkbox answers 409 a
+second time and never produces a saved card — and the spec keeps its claims on what the user sees plus
+what Postgres holds.
+
+The checkbox is instead **asserted unticked** at both the quote and the confirmation, which is what
+makes the relabelled submit the only possible source of the consent.
+
+#### E. The 409 moves no money, and the spec says so where it can be read in place
+
+Case 1 asserts the header still shows the pre-quote balance immediately after the amber card appears,
+rather than waiting for a change. That is safe here for a specific reason worth stating: the hook
+applies any server-sent balance **above** the staleness guard and before it installs the quote, and the
+topbar applies `credits:changed` synchronously — so a balance the 409 had wrongly reported would already
+be rendered by the time the gate card is on screen. It is paired with the database read, so the claim
+does not rest on that ordering alone.
+
 ---
 
 ## Phase 5: The CI gate and close-out
@@ -796,6 +871,15 @@ had to exist before Phase 3 generated a spec against it, and §6.4 is where it b
 `CLAUDE.md` or a standalone file. What remains here is revising it for what Phases 3-5 add (the CI job,
 the other two specs) and the short-form paragraph in `CLAUDE.md` / `AGENTS.md` / `README.md` beside the
 existing unit and integration ones, which was deferred here so it can describe the finished layer.
+
+**Added 2026-09-09 (user ruling on Phase 4's manual pass)**: §6.4's "Deliberately not covered here"
+must gain one more entry — the **frozen-input replay**. `GenerateSummaryForm` replays `confirm.url` /
+`confirm.character` rather than the live form, and that substitution is not distinguishable in a
+browser: every URL and character edit calls `inputsChanged()`, which drops the quote, so the two values
+are equal in every reachable state (measured — the break stays green). State the consequence plainly, as
+the transient-422 entry does: the freeze itself has no e2e coverage, its late-409 staleness guard is
+pinned at the unit layer, and what Phase 4 covers instead is the reachable half — that a quote is
+withdrawn when the video changes.
 
 **Contract**: Replace `- TBD — see §3 Phase 4.` with the cookbook: file placement and the `*.spec.ts`-not-`*.test.ts` reason; the two-sided oracle rule; the LLM alias and its safety property; cache seeding as the Supadata answer; the separate registry and its accepted consequence; the auth fixture and the `sb-127-auth-token` derivation; the header's `credits:changed` sync and the rule for asserting it (wait for the expected value, never read it once — Phase 0 item 7 replaced the header-never-updates fact); the deliberate-break check as the definition of done; and what is deliberately not covered (sign-in, `ambiguous`, Firefox, component rendering).
 
@@ -944,29 +1028,29 @@ Manual:
 
 #### Automated
 
-- [x] 3.1 `npm run test:e2e` passes with both refusal cases
-- [x] 3.2 `npm run typecheck` and `npm run lint` pass
-- [x] 3.3 The spec passes standalone and under `--repeat-each=2`
+- [x] 3.1 `npm run test:e2e` passes with both refusal cases — 8ad6535
+- [x] 3.2 `npm run typecheck` and `npm run lint` pass — 8ad6535
+- [x] 3.3 The spec passes standalone and under `--repeat-each=2` — 8ad6535
 
 #### Manual
 
-- [x] 3.4 Deliberate-break check: UI half and ledger half each go red independently
-- [x] 3.5 No `test.skip` / `test.fixme` remains
-- [x] 3.6 The asserted refusal text is the Polish `copy.errors.codes.*` entry for the cause, never the English `error` still carried on the body
+- [x] 3.4 Deliberate-break check: UI half and ledger half each go red independently — 8ad6535
+- [x] 3.5 No `test.skip` / `test.fixme` remains — 8ad6535
+- [x] 3.6 The asserted refusal text is the Polish `copy.errors.codes.*` entry for the cause, never the English `error` still carried on the body — 8ad6535
 
 ### Phase 4: The long-video confirmation spec
 
 #### Automated
 
-- [ ] 4.1 `npm run test:e2e` passes all three specs
-- [ ] 4.2 `npm run typecheck` and `npm run lint` pass
-- [ ] 4.3 The spec passes standalone and under `--repeat-each=2`
+- [x] 4.1 `npm run test:e2e` passes all three specs
+- [x] 4.2 `npm run typecheck` and `npm run lint` pass
+- [x] 4.3 The spec passes standalone and under `--repeat-each=2`
 
 #### Manual
 
-- [ ] 4.4 Deliberate-break check: a wrong cost and a broken frozen-input replay are both caught
-- [ ] 4.5 The asserted copy is the amber card's, not an invented dialog's
-- [ ] 4.6 The 40,000 threshold cites its documented source in a comment
+- [x] 4.4 Deliberate-break check: a wrong quoted price, a wrong debit, a mis-stored row and a quote outliving the video it was priced for are each caught, and the UI half and the ledger half go red independently — **reformulated 2026-09-09 (user)**: the original wording's "broken frozen-input replay" half is not browser-reachable and stays green by construction, recorded as a gap in Phase 4 §A rather than counted as a pass
+- [x] 4.5 The asserted copy is the amber card's, not an invented dialog's
+- [x] 4.6 The 40,000 threshold cites its documented source in a comment
 
 ### Phase 5: The CI gate and close-out
 

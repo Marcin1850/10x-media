@@ -32,6 +32,13 @@ export const E2E_YOUTUBE_IDS = {
   refusalEmpty: "e2erefusal2",
   /** `long-video-confirmation.spec.ts` (Phase 4) — an `ok` transcript over `LONG_TRANSCRIPT_CHARS`: cost 2. */
   longVideo: "e2elongvid1",
+  /**
+   * `long-video-confirmation.spec.ts` (Phase 4) — a SECOND `ok` transcript over the threshold, so the
+   * spec can prove a quote does not transfer between videos. It has to be long as well: the assertion
+   * is that switching the URL withdraws the confirmed price and the new video gets its own 409, which
+   * a short video would answer by generating (and charging) instead.
+   */
+  longVideoSwitched: "e2elongvid2",
 } as const;
 
 /**
