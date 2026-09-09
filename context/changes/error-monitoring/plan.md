@@ -50,11 +50,34 @@ why promotion has to be explicit and selective.
 prerequisites for the Astro-on-Cloudflare-Workers path (Astro ≥ 6.0.0, adapter ≥ v13, Sentry SDKs
 ≥ 10.40.0).
 
-**`wrangler.jsonc`** currently sets `"main": "@astrojs/cloudflare/entrypoints/server"` — the package
-entrypoint directly, and it **stays that way**. From 10.40 `@sentry/astro` detects the Cloudflare
-adapter and installs a Vite plugin that wraps the built Worker entry with `withSentry` itself, so a
-hand-written wrapper file would be a second, competing instrumentation path rather than the required
-one.
+**`wrangler.jsonc`** sets `"main": "@astrojs/cloudflare/entrypoints/server"` — the package entrypoint
+directly, and **Phase 2 repoints it at a hand-written `worker.ts`** that re-exports exactly that handler
+through `withSentry`.
+
+> **Amended during Phase 2 implementation (2026-09-10).** The plan originally kept `main` untouched on
+> the premise that `@sentry/astro` ≥ 10.40 "detects the Cloudflare adapter and installs a Vite plugin
+> that wraps the built Worker entry with `withSentry` itself", making a hand-written wrapper a second,
+> competing path. Both halves of that premise are false against the installed
+> `astro@6.3.1` / `@astrojs/cloudflare@13.5.0` / `@sentry/{astro,cloudflare}@10.74.0`:
+>
+> 1. **The integration's wrapper never fires.** Its transform is gated on
+>    `id.includes("astrojs-ssr-virtual-entry")`
+>    (`node_modules/@sentry/astro/build/esm/integration/cloudflare.js`), and Astro 6 with adapter v13
+>    builds the entry as `astro:cloudflare:worker-entry`. Proved by building with the integration's
+>    server half enabled and grepping: `grep -rl withSentry dist/` returned **nothing**. There was no
+>    Worker instrumentation at all.
+> 2. **`@sentry/cloudflare` exports no `init`**, so a `sentry.server.config.ts` calling `Sentry.init`
+>    cannot work either — the build warns `"init" is not exported by "@sentry/cloudflare"` and the call
+>    would throw on every page render. The SDK says why in `defineCloudflareOptions`'s own docs: "the
+>    options cannot be applied at module load time on Cloudflare: the DSN and other settings typically
+>    come from the per-request `env`, which only exists inside the handler."
+> 3. Even where the wrapper *does* fire it is hardcoded `withSentry(() => undefined, handler)`, so
+>    per-request options can only come from Worker **env vars** (`SENTRY_DSN`, `SENTRY_ENVIRONMENT`,
+>    `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_DEBUG`). `dataCollection` cannot travel that way at all.
+>
+> The wrapper is therefore the only path that can carry decision D8, and it is the one Sentry's own
+> Astro-on-Cloudflare docs show. `plan-review.md` F2's concern — *two* server initialisation paths — is
+> answered instead by `enabled: { server: false }` on the integration, which leaves exactly one.
 
 ## Desired End State
 
@@ -80,9 +103,15 @@ Sentry traffic.
   unreachable from the `unit` Vitest project — and the seam's never-throws contract is exactly what
   wants unit tests. The DSN therefore belongs in the two `Sentry.init`-equivalent sites (the Worker
   entry wrapper and the client config), never in the seam.
-- **`@sentry/cloudflare`'s `dataCollection` defaults are permissive** — user info, cookies and HTTP
-  bodies. In this app the cookies are Supabase auth cookies (session tokens) and the generate
-  endpoint's bodies carry user content, so the defaults must be tightened explicitly.
+- **`@sentry/cloudflare`'s `dataCollection` behaviour is a trap, but not the one expected.** _Amended
+  2026-09-10:_ the option resolves against one of **two** baselines
+  (`@sentry/core`'s `resolveDataCollectionOptions`). With `dataCollection` **absent** it uses the tight
+  `sendDefaultPii: false` baseline — which already is, field for field, what D8 asks for. The moment
+  **any** field is set the baseline flips to the fully permissive `DEFAULTS`, so a *partial* object
+  **loosens** the Worker rather than tightening it (set `userInfo: false` alone and `httpBodies` widens
+  from `[]` to all four). The consequence is not "tighten the defaults" but "if you configure it at all,
+  configure every field" — which is why Phase 2 §2's block is exhaustive and none of its lines may be
+  dropped as a restatement of a default.
 - **A client `astro:env` variable is inlined at build time, a server one is read at runtime.** So the
   browser DSN must reach the `deploy` job's _build step_ (a GitHub repo secret) while the server DSN is
   a Worker secret. This asymmetry is convenient: the `e2e` CI job builds without it, so its browser
@@ -172,18 +201,23 @@ true across SDK versions.
 
 **One instrumentation path, not two.** `@sentry/astro` owns both runtimes: registering `sentry()`
 injects the client and server init files and wraps the Worker entry through its Cloudflare Vite plugin.
-This plan therefore adds `sentry.server.config.ts` and `sentry.client.config.ts` and changes
-`wrangler.jsonc` not at all. A hand-written `withSentry` wrapper on top of that double-wraps the handler
-and gives the build-time public DSN a second, unintended way to initialise server reporting.
+_Amended 2026-09-10 — the split is by runtime, and each runtime has exactly one owner._ The integration
+owns the **browser** (it injects `sentry.client.config.ts`) and source maps; `worker.ts`, which
+`wrangler.jsonc`'s `main` points at, owns the **Worker**. The integration's server half is switched off
+(`enabled: { server: false }`) — not because it competes with `worker.ts`, but because on these versions
+it instruments nothing (see the amendment under Current State Analysis) while standing ready to
+double-instrument from a different options source the day an SDK release fixes its entry-id guard. One
+owner per runtime, stated in the config rather than inferred.
 
-**The server DSN has to be observed arriving at runtime.** The injected `sentry.server.config.ts` runs
-inside workerd, where a Worker secret is a runtime binding rather than a build-time constant. Phase 2
-does not get to assume `astro:env/server` resolves there — it has to see it in a real `npm run preview`
-boot with a scratch DSN before Phase 6 depends on it.
+**The server DSN has to be observed arriving at runtime.** `worker.ts` reads it as `env.SENTRY_DSN`
+inside `withSentry`'s options callback, because on Cloudflare that is the only place a Worker secret
+exists — it is a runtime binding, not a build-time constant, and `@sentry/cloudflare` deliberately
+offers no module-load-time `init` for that reason. Phase 2 does not get to assume the binding resolves:
+it has to see it in a real `npm run preview` boot with a scratch DSN before Phase 6 depends on it.
 
 **The e2e runner will exercise the instrumented entrypoint.** `playwright.config.ts` builds the app and
-starts `preview` with `CLOUDFLARE_ENV=e2e`; the injected server init must be a no-op when `SENTRY_DSN`
-is undefined, which is the state `.dev.vars.e2e` guarantees.
+starts `preview` with `CLOUDFLARE_ENV=e2e`; `worker.ts` must be a no-op when `SENTRY_DSN` is undefined,
+which is the state `.dev.vars.e2e` guarantees.
 
 ---
 
@@ -300,11 +334,14 @@ for manual confirmation from the human before proceeding to the next phase.
 
 ### Overview
 
-Instrument the Worker through `@sentry/astro`'s own Cloudflare path — the integration wraps the
-adapter's handler with `withSentry` for us — with data collection tightened so the SDK cannot send more
-than decision D2 granted. Still no seam routing and
-still no DSN in any environment — this phase's whole claim is "the app builds, boots and behaves
+Instrument the Worker by wrapping the adapter's own handler with `@sentry/cloudflare`'s `withSentry`,
+with data collection pinned so the SDK cannot send more than decision D2 granted. Still no seam routing
+and still no DSN in any environment — this phase's whole claim is "the app builds, boots and behaves
 identically."
+
+_Amended 2026-09-10: this phase originally routed the Worker through `@sentry/astro`'s Cloudflare path
+and a `sentry.server.config.ts`. Neither exists in a working form on the installed versions — see the
+amendment under Current State Analysis for the evidence. §2–§4 below are the amended shape._
 
 ### Changes Required:
 
@@ -325,51 +362,77 @@ in its types before moving on.
 
 #### 2. Server initialisation
 
-**File**: `sentry.server.config.ts` (new, project root)
+**File**: `worker.ts` (new, project root)
 
-**Intent**: Give the Worker its Sentry initialisation through the file `@sentry/astro` injects for the
-Cloudflare adapter — a complete no-op when no DSN is present, and one that never sends session cookies
-or request bodies.
+**Intent**: Give the Worker its Sentry initialisation at the only point on this runtime that can carry
+one — the entry handler, wrapped — as a complete no-op when no DSN is present, and one that never sends
+session cookies or request bodies.
 
-**Contract**: Calls `Sentry.init` with the config below. The DSN comes from the **server** value only —
-`SENTRY_DSN` via `astro:env/server`, never `PUBLIC_SENTRY_DSN` — so a browser DSN present at build time
-cannot switch the Worker on. A missing DSN must leave the SDK uninitialised rather than throw. The
-config is where decision D8 lives, so it is specified exactly:
+**Contract**: `export default Sentry.withSentry((env) => ({ … }), handler)`, where `handler` is the
+adapter's own `@astrojs/cloudflare/entrypoints/server` default export, re-exported unchanged. The DSN
+comes from the **server** value only — `env.SENTRY_DSN`, never `PUBLIC_SENTRY_DSN` — so a browser DSN
+present at build time cannot switch the Worker on. `env` rather than `astro:env/server` because on
+Cloudflare a Worker secret is a per-request binding: `@sentry/cloudflare` exports no `init` precisely so
+that nobody tries to read one at module load. A missing DSN leaves the SDK disabled rather than throwing.
+The file must **not** be named `sentry.server.config.*` — that is the name `@sentry/astro` probes for and
+would inject into every page's SSR module.
+
+The config is where decision D8 lives, so it is specified exactly. Every field is present because a
+partial `dataCollection` flips the resolution baseline to the permissive `DEFAULTS` (see Key
+Discoveries) — dropping a line here **widens** what is sent:
 
 ```ts
+// const PII = ["forwarded", "-ip", "remote-", "via", "-user"];
 {
-  dsn: SENTRY_DSN,              // undefined ⇒ SDK disabled; this is the CI/e2e/dev guarantee
+  dsn: env.SENTRY_DSN,          // undefined ⇒ SDK disabled; this is the CI/e2e/dev guarantee
   environment: "production",
   tracesSampleRate: 0,          // performance tracing is explicitly out of scope
   dataCollection: {
     userInfo: false,
-    cookies: { mode: "off" },   // these are Supabase auth cookies — session tokens
+    cookies: false,             // these are Supabase auth cookies — session tokens
     httpBodies: [],             // generate.ts bodies carry user content
+    // "keep the rest" (D8) has to be written out: a present `dataCollection` would otherwise select
+    // the wider `true` for these two. The list reproduces `@sentry/core`'s own non-PII baseline.
+    httpHeaders: { request: { deny: PII }, response: { deny: PII } },
+    urlQueryParams: { deny: PII },
+    databaseQueryData: false,   // Supabase query values and returned rows are user content
     genAI: { inputs: false, outputs: false },
-    // httpHeaders and urlQueryParams keep their `denyList` default — "keep the rest" (D8)
   },
 }
 ```
 
 #### 3. Worker configuration
 
-**File**: `wrangler.jsonc` — **unchanged**, deliberately.
+**File**: `wrangler.jsonc`
 
-**Intent**: Record the non-change, because the obvious move is the wrong one.
+**Intent**: Make the wrapped handler the Worker's entry. _Amended 2026-09-10: this section previously
+recorded a deliberate non-change, on the premise that the integration wrapped the entry for us. It does
+not — see Current State Analysis._
 
-**Contract**: `main` stays `"@astrojs/cloudflare/entrypoints/server"`. The integration's Cloudflare Vite
-plugin wraps that entry with `withSentry` at build time; pointing `main` at a hand-written wrapper as
-well would instrument the handler twice and open a second initialisation path.
+**Contract**: `main` becomes `"./worker.ts"`, with a comment saying what it is not (the adapter's own
+`@astrojs/cloudflare/entrypoints/server`, which `worker.ts` re-exports) and why. The adapter honours a
+user-set `main` (`@astrojs/cloudflare/dist/wrangler.js`: `main: config.main ?? …`) and bundles it, so the
+emitted `dist/server/wrangler.json` still points at a generated `entry.mjs`. Nothing else in the file
+changes.
 
 #### 4. Astro integration
 
 **File**: `astro.config.mjs`
 
-**Intent**: Register `@sentry/astro` — the single owner of both runtimes' instrumentation on this stack.
+**Intent**: Register `@sentry/astro` as the owner of the **browser** half and of source maps — one owner
+per runtime, with the Worker's owner being §2.
 
-**Contract**: `sentry()` added to `integrations`, with both runtimes enabled (its default), so it injects
-the server config from §2 and the client config from Phase 3 §2 and installs the Cloudflare entry
-wrapper. Source maps are §5, not a default we inherit.
+**Contract**: `sentry()` added to `integrations` with `enabled: { client: true, server: false }`.
+_Amended 2026-09-10: the original contract enabled both runtimes._ The server half is off because on
+these versions it instruments nothing (its entry-id guard never matches) while standing ready to
+double-instrument from a different options source — Worker env vars rather than §2 — the day an SDK
+release fixes that guard; the same flag also skips the `@sentry/node`-based `@sentry/astro/middleware`
+injection, which has no business on workerd. The client half stays on so Phase 3 §2's
+`sentry.client.config.ts` is picked up. **Known transient:** until that file exists, the integration
+injects its _default_ client snippet — a ~275 KB bundle carrying browser tracing and Session Replay,
+both of which this change lists as out of scope. It is inert (no `PUBLIC_SENTRY_DSN` ⇒ never
+initialised) and Phase 3 §2 replaces it; it is recorded here so the size jump is not mistaken for a
+finding. Source maps are §5, not a default we inherit.
 
 #### 5. Source maps
 
@@ -403,9 +466,9 @@ relied on.
 - `npm run dev` boots and the app behaves identically with no DSN set
 - Generating a summary locally still works end to end
 - No Sentry network request is visible in the browser devtools Network tab
-- With a scratch `SENTRY_DSN` in `.dev.vars` and the SDK's `debug` on, `npm run preview` shows the
-  injected server config initialising with that value — proving a Worker secret reaches it at runtime,
-  which every later phase assumes. The scratch value is removed immediately afterwards
+- With a scratch `SENTRY_DSN` in `.dev.vars` and the SDK's `debug` on, `npm run preview` shows
+  `worker.ts` initialising with that value — proving a Worker secret reaches it at runtime, which every
+  later phase assumes. The scratch value is removed immediately afterwards
 
 **Implementation Note**: After completing this phase and all automated verification passes, pause here
 for manual confirmation from the human before proceeding to the next phase.
@@ -811,8 +874,8 @@ of noticing:
   escaping event is a failing test by construction.
 - **Browser**: the e2e route handler from Phase 3 §5 counts zero aborted Sentry requests across a run
   that walked the top-up seam.
-- **Worker**: the e2e `webServer` boot log (Playwright pipes it) shows the injected server config
-  declining to initialise for want of a DSN, and `grep -r "ingest.*sentry.io" dist/` — which covers
+- **Worker**: the e2e `webServer` boot log (Playwright pipes it) shows `worker.ts` declining to
+  initialise for want of a DSN, and `grep -r "ingest.*sentry.io" dist/` — which covers
   both the inlined client value and the `.dev.vars` wrangler bakes into `dist/server/` — returns
   nothing.
 - **Local dev**: `npm run dev` with no DSN set, same two observations by hand.
@@ -942,40 +1005,40 @@ undefined DSN, and the app returns to console-only reporting with no code change
 
 #### Automated
 
-- [x] 1.1 Type checking passes: `npm run typecheck`
-- [x] 1.2 Astro type checking passes: `npm run typecheck:astro`
-- [x] 1.3 Linting passes: `npm run lint`
-- [x] 1.4 Build succeeds with no DSN set: `npm run build`
-- [x] 1.5 No DSN is inlined anywhere in the output: `grep -r "ingest.*sentry.io" dist/` returns nothing
-- [x] 1.6 The e2e runner refuses to start with a DSN present: `PUBLIC_SENTRY_DSN=x npm run test:e2e` exits non-zero before the build, and the same holds for `SENTRY_DSN`
+- [x] 1.1 Type checking passes: `npm run typecheck` — 687b0bf
+- [x] 1.2 Astro type checking passes: `npm run typecheck:astro` — 687b0bf
+- [x] 1.3 Linting passes: `npm run lint` — 687b0bf
+- [x] 1.4 Build succeeds with no DSN set: `npm run build` — 687b0bf
+- [x] 1.5 No DSN is inlined anywhere in the output: `grep -r "ingest.*sentry.io" dist/` returns nothing — 687b0bf
+- [x] 1.6 The e2e runner refuses to start with a DSN present: `PUBLIC_SENTRY_DSN=x npm run test:e2e` exits non-zero before the build, and the same holds for `SENTRY_DSN` — 687b0bf
 
 #### Manual
 
-- [x] 1.7 Sentry project exists; org slug, project slug and DSN recorded (not committed)
-- [x] 1.8 A spend cap or client-key rate limit is set on the project
-- [x] 1.9 The Sentry MCP is connected at user scope and `/mcp` lists its tools
-- [x] 1.10 `.dev.vars.e2e` still contains no DSN, and its new comment says so explicitly
+- [x] 1.7 Sentry project exists; org slug, project slug and DSN recorded (not committed) — 687b0bf
+- [x] 1.8 A spend cap or client-key rate limit is set on the project — 687b0bf
+- [x] 1.9 The Sentry MCP is connected at user scope and `/mcp` lists its tools — 687b0bf
+- [x] 1.10 `.dev.vars.e2e` still contains no DSN, and its new comment says so explicitly — 687b0bf
 
 ### Phase 2: Server transport — instrument the Worker
 
 #### Automated
 
-- [ ] 2.1 Type checking passes: `npm run typecheck`
-- [ ] 2.2 Astro type checking passes: `npm run typecheck:astro`
-- [ ] 2.3 Linting passes: `npm run lint`
-- [ ] 2.4 Build succeeds: `npm run build`
-- [ ] 2.5 Unit suite passes: `npm test`
-- [ ] 2.6 Integration suite passes: `npm run test:integration`
-- [ ] 2.7 E2e suite passes against the instrumented Worker: `npm run test:e2e`
-- [ ] 2.8 Both Sentry packages resolve to the same v10 release, ≥ 10.54, and their types carry `dataCollection`: `npm ls @sentry/astro @sentry/cloudflare`
-- [ ] 2.9 Deploy is still valid without deploying: `npx wrangler deploy --dry-run`
+- [x] 2.1 Type checking passes: `npm run typecheck`
+- [x] 2.2 Astro type checking passes: `npm run typecheck:astro`
+- [x] 2.3 Linting passes: `npm run lint`
+- [x] 2.4 Build succeeds: `npm run build`
+- [x] 2.5 Unit suite passes: `npm test`
+- [x] 2.6 Integration suite passes: `npm run test:integration`
+- [x] 2.7 E2e suite passes against the instrumented Worker: `npm run test:e2e`
+- [x] 2.8 Both Sentry packages resolve to the same v10 release, ≥ 10.54, and their types carry `dataCollection`: `npm ls @sentry/astro @sentry/cloudflare`
+- [x] 2.9 Deploy is still valid without deploying: `npx wrangler deploy --dry-run`
 
 #### Manual
 
-- [ ] 2.10 `npm run dev` boots and the app behaves identically with no DSN set
-- [ ] 2.11 Generating a summary locally still works end to end
-- [ ] 2.12 No Sentry network request is visible in the browser devtools Network tab
-- [ ] 2.13 With a scratch `SENTRY_DSN` in `.dev.vars` and the SDK's `debug` on, `npm run preview` shows the injected server config initialising with that value — proving a Worker secret reaches it at runtime, which every later phase assumes. The scratch value is removed immediately afterwards
+- [x] 2.10 `npm run dev` boots and the app behaves identically with no DSN set
+- [x] 2.11 Generating a summary locally still works end to end
+- [x] 2.12 No Sentry network request is visible in the browser devtools Network tab
+- [x] 2.13 With a scratch `SENTRY_DSN` in `.dev.vars` and the SDK's `debug` on, `npm run preview` shows `worker.ts` initialising with that value — proving a Worker secret reaches it at runtime, which every later phase assumes. The scratch value is removed immediately afterwards
 
 ### Phase 3: Route the seam through Sentry
 

@@ -42,16 +42,19 @@ being trusted.
 | Noise control           | Sentry-side `fingerprint` + first-seen/regression alert rules                 | Every event still reaches the dashboard, but one ongoing condition produces one notification — and no app code owns throttling state, which Workers isolates cannot share anyway. | Plan     |
 | Promotion set           | A roster, not a rule of thumb: paid-path integrity, credit leaks, the fail-open replay read, cache/ledger/lock, plus automatic unhandled | These are the failures that cost money or degrade silently; every remaining console site is named in §Promotion Roster with the reason it stays on the console, so nothing is left to the implementer's guess. | Plan     |
 | DSN isolation           | Optional `astro:env` keys, absent everywhere but production                  | Matches how all five current secrets work, and fails closed by absence rather than by a flag someone must remember to set.     | Plan     |
-| Data collection         | Disable `userInfo`, cookies, HTTP bodies, GenAI; keep headers and query params | The SDK's `dataCollection` defaults are permissive, and this app's cookies are Supabase session tokens.                        | Plan     |
+| Data collection         | Disable `userInfo`, cookies, HTTP bodies, GenAI and DB query data; keep headers and query params on the SDK's own non-PII deny list | This app's cookies are Supabase session tokens and `generate.ts`'s bodies carry user content. _Amended in Phase 2:_ the option resolves against **two** baselines — absent it is already tight, but setting **any** field flips the baseline to fully permissive, so the block has to be exhaustive or it loosens the Worker. | Plan     |
 | Tier & sampling         | Free tier, no sampling, `tracesSampleRate: 0`                                | A single-operator MVP should produce a handful of events a week; tracing is out of scope and costs both quota and bundle size. | Plan     |
 | Sentry MCP              | Installed at user scope, not committed to `.mcp.json`                        | Keeps the org and project slugs out of a public repo while still honouring the change note's ask.                              | Plan     |
 | Verification            | Unit tests on the seam contract, promotion assertions on every promoted site, and **two** deliberate live events — one per runtime | The code contract is cheap to test, and promotion without an oracle would pass just as green if every call were deleted; the account wiring is only provable live, and the two runtimes initialise independently so one event proves only one of them. | Plan     |
 
 ## Scope
 
-**In scope:** both DSNs as optional env values; `@sentry/astro` registered as the single owner of both
-runtimes, which wraps the Cloudflare entrypoint itself (`wrangler.jsonc` is deliberately untouched);
-server and client init files; seam forwarding with a runtime split and per-condition fingerprints;
+**In scope:** both DSNs as optional env values; one instrumentation owner per runtime — `@sentry/astro`
+for the browser and source maps, a hand-written `worker.ts` wrapping the adapter's handler with
+`withSentry` for the Worker, with `wrangler.jsonc`'s `main` repointed at it and the integration's server
+half switched off (_amended in Phase 2: the integration's own Cloudflare wrapper does not fire on Astro 6
++ adapter v13, and `@sentry/cloudflare` exports no module-load `init`_); server and client init files;
+seam forwarding with a runtime split and per-condition fingerprints;
 promotion of the reconciliation, paid-path, cache, ledger and lock sites; Sentry-side alert rules and spend cap; a live verification
 record; README/CLAUDE.md/AGENTS.md and tracker updates; a local Sentry MCP install documented in the
 change folder.
@@ -83,7 +86,7 @@ user is never charged for work they did not receive.
 | Phase                                        | What it delivers                                                        | Key risk                                                                                      |
 | -------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | 1. Project, env plumbing, MCP                | Sentry project with a spend cap; both DSNs declared optional; MCP local  | Forgetting the spend cap — a looping bug can burn a free quota in an hour                      |
-| 2. Server transport                          | `@sentry/astro` registered for both runtimes; injected server config with data collection locked down | The Worker secret must be **observed** reaching the injected config in a real workerd boot — assuming it does is how Phase 6 fails silently |
+| 2. Server transport                          | `worker.ts` wraps the adapter handler with `withSentry`, data collection locked down; `@sentry/astro` registered for the browser half only | The Worker secret must be **observed** reaching `worker.ts` in a real workerd boot — assuming it does is how Phase 6 fails silently |
 | 3. Route the seam                            | Both runtimes forwarding; unit tests for the never-throws contract       | A static SDK import defeats the tree-shake and lands the Worker SDK in the client bundle        |
 | 4. Promote the money events                  | The reconciliation family (ambiguous charge, credit leak, replay read) + five paid-path sites | The identifier exception must be documented and test-enforced, not just implemented |
 | 5. Promote the degradation events            | Cache, ledger and lock failures, fingerprinted per condition             | ~22 sites — the phase most likely to produce noise; a key per *module* rather than per *condition* silently merges issues |
@@ -105,11 +108,15 @@ mostly operator work in the Sentry UI.
   be re-created by hand if the project were ever recreated.
 - **A missing DSN is silent by design.** A production deploy that forgets the Worker secret reports
   nothing and looks identical to a healthy one — hence the deliberate live event in Phase 6.
-- **The integration owns both runtimes, so there is exactly one initialisation path — by choice.** The
-  rejected alternative was a hand-written `withSentry` entrypoint alongside it, which double-wraps the
-  handler and lets the build-time public DSN switch on server reporting independently of the Worker
-  secret. The residual risk is the opposite one: the injected server config's `astro:env/server` read has
-  to be observed working in workerd, which is a Phase 2 verification step rather than an assumption.
+- **One initialisation path per runtime, stated rather than inferred.** _Amended in Phase 2._ The
+  integration's Cloudflare wrapper turned out not to fire at all on Astro 6 + adapter v13 (its transform
+  is gated on an entry-id this stack no longer produces), and `@sentry/cloudflare` exports no
+  module-load-time `init`, so the hand-written `withSentry` entrypoint is the only path that can carry
+  the data-collection decision. The double-initialisation risk that argued against it is closed the other
+  way, by `enabled: { server: false }` on the integration — which also means a future SDK release fixing
+  that entry-id guard cannot silently start instrumenting from a second options source. The residual risk
+  is unchanged in kind: `worker.ts`'s `env.SENTRY_DSN` read has to be observed working in workerd, which
+  is a Phase 2 verification step rather than an assumption.
 - **An e2e run could inherit a developer's `PUBLIC_SENTRY_DSN`.** `.dev.vars.e2e` governs Worker
   bindings, not the client *build*, and Playwright hands the parent environment to its `webServer`. A
   fail-closed config-load guard now refuses to start such a run — that guard is why this is a controlled

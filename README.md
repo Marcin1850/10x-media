@@ -104,7 +104,8 @@ The app is served at **http://localhost:4321**.
 ├── supabase/migrations/ # Database migrations
 ├── scripts/ # Offline operator scripts
 ├── public/ # Public assets
-├── wrangler.jsonc # Cloudflare Workers config
+├── worker.ts # Worker entry: the adapter's handler wrapped with Sentry's `withSentry`
+├── wrangler.jsonc # Cloudflare Workers config (`main` points at worker.ts)
 ├── playwright.config.ts # E2E runner (see "End-to-end tests")
 ├── .dev.vars.e2e # Committed, non-secret env for e2e runs — do not gitignore
 ```

@@ -7,6 +7,7 @@ import react from "@astrojs/react";
 import sitemap from "@astrojs/sitemap";
 import tailwindcss from "@tailwindcss/vite";
 import cloudflare from "@astrojs/cloudflare";
+import sentry from "@sentry/astro";
 
 /**
  * The e2e LLM seam. OpenRouter is the one paid checkpoint no test can defeat with data: the transcript
@@ -61,7 +62,36 @@ const e2eFakeLlmPlugins = process.env.E2E_FAKE_LLM
 // https://astro.build/config
 export default defineConfig({
   output: "server",
-  integrations: [react(), sitemap()],
+  integrations: [
+    react(),
+    sitemap(),
+    // Sentry, CLIENT HALF ONLY. The integration's job here is the browser SDK (it injects
+    // `sentry.client.config.ts`) plus source-map handling; the Worker is instrumented by `worker.ts`,
+    // which `wrangler.jsonc`'s `main` points at.
+    //
+    // WHY `enabled.server: false` RATHER THAN LETTING THE INTEGRATION DO BOTH. On paper this version
+    // detects the Cloudflare adapter and wraps the built Worker entry with `withSentry` itself. In
+    // practice its transform only fires on module ids containing `astrojs-ssr-virtual-entry`, and
+    // Astro 6 + adapter v13 builds the entry as `astro:cloudflare:worker-entry` — so it wraps nothing
+    // (verified: `grep -rl withSentry dist/` was empty on a full build with the server half enabled).
+    // Leaving that half on would therefore add no instrumentation today while quietly arming a
+    // DOUBLE instrumentation the day an SDK release fixes the id guard, with its options coming from
+    // Worker env vars instead of `worker.ts`. Turning it off makes the single server path explicit.
+    // The same flag also skips the `@sentry/astro/middleware` injection, which is `@sentry/node`-based
+    // and has no business on workerd.
+    sentry({
+      enabled: { client: true, server: false },
+      // Source-map upload is decided EXPLICITLY, not inherited. The integration's default is to upload
+      // (and to flip `vite.build.sourcemap` to `"hidden"` to have something to upload), which would
+      // make a contributor build without Sentry credentials emit maps it then cannot ship. Tie it to
+      // the one credential an upload actually needs: no `SENTRY_AUTH_TOKEN` in the build environment ⇒
+      // no hidden maps and no upload attempt.
+      sourcemaps: { disable: !process.env.SENTRY_AUTH_TOKEN },
+      org: process.env.SENTRY_ORG,
+      project: process.env.SENTRY_PROJECT,
+      authToken: process.env.SENTRY_AUTH_TOKEN,
+    }),
+  ],
   // Both families are downloaded at build and self-hosted from the output — no CDN at runtime, which
   // is a hard constraint on Workers. `subsets` carries the Polish diacritics (`latin-ext`) the type
   // decision rests on; `styles` is NOT optional housekeeping — Astro defaults to
