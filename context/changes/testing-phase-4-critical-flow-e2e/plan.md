@@ -1042,15 +1042,15 @@ Manual:
 
 #### Automated
 
-- [x] 4.1 `npm run test:e2e` passes all three specs
-- [x] 4.2 `npm run typecheck` and `npm run lint` pass
-- [x] 4.3 The spec passes standalone and under `--repeat-each=2`
+- [x] 4.1 `npm run test:e2e` passes all three specs — 80507a7
+- [x] 4.2 `npm run typecheck` and `npm run lint` pass — 80507a7
+- [x] 4.3 The spec passes standalone and under `--repeat-each=2` — 80507a7
 
 #### Manual
 
-- [x] 4.4 Deliberate-break check: a wrong quoted price, a wrong debit, a mis-stored row and a quote outliving the video it was priced for are each caught, and the UI half and the ledger half go red independently — **reformulated 2026-09-09 (user)**: the original wording's "broken frozen-input replay" half is not browser-reachable and stays green by construction, recorded as a gap in Phase 4 §A rather than counted as a pass
-- [x] 4.5 The asserted copy is the amber card's, not an invented dialog's
-- [x] 4.6 The 40,000 threshold cites its documented source in a comment
+- [x] 4.4 Deliberate-break check: a wrong quoted price, a wrong debit, a mis-stored row and a quote outliving the video it was priced for are each caught, and the UI half and the ledger half go red independently — **reformulated 2026-09-09 (user)**: the original wording's "broken frozen-input replay" half is not browser-reachable and stays green by construction, recorded as a gap in Phase 4 §A rather than counted as a pass — 80507a7
+- [x] 4.5 The asserted copy is the amber card's, not an invented dialog's — 80507a7
+- [x] 4.6 The 40,000 threshold cites its documented source in a comment — 80507a7
 
 ### Phase 5: The CI gate and close-out
 
