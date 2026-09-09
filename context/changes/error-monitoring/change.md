@@ -1,7 +1,7 @@
 ---
 change_id: error-monitoring
 title: Error monitoring — including installing the Sentry MCP
-status: planned
+status: plan_reviewed
 created: 2026-09-09
 updated: 2026-09-09
 archived_at: null
