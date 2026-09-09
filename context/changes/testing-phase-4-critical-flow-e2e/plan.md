@@ -1126,15 +1126,15 @@ Manual:
 
 #### Automated
 
-- [ ] 5.1 The `e2e` job passes on a PR to `master`
-- [x] 5.9 The `e2e` job carries no vendor keys and no build step; the app's keys come from `.dev.vars.e2e`
-- [ ] 5.2 `ci` and `integration` still pass in parallel
-- [ ] 5.3 `deploy` is blocked while any of the three fails and runs when all pass
-- [ ] 5.4 A failing spec uploads a readable HTML report artifact
+- [x] 5.1 The `e2e` job passes on a PR to `master` — run 34347896527, 5 tests, 4m4s
+- [x] 5.9 The `e2e` job carries no vendor keys and no build step; the app's keys come from `.dev.vars.e2e` — c56394f
+- [x] 5.2 `ci` and `integration` still pass in parallel — 2m15s / 2m59s, unaffected by a red `e2e` in run 34350064309
+- [x] 5.3 `deploy` is blocked while any of the three fails and runs when all pass — **second half observed** (master run 34352075803: `deploy` started only after all three completed, having read `skipping` on every PR run); **first half by inspection** of `needs: [ci, integration, e2e]`, since observing it would mean merging a red commit to master
+- [x] 5.4 A failing spec uploads a readable HTML report artifact — run 34350064309, 1.5 MB `playwright-report` downloaded and opened: real trace, network log, spec sources, error-context, bundled viewer
 
 #### Manual
 
-- [ ] 5.5 `deploy` sets no `E2E_FAKE_LLM`; the live site summarises for real after deploy
-- [x] 5.6 §6.4 is sufficient to add a fourth spec without reading this plan
-- [ ] 5.7 §3 Phase 4 reads `complete`; §5's e2e row reads wired
-- [ ] 5.8 Linear MAR-22 reflects the whole change, one comment per phase
+- [x] 5.5 `deploy` sets no `E2E_FAKE_LLM`; the live site summarises for real after deploy — build step env was `SUPABASE_URL`/`SUPABASE_KEY` only, zero `E2E_FAKE_LLM`/`CLOUDFLARE_ENV` in the whole job log; live generation returned a genuine Polish summary with no fake signatures
+- [x] 5.6 §6.4 is sufficient to add a fourth spec without reading this plan — c56394f
+- [x] 5.7 §3 Phase 4 reads `complete`; §5's e2e row reads wired
+- [x] 5.8 Linear MAR-22 reflects the whole change, one comment per phase — six phase comments plus a closing verification comment superseding the stale "still open" paragraph
