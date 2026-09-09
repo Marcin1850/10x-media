@@ -57,7 +57,7 @@ Playwright runs in its own process and drives a real HTTP server, so both vendor
 | 2. Harness + seed spec | Registry, auth fixture, cache seeding, ledger reads, a11y fix, the happy-flow spec | The exemplar propagates — one bad pattern here reaches every later spec; and the island-hydration window, which fails as a broken form rather than a race |
 | 3. Charged-refusal spec | The two **charged** 422s (`unavailable`, `empty`), both sides of the oracle — the cause the card names paired with the `refusal_reason` the ledger recorded. The transient 422 is **not browser-reachable** (2026-09-09) and stays an integration-layer case | Asserting the generic per-status fallback instead of the cause's own `copy.errors.codes.*` entry |
 | 4. Long-video spec | 409 prompt → relabelled confirm → 2-credit debit | Asserting a Cancel control that does not exist |
-| 5. CI gate + close-out | `e2e` job, `deploy` needs it, §6.4 written | `deploy` must never set `E2E_FAKE_LLM` |
+| 5. CI gate + close-out | `e2e` job, `deploy` needs all three, §6.4 revised for the finished layer (it was **written in Phase 2**, so this phase adds the CI job, the other two specs and the frozen-input gap), the short form in `CLAUDE.md`/`AGENTS.md`/`README.md`, §6.6 Phase 4 notes | `deploy` must never set `E2E_FAKE_LLM` **or `CLOUDFLARE_ENV`** — the first keeps the fake out of the bundle, the second keeps `.dev.vars.e2e`'s non-credentials out of it |
 
 **Prerequisites:** Docker + `npx supabase start`; the five local env keys; `npx playwright install --with-deps chromium`. No cloud access and no vendor credit needed.
 **Estimated effort:** ~4–6 sessions across six phases; Phases 1 and 2 carry most of it, Phases 3–5 are thin.
@@ -69,7 +69,7 @@ Playwright runs in its own process and drives a real HTTP server, so both vendor
 - **Interacting with a page before its Astro islands hydrate is not a recoverable race** (found in Phase 2). React installs its value tracker at hydration from whatever the DOM then holds, so a pre-hydration `fill()` leaves the island convinced the input already holds that string while its own state is empty — every later identical fill is a no-op and the submit button never enables. Every spec must call `awaitIslandsHydrated(page)` after `goto` and before touching the form.
 - The Playwright process itself needs the three Supabase keys, so `test:e2e` loads `.env` the way `test:integration` does; `.dev.vars` reaches only the app server.
 - Separate registries mean an e2e leak is invisible to the integration suite's sweep (and vice versa) — accepted at planning as the price of the two suites not aborting each other.
-- The `e2e` CI job's placeholder vendor keys do **not** trigger the "generation disabled" notice: `config-status.ts` checks presence, never validity. Safety comes from the alias and cache seeding, not from the key being fake.
+- The placeholder vendor keys do **not** trigger the "generation disabled" notice: `config-status.ts` checks presence, never validity. Safety comes from the alias and cache seeding, not from the key being fake — the placeholder is only the backstop for when one of those two is wrong. **They do not live in the CI job's env** (corrected in Phase 5): the app reads `.dev.vars.e2e`, so vendor keys in the job env would be ignored, and listing them there would advertise a lever wired to nothing. The `e2e` job carries only the three Supabase values, which the Playwright *Node* process needs.
 
 ## Success Criteria (Summary)
 

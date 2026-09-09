@@ -81,6 +81,7 @@ The app is served at **http://localhost:4321**.
 - `npm test` - Run the unit suite once (Vitest)
 - `npm run test:watch` - Run the unit suite in watch mode while writing tests
 - `npm run test:integration` - Run the integration suite once (Vitest); needs a local Supabase stack (`npx supabase start`) and all five env keys set — see [CI](#ci)
+- `npm run test:e2e` - Run the browser suite once (Playwright, `tests/e2e/*.spec.ts`); needs a local Supabase stack, the three `SUPABASE_*` keys, and `npx playwright install --with-deps chromium`. It builds the app and starts its own server on port 4321, so **stop your own dev server first** — see [End-to-end tests](#end-to-end-tests)
 - `npm run test:coverage` - v8 coverage report for the unit suite into `coverage/`; no thresholds, by design
 - `npm run grant-credits` - Grant summary credits to a user (operator-only, see [Summary credits](#summary-credits))
 - `npm run db:sync-from-prod` - Copy production data into the local Supabase stack
@@ -98,10 +99,14 @@ The app is served at **http://localhost:4321**.
 │ │ └── services/ # Transcript (Supadata) and LLM (OpenRouter) clients
 │ ├── styles/ # Global styles
 │ └── middleware.ts # Auth resolution and route protection
+├── tests/e2e/ # Playwright specs (\*.spec.ts) and their fixtures — the only tests
+│ # not colocated, because they drive a server, not a module
 ├── supabase/migrations/ # Database migrations
 ├── scripts/ # Offline operator scripts
 ├── public/ # Public assets
 ├── wrangler.jsonc # Cloudflare Workers config
+├── playwright.config.ts # E2E runner (see "End-to-end tests")
+├── .dev.vars.e2e # Committed, non-secret env for e2e runs — do not gitignore
 ```
 
 ## Environment variables
@@ -271,6 +276,24 @@ npm run grant-credits -- <email> <amount>
 
 This script runs offline on your machine and reads the Supabase **service-role** key (which bypasses RLS) from `.env`. Set `SUPABASE_SERVICE_ROLE_KEY` there — the `service_role` key from `npx supabase status` (local) or the dashboard → **Settings → API**. See [Environment variables](#environment-variables) for the key's other consumers.
 
+## End-to-end tests
+
+`npm run test:e2e` drives the real app in Chromium — paste a URL, get a summary — and checks not only what the card says but what the database actually recorded. That pairing is the point: a card that agrees with itself while disagreeing with the ledger is the exact failure this suite exists to catch.
+
+```bash
+npx supabase start                                # Docker; the same stack the integration suite uses
+npx playwright install --with-deps chromium       # once per machine
+npm run test:e2e
+```
+
+Three things are worth knowing before the first run:
+
+- **It builds the app and starts its own server on port 4321.** Stop your own `npm run dev` first — the runner deliberately refuses to reuse a server it did not start, so an occupied port is a loud startup error rather than a silently misconfigured run. The build costs about 30 seconds, once per run.
+- **No run ever contacts a paid vendor.** Specs pre-seed the transcript and metadata caches, so Supadata is never called; OpenRouter is replaced at build time by a fake summarizer that only exists when `E2E_FAKE_LLM` is set — which the production build never sets, so the shipped Worker cannot contain it.
+- **`.dev.vars.e2e` is committed, and that is deliberate.** It holds the Supabase CLI's public local demo keys plus deliberate non-credentials for the two vendors, and it is what stops an e2e run from picking up the real keys in your `.dev.vars`. Do not add it to `.gitignore`; the suite refuses to start without it.
+
+The full cookbook — locators, waits, the two-sided oracle, and what is deliberately not covered — is `context/foundation/test-plan.md` §6.4.
+
 ## Deployment
 
 This project deploys to [Cloudflare Workers](https://workers.cloudflare.com/). Pushes to `master` deploy automatically via GitHub Actions (see [CI](#ci)); the steps below are for deploying manually.
@@ -303,16 +326,17 @@ Worker secrets are configured on Cloudflare, not injected by the deploy pipeline
 
 ## CI
 
-GitHub Actions (`.github/workflows/ci.yml`) runs two jobs in parallel on every push and PR to `master`:
+GitHub Actions (`.github/workflows/ci.yml`) runs three jobs in parallel on every push and PR to `master`:
 
 - **`ci`** — lint, token check, both type-checks, the unit suite (`npm test`), and the build.
 - **`integration`** — starts a throwaway local Supabase stack (`npx supabase start`, non-essential services excluded) and runs the integration suite (`npm run test:integration`) against it. This job never touches `secrets.SUPABASE_URL` (that's production); it uses the Supabase CLI's fixed, publicly documented local-dev demo keys instead, plus literal placeholder values for the Supadata/OpenRouter keys — safe because every paid vendor call in that suite is faked at the `fetch`/module boundary. The suite covers two things: the paid path's charge-versus-delivery contract and its budget breaker, and the data-access boundary — that one account cannot read or delete another's rows, and that the schema's grants, policies and RLS flags still match a committed roster (so a migration that forgets to tighten a new table fails CI). See [Summary credits](#summary-credits) and `context/foundation/test-plan.md` §6.2–§6.3 for what the suite covers.
+- **`e2e`** — the same throwaway Supabase stack plus Chromium, running the browser suite (`npm run test:e2e`) against a real build of the app. It holds **no vendor keys and no build step of its own**: Playwright's `webServer` does the build itself, and the app takes its five values from the committed `.dev.vars.e2e` (selected by `CLOUDFLARE_ENV=e2e`), which is the only channel that actually reaches it — so vendor keys in the job env would be ignored. Three specs cover the flows where a mistake costs a user money: generate-and-see-it, both charged refusals, and the long-video confirmation. Each asserts the card **and** the ledger. A failing run uploads its Playwright HTML report, trace included, as an artifact. See [End-to-end tests](#end-to-end-tests) and `context/foundation/test-plan.md` §6.4.
 
-`deploy` (Cloudflare Workers, on pushes to `master`) needs **both** jobs to pass.
+`deploy` (Cloudflare Workers, on pushes to `master`) needs **all three** jobs to pass. Its build step sets neither `E2E_FAKE_LLM` nor `CLOUDFLARE_ENV`, and both omissions are load-bearing: the first keeps the e2e fake summarizer out of the bundle entirely, the second keeps `.dev.vars.e2e`'s non-credentials from displacing the real Worker secrets.
 
-The two suites are separate Vitest **projects** (`vitest.config.ts`), and every script names the one it means: `test`, `test:watch` and `test:coverage` all pass `--project unit`, `test:integration` passes `--project integration`. Keep that flag when editing these scripts — a bare `vitest` selects **both** projects, which would quietly make the unit watch and the coverage report require Docker and create real synthetic `auth.users` rows on every run.
+The two Vitest suites are separate **projects** (`vitest.config.ts`), and every script names the one it means: `test`, `test:watch` and `test:coverage` all pass `--project unit`, `test:integration` passes `--project integration`. Keep that flag when editing these scripts — a bare `vitest` selects **both** projects, which would quietly make the unit watch and the coverage report require Docker and create real synthetic `auth.users` rows on every run. The e2e suite is not a Vitest project at all — it runs under Playwright (`playwright.config.ts`) from `tests/e2e/`, and its specs are named `*.spec.ts` precisely so the `unit` project's `src/**/*.test.ts` glob can never collect them.
 
-Locally, git hooks catch most of the `ci` job's checks earlier: **pre-commit** runs lint-staged plus `npm run typecheck`, and **pre-push** runs `npm run typecheck:astro`. They are wired by husky via the `prepare` script, so a fresh `npm install` installs them — no manual step. The integration suite is **not** wired into any local git hook (it needs Docker and takes minutes) — pre-commit/pre-push only lint and typecheck `*.int.test.ts` files as plain TypeScript; run `npm run test:integration` yourself before pushing changes that touch the paid path, or rely on the CI job to catch it.
+Locally, git hooks catch most of the `ci` job's checks earlier: **pre-commit** runs lint-staged plus `npm run typecheck`, and **pre-push** runs `npm run typecheck:astro`. They are wired by husky via the `prepare` script, so a fresh `npm install` installs them — no manual step. Neither the integration nor the e2e suite is wired into any local git hook (both need Docker and take minutes) — pre-commit/pre-push only lint and typecheck `*.int.test.ts` and `tests/e2e/*.spec.ts` as plain TypeScript; run `npm run test:integration` and `npm run test:e2e` yourself before pushing changes that touch the paid path or the summary UI, or rely on the CI jobs to catch it.
 
 Required repository secrets:
 
@@ -323,7 +347,7 @@ Required repository secrets:
 | `CLOUDFLARE_API_TOKEN`  | Deploy step |
 | `CLOUDFLARE_ACCOUNT_ID` | Deploy step |
 
-The build does not need the Supadata or OpenRouter keys — every variable in the `astro:env` schema is declared `optional`, so the build succeeds without them. The `integration` job needs none of these repository secrets at all.
+The build does not need the Supadata or OpenRouter keys — every variable in the `astro:env` schema is declared `optional`, so the build succeeds without them. Neither the `integration` nor the `e2e` job needs any of these repository secrets.
 
 ## Project status
 

@@ -908,6 +908,75 @@ Add a §6.6 "Phase 4" entry for what would otherwise be rediscovered: that proce
 - `test-plan.md` §3 Phase 4 reads `complete`; §5's e2e row reads wired
 - Linear MAR-22 reflects the whole change and carries a comment per phase
 
+### Added during implementation (2026-09-09)
+
+#### A. Four of the five automated criteria can only close on a real CI run
+
+5.1-5.4 are claims about GitHub Actions, and nothing local proves them. What the workflow asserts was
+verified structurally (the file parses; `jobs` is `[ci, integration, e2e]`; `deploy.needs` is all three;
+`e2e` has no `run: npm run build` and its only `env` keys are the three `SUPABASE_*` values), and every
+suite the three jobs run was verified green locally — `npm test` 132, `npm run test:integration` 101,
+`npm run test:e2e` 5. But "the job passes on a PR" is a fact about a runner, and the rows stay open
+until the branch is pushed and the checks report. **5.9 is checked** because it is a property of the
+file rather than of a run, and its empirical half was already measured in Phase 1 and re-measured here.
+
+5.4's local half was closed as far as it goes: under `CI=1` the reporter writes
+`playwright-report/index.html`, which is exactly the path the upload step names — so a wrong path,
+the failure mode that would silently produce an empty artifact, is ruled out. The trace inside it
+(`trace: "retain-on-failure"`) can only be observed on a genuinely red CI run.
+
+#### B. The deploy-side safety property was re-measured after the workflow edit, both ways
+
+A plain `npm run build` — the shape `deploy` runs, with neither flag — produces a `dist/` with **no**
+fake marker, the real `anthropic/claude-sonnet-5` slug **present**, and **zero** `e2e-placeholder`
+strings in `dist/server/.dev.vars`. The last of those is the new half: it proves the `CLOUDFLARE_ENV`
+omission works, not just the `E2E_FAKE_LLM` one. A one-way grep would have passed against a broken seam,
+which is why all three are read.
+
+#### C. `CLAUDE.md` and `AGENTS.md` are gitignored in this repo, and had drifted apart
+
+The plan's item 2 asks for the short form in all three of `CLAUDE.md`, `AGENTS.md` and `README.md`. The
+first two are untracked by repo policy (`.gitignore:43,47`), so those edits are real on disk and take
+effect for anyone working locally, but they cannot land in the commit — only `README.md` carries the
+short form into the repository. Recorded so a future reader does not conclude the edits were skipped.
+
+Checking that the two were in step (user's question) surfaced **pre-existing** drift in the section this
+phase was editing: `AGENTS.md` had never received the two `typecheck` command bullets or the local
+quality-gates table that `CLAUDE.md` gained with the gate work on 2026-09-04, carrying a one-paragraph
+pre-commit line instead. Synced per `lessons.md`. The two files are now identical apart from their
+title/intro lines and their `10x-cli` blocks, which the course tooling owns and writes differently into
+each.
+
+#### F. The Playwright browser cache was added on the user's call, reversing the implementer's
+
+It was first left out with the reason in a comment: Playwright publishes no caching recipe, recommends
+browser-scoping instead (which the job already does), and `--with-deps` installs apt packages a cache
+cannot hold — so the saving is a few seconds of download on a job whose floor is a Supabase stack plus a
+~30s build. The user's call is to cache it anyway. Two details make the difference between a cache that
+helps and one that breaks the gate, and both are in the comment: the key is the resolved **Playwright
+version**, not a lockfile hash (the binaries are a function of that version alone, so a lockfile key
+would miss on every unrelated dependency bump), and the hit path still runs `playwright install-deps
+chromium`, because the apt packages live outside `~/.cache/ms-playwright` and are not restored.
+
+#### D. §6.4's frozen-input entry states the gap one step wider than Phase 4 §A did
+
+Phase 4 §A wrote that the freeze "stays as defence in depth against the late-409 race, whose own
+staleness guard is pinned at the unit layer." Checked while writing the cookbook entry: it is not.
+`useGenerateSummary.test.ts` covers only the pure `messageForError`, the guard lives inside the React
+hook (`useGenerateSummary.ts:350-358`), and this repo has no DOM test environment — a grep for
+`requestSeq` across every test file returns nothing. So the race has **no automated coverage at any
+layer** and the freeze rests on code review. §6.4 says that rather than repeating the claim; the plan's
+own §A sentence is left as written, with this note as its correction.
+
+#### E. Three doc rows outside the plan's list were stale and were corrected in the same pass
+
+§4's e2e row still read "none yet — see §3 Phase 4"; its Vitest row still promised that Phase 4 would
+make `getViteConfig()` "non-negotiable", which the phase falsified by never opening the component layer;
+and its component-rendering row pointed at a phase that is now complete. Left alone, §8's new ledger
+line would have cited a §4 that contradicted it. `plan-brief.md` also still placed the placeholder
+vendor keys in the CI job's env, which the F1/F2 correction had moved to `.dev.vars.e2e` — synced per
+`lessons.md`.
+
 ---
 
 ## Testing Strategy
@@ -1058,7 +1127,7 @@ Manual:
 #### Automated
 
 - [ ] 5.1 The `e2e` job passes on a PR to `master`
-- [ ] 5.9 The `e2e` job carries no vendor keys and no build step; the app's keys come from `.dev.vars.e2e`
+- [x] 5.9 The `e2e` job carries no vendor keys and no build step; the app's keys come from `.dev.vars.e2e`
 - [ ] 5.2 `ci` and `integration` still pass in parallel
 - [ ] 5.3 `deploy` is blocked while any of the three fails and runs when all pass
 - [ ] 5.4 A failing spec uploads a readable HTML report artifact
@@ -1066,6 +1135,6 @@ Manual:
 #### Manual
 
 - [ ] 5.5 `deploy` sets no `E2E_FAKE_LLM`; the live site summarises for real after deploy
-- [ ] 5.6 §6.4 is sufficient to add a fourth spec without reading this plan
+- [x] 5.6 §6.4 is sufficient to add a fourth spec without reading this plan
 - [ ] 5.7 §3 Phase 4 reads `complete`; §5's e2e row reads wired
 - [ ] 5.8 Linear MAR-22 reflects the whole change, one comment per phase
