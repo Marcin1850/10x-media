@@ -923,7 +923,8 @@ Add a §6.6 "Phase 4" entry for what would otherwise be rediscovered: that proce
 ### E2E Tests:
 
 - Happy flow: generate → saved card, card text + ledger debit of 1 (Phase 2)
-- Charged refusal: Polish `copy.errors.codes.*` error + charge line + real debit; transient refusal: no-charge line + unmoved balance (Phase 3)
+- Charged refusal: Polish `copy.errors.codes.*` error + charge line + real debit, across **both** charged causes — a cached `unavailable` transcript (`noCaptions`) and an `empty` one (`transcriptUnavailable`), told apart by the ledger's `refusal_reason` rather than by the card (Phase 3)
+- The uncharged transient `failed`/`timeout` exit is **not** covered by e2e — it is not browser-reachable without a real vendor call, so it stays integration-only (Phase 3 ruling A, 2026-09-09)
 - Long video: 409 prompt → relabelled confirm → saved card + debit of 2 (Phase 4)
 
 ### Manual Testing Steps:

@@ -4,8 +4,8 @@
 - **Plan**: `context/changes/testing-phase-4-critical-flow-e2e/plan.md`
 - **Scope**: Phases 3-4 of 5 (plus Phase 0)
 - **Date**: 2026-09-09
-- **Verdict**: NEEDS ATTENTION
-- **Findings**: 0 critical, 3 warnings, 1 observation
+- **Verdict**: NEEDS ATTENTION — **all four findings triaged and fixed, 2026-09-09**
+- **Findings**: 0 critical, 3 warnings, 1 observation (4 fixed, 0 skipped)
 
 ## Verdicts
 
@@ -28,7 +28,7 @@
 - **Location**: `context/changes/testing-phase-4-critical-flow-e2e/plan.md:926`
 - **Detail**: Phase 3's accepted ruling removes the transient `failed`/`timeout` 422 from e2e because it is not browser-reachable without a real vendor call. The phase body, `change.md`, `plan-brief.md`, and `test-plan.md` all record that gap, but the later E2E Testing Strategy still lists “transient refusal: no-charge line + unmoved balance (Phase 3)” as delivered. The implementation correctly contains only the two charged refusal cases; this is an internal contradiction in the plan, not missing code.
 - **Fix**: Replace the transient-refusal claim with the two charged causes and state that the uncharged transient remains integration-only.
-- **Decision**: PENDING
+- **Decision**: FIXED — `plan.md` Testing Strategy now names both charged causes and records the transient `failed`/`timeout` exit as integration-only.
 
 ### F2 — Changing the quoted URL leaves the abandoned card looking like active work
 
@@ -47,7 +47,7 @@
   - Tradeoff: Leaves stale attempt state alive and may hide a future malformed no-outcome response instead of surfacing it explicitly.
   - Confidence: MEDIUM — it fixes the visible symptom but not the contradictory state that creates it.
   - Blind spot: Other consumers of `generation.attempt` were not exhaustively audited.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A — `inputsChanged()` now retracts the attempt when it withdraws the quote, guarded on `confirm !== null && !loading` so the confirmation replay and the resting failed/saved cards are untouched; `long-video-confirmation.spec.ts` pins the quoted card before the edit and asserts it is gone after. Deliberate-break check: removing the `setAttempt(null)` line turns the new assertion red (`Expected: 0, Received: 1`). The blind spot on unit coverage stands unresolved by design — the repo has no DOM test environment (`useGenerateSummary.test.ts` header), so the e2e assertion is the coverage.
 
 ### F3 — Runner documentation still describes the unsafe pre-review server mode
 
@@ -57,7 +57,7 @@
 - **Location**: `context/changes/testing-phase-4-critical-flow-e2e/plan-brief.md:24`; `context/foundation/test-plan.md:300`
 - **Detail**: The accepted Phases 1-2 review ruling requires a built `preview` locally and in CI with `reuseExistingServer: false`, specifically to fail closed rather than reuse a developer server carrying real vendor configuration. `plan-brief.md` still says “dev locally, built preview in CI”. The e2e cookbook correctly states the new runner mode at lines 289-294, but its waits paragraph still attributes the timeout to first-request compilation under `astro dev`. These stale explanations are substantive because they describe the safety boundary future contributors are expected to preserve, and `lessons.md` requires derived docs to stay synchronized with plan changes.
 - **Fix**: Update the brief to “built preview everywhere, never reused” and replace the `astro dev` timeout rationale with the actual preview/workerd plus real-database latency rationale (or remove the unsupported rationale while retaining the measured limits).
-- **Decision**: PENDING
+- **Decision**: FIXED — `plan-brief.md`'s Server mode row now reads “built `preview` everywhere, never reused” with the fail-closed reason and the ~30 s build cost, sourced to the Phases 1-2 review; `test-plan.md` §6.4's Waits paragraph retires the compile-on-first-request rationale and keeps the unchanged 15s/60s ceilings on the workerd round-trip + real-database justification the plan and `playwright.config.ts` already carry.
 
 ### F4 — Successful long-video generation does not assert the reservation is not a refusal
 
@@ -67,7 +67,7 @@
 - **Location**: `tests/e2e/long-video-confirmation.spec.ts:189`
 - **Detail**: Phase 3 extends `ReservationRow` with `refusalReason` and documents that ordinary `begin_generation` rows must carry `null`, while refusal specs assert concrete causes. The Phase 4 success case uses `objectContaining({ amount, status })`, so it would remain green if a normal generation row were incorrectly classified with a refusal reason. The rest of the Phase 4 oracle is strong and this does not currently break the user flow, but the new semantic field is not asserted symmetrically across the two flow types.
 - **Fix**: Add `refusalReason: null` to the successful long-video reservation expectation.
-- **Decision**: PENDING
+- **Decision**: FIXED — the success case's reservation row now asserts `refusalReason: null` alongside `amount` and `status`, so the field is asserted symmetrically across the delivered and refused flows.
 
 ## Verification
 
@@ -81,6 +81,14 @@
 - PASS — port 4321 was free before the e2e server started and free again after each run
 
 The e2e runs emitted the existing Wrangler warning that no `[env.e2e]` block exists, while explicitly loading `.dev.vars.e2e`; it did not fail or change the verified outcomes.
+
+### Post-triage re-verification (2026-09-09)
+
+- PASS — `npm run typecheck`
+- PASS — `npm run lint`
+- PASS — `npm test` (132 tests)
+- PASS — `npm run test:e2e -- --repeat-each=2` (10 tests)
+- PASS — F2 deliberate-break check: removing `setAttempt(null)` from `inputsChanged()` turns the new abandoned-card assertion red (`Expected: 0, Received: 1`); restored and green.
 
 ### Manual evidence
 

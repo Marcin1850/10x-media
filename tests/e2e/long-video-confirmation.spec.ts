@@ -185,8 +185,13 @@ test("the quoted price is what the confirmation spends, and the card matches the
   // Exactly one row, and it is the whole point of the spec: the quote itself opened none (it returns
   // before any debit), and the confirmation debited the documented 2 rather than the default 1. Array
   // equality, not `toContainEqual` — a second reservation would mean the user was charged twice for one
-  // consent, which no assertion about the first row would notice.
-  expect(reservations).toEqual([expect.objectContaining({ amount: DOCUMENTED_LONG_VIDEO_COST, status: "settled" })]);
+  // consent, which no assertion about the first row would notice. `refusalReason` is asserted here for
+  // the same reason the refusal specs assert a concrete cause: the column is what says WHICH kind of
+  // debit this was, so a delivered summary booked as a refusal has to be as visible from this side as a
+  // refusal booked under the wrong cause is from the other.
+  expect(reservations).toEqual([
+    expect.objectContaining({ amount: DOCUMENTED_LONG_VIDEO_COST, status: "settled", refusalReason: null }),
+  ]);
 
   const summaries = await readSummaries(account.userId);
   expect(summaries).toHaveLength(1);
@@ -243,6 +248,12 @@ test("a quote is not transferable — editing the URL withdraws the confirmed pr
   const confirmSubmit = page.getByRole("button", { name: copy.generate.confirmSubmit(DOCUMENTED_LONG_VIDEO_COST) });
   await expect(confirmSubmit).toBeEnabled();
 
+  // The quoted video is on screen as a card of its own, awaiting the answer to that price. Pinned
+  // before the edit so its disappearance below is a real transition rather than a locator that never
+  // matched anything.
+  const quotedCard = page.getByRole("article").filter({ hasText: quoted.url });
+  await expect(quotedCard).toHaveCount(1);
+
   // The action this case exists for: point the form at a DIFFERENT video while a confirmed price is on
   // screen. The price was computed for the first video's transcript, so continuing to offer it would
   // let the second one be generated on consent it never received — a card quoting one video against a
@@ -254,6 +265,13 @@ test("a quote is not transferable — editing the URL withdraws the confirmed pr
   // second variant cannot satisfy it.
   await expect(submit).toBeEnabled();
   await expect(confirmSubmit).toHaveCount(0);
+
+  // ...and the abandoned video stops being shown as work in progress. Withdrawing the quote leaves the
+  // attempt with no loading, no confirmation, no error and no saved result, which the list read back as
+  // "generating" — a card claiming the first video was still being summarised while no request existed.
+  // The second submit installs a new attempt over it, so this is the only moment that state is
+  // observable at all, and asserting it here is what makes the withdrawal complete rather than partial.
+  await expect(quotedCard).toHaveCount(0);
 
   // And the withdrawal is real rather than cosmetic: submitting the new video gets its OWN quote — the
   // 409 again, naming the new URL — instead of proceeding at the old confirmation's price.

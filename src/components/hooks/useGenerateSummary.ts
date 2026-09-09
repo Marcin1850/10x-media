@@ -420,7 +420,18 @@ export function useGenerateSummary({
       // credits on an earlier video's confirmation. The one exception is the allow-long toggle: it
       // does not change WHICH video is quoted, and it is the very consent the quote is asking for, so
       // clearing the quote there would delete the prompt the user is answering.
-      if (!options?.keepConfirm) setConfirm(null);
+      if (!options?.keepConfirm) {
+        // Withdrawing the quote also retracts the attempt it was the sole outcome of — the same rule
+        // the superseded-request paths above already follow: an attempt with no loading, no
+        // confirmation, no error and no committed success names a request that has no status at all,
+        // and the list's pending derivation reads that back as "generating", a card claiming work
+        // nothing is doing. Guarded on `!loading` so the confirmation replay, which runs with
+        // `confirm` still set, keeps the card for the request it really has in flight. A failed or
+        // saved attempt is a resting outcome the user dismisses, and neither leaves `confirm` set, so
+        // neither is touched here.
+        if (confirm !== null && !loading) setAttempt(null);
+        setConfirm(null);
+      }
     },
     clearOutcome: () => {
       setResult(null);
