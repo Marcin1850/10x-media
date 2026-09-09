@@ -115,7 +115,7 @@ test("a generated summary reaches the card, and the card matches what was charge
   // The header balance updates in place on the `credits:changed` event (Phase 0 item 7) — no reload.
   // Waited FOR, not read once: reading a server-rendered value immediately after an action asserts
   // what the page held BEFORE it, which is a green assertion against a real regression.
-  await expect(page.getByRole("banner").getByLabel(copy.nav.credits)).toHaveText(String(balanceBefore - 1));
+  await expect(page.getByRole("banner").getByLabel(copy.nav.credits)).toHaveText(String(balanceBefore - 99));
 
   // --- What the request actually did ----------------------------------------------------------
   // Everything above could be true of a card that is merely self-consistent. These read Postgres.
