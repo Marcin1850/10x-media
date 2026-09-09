@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
-import { isLoopbackHostname } from "./integration-setup";
+import { isLoopbackHostname } from "./loopback-guard";
 import { closeDbOwnerConnection } from "./db-owner";
 
 /**

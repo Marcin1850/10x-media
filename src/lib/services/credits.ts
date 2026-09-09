@@ -323,6 +323,20 @@ export async function chargeFailedTranscript(
 }
 
 /**
+ * What a replayable refusal answers with: the reason its 422 is reconstructed from, and the balance
+ * that refusal left behind.
+ *
+ * The balance is part of the lookup rather than a second query because the client that reaches the
+ * replay is the one that never saw the original reply — see the function's own contract below. A
+ * missing `user_credits` row reads as `0`, matching `chargeFailedTranscript` and `beginGeneration`'s
+ * `insufficient` branch.
+ */
+export interface RefusalReplay {
+  reason: RefusalReason;
+  balance: number;
+}
+
+/**
  * Answers "was this request key closed by a refusal CHARGE, and if so why?" — `null` when it was not.
  *
  * This is what keeps the fee's idempotency honest. The endpoint's identity probe runs before any
@@ -339,16 +353,25 @@ export async function chargeFailedTranscript(
  * `null` covers both "no row on this key" and "a row that is not a refusal charge" — the second case
  * is load-bearing rather than a fallback: an operator-side settle writes a settled, summary-less row
  * with no reason, and that row must keep the 409 it was written for.
+ *
+ * It returns the caller's BALANCE alongside the reason because the replay is reached by exactly the
+ * client that never saw the original refusal: the retry exists for a first attempt whose response was
+ * lost, so "the number it already has is still correct" is true of every client except the one asking.
+ * The two facts are read in one `SECURITY DEFINER` statement so the reply can never pair a reason from
+ * one instant with a balance from another.
  */
 export async function lookupRefusalReplay(
   admin: SupabaseClient,
   { userId, requestId }: { userId: string; requestId: string },
-): Promise<RefusalReason | null> {
+): Promise<RefusalReplay | null> {
   try {
     const { data, error } = (await admin.rpc("get_refusal_replay", {
       p_user_id: userId,
       p_request_id: requestId,
-    })) as { data: string | null; error: { message: string } | null };
+    })) as {
+      data: { refusal_reason: string | null; balance: number | null }[] | null;
+      error: { message: string } | null;
+    };
 
     if (error) {
       // eslint-disable-next-line no-console
@@ -356,11 +379,17 @@ export async function lookupRefusalReplay(
       return null;
     }
 
+    // `returns table(...)` arrives as an array; an empty one is the lookup miss, not a contract
+    // mismatch — unlike the charge above, nothing was written here, so there is nothing to be
+    // ambiguous about.
+    const reason = data?.[0]?.refusal_reason;
+
     // Narrowed at the boundary: the column is CHECKed, but the RPC is untyped here and an unrecognised
     // value has no copy to reconstruct — treat it as "no replay" rather than answer with a lookup miss
     // in the response body.
-    if (data === "unavailable" || data === "empty" || data === "whitespace") {
-      return data;
+    if (reason === "unavailable" || reason === "empty" || reason === "whitespace") {
+      // A missing `user_credits` row reads as zero, matching chargeFailedTranscript's branches.
+      return { reason, balance: data?.[0]?.balance ?? 0 };
     }
     return null;
   } catch (cause) {

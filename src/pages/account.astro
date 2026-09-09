@@ -18,7 +18,12 @@ const { user, credits } = Astro.locals;
 
         <div class="border-border mt-6 flex items-start justify-between border-t pt-6">
           <div class="text-muted-foreground flex items-center gap-2 text-sm">
-            <span>{copy.account.creditsLabel}</span>
+            {
+              /* Same accessible-name treatment as `Topbar.astro`'s balance, and for the same reason —
+                these two render ONE number and must never disagree, in what they show or in how they
+                are named. Its own id, because the topbar renders on this page too. */
+            }
+            <span id="account-credits-label">{copy.account.creditsLabel}</span>
             {
               credits === null ? (
                 <>
@@ -26,7 +31,9 @@ const { user, credits } = Astro.locals;
                   <span class="sr-only">{copy.nav.creditsUnavailable}</span>
                 </>
               ) : (
-                <span class="text-foreground font-medium">{credits}</span>
+                <span class="text-foreground font-medium" data-credit-balance aria-labelledby="account-credits-label">
+                  {credits}
+                </span>
               )
             }
           </div>

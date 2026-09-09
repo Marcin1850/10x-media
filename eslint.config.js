@@ -83,6 +83,18 @@ const scriptsConfig = tseslint.config({
   },
 });
 
+// Playwright specs and fixtures. `reactConfig` above applies `react-hooks` to every `.ts` file, and
+// `react-hooks/rules-of-hooks` reads Playwright's fixture idiom — `async ({ page }, use) => { await
+// use(value) }` — as a call to React 19's `use()` hook from a non-component function. It is not one;
+// nothing here renders. The rule is off for this directory only, rather than the fixtures being
+// contorted to dodge a false positive.
+const e2eConfig = tseslint.config({
+  files: ["tests/e2e/**/*.ts"],
+  rules: {
+    "react-hooks/rules-of-hooks": "off",
+  },
+});
+
 export default tseslint.config(
   includeIgnoreFile(gitignorePath),
   baseConfig,
@@ -91,5 +103,6 @@ export default tseslint.config(
   ...eslintPluginAstro.configs["flat/jsx-a11y-recommended"],
   astroConfig,
   scriptsConfig,
+  e2eConfig,
   eslintPluginPrettier,
 );

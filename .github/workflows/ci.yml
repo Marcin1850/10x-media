@@ -70,8 +70,80 @@ jobs:
           SUPADATA_API_KEY: test-placeholder-key
           OPENROUTER_API_KEY: test-placeholder-key
 
+  # test-plan §3 Phase 4 / §5 "e2e on critical flows". Runs in parallel with `ci` and `integration`;
+  # it is `integration`'s setup plus a browser, and it deliberately has NO build step of its own —
+  # `playwright.config.ts`'s `webServer` runs `npm run build && npm run preview` itself, with
+  # `E2E_FAKE_LLM=1` and `CLOUDFLARE_ENV=e2e` on its own `env`. A build here would be both redundant
+  # (webServer would rebuild over it) and wrong: without `CLOUDFLARE_ENV` it would not bake
+  # `.dev.vars.e2e` into `dist/server/.dev.vars`, which is the only channel that reaches the app's
+  # vendor keys (@astrojs/cloudflare re-reads the fixed-name `.dev.vars`, so `webServer.env` cannot).
+  #
+  # Two processes, two sources of configuration, and they are NOT the same source:
+  #   - The Playwright NODE process reads the three Supabase values from the job env below. They feed
+  #     global-setup's stale sweeps, the fixtures' admin client and the table-owner connection. There
+  #     is no `.env` in CI, so `--env-file-if-exists=.env` is a no-op and this is the only source.
+  #     SUPABASE_URL is additionally load-bearing at config load: the loopback guard runs while
+  #     `playwright.config.ts` is read and refuses to start when it is unset.
+  #   - The APP server reads all five values from the committed `.dev.vars.e2e`, selected by
+  #     `CLOUDFLARE_ENV=e2e`. SUPADATA_API_KEY and OPENROUTER_API_KEY therefore do NOT belong in the
+  #     job env — the app would ignore them, so listing them would advertise a lever wired to nothing.
+  #     `.dev.vars.e2e` is committed, so `actions/checkout` supplies it; if `.gitignore`'s exact-name
+  #     `.dev.vars` entry is ever broadened to a glob, the file vanishes from the checkout and the
+  #     config refuses to start rather than silently falling back to real keys.
+  #
+  # As in `integration`, the Supabase values are the CLI's fixed, publicly documented local-dev demo
+  # credentials — never secrets.SUPABASE_URL, that is production — and they must stay in agreement
+  # with `.dev.vars.e2e`, which points at the same 127.0.0.1:54321 stack.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx astro sync
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      # Same exclusion list as `integration`, and for the same reason — the names are container keys,
+      # not config.toml section names. Keep the two lists in step.
+      - run: npx supabase start -x edge-runtime,imgproxy,logflare,mailpit,postgres-meta,realtime,storage-api,studio,supavisor,vector
+      # Chromium only: `playwright.config.ts` declares one project and records the deliberate Firefox
+      # gap. The cache below is keyed on the resolved Playwright VERSION, not on the lockfile hash —
+      # the binaries a release downloads are a function of that version alone, so a lockfile-keyed
+      # entry would miss on every unrelated dependency bump. The two install steps are mutually
+      # exclusive and both are needed: `--with-deps` also installs apt packages, which live outside
+      # `~/.cache/ms-playwright` and so are NOT restored by a cache hit — hence `install-deps` on the
+      # hit path. Get that wrong and the browser launches against missing shared libraries.
+      - id: playwright-version
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
+      - if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+      - if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+      - run: npm run test:e2e
+        env:
+          SUPABASE_URL: http://127.0.0.1:54321
+          SUPABASE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+          SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
+      # A red e2e job with no trace is a job people learn to re-run rather than read. The HTML report
+      # carries the failing spec's trace (`trace: "retain-on-failure"`), which is the whole diagnosis.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
   deploy:
-    needs: [ci, integration]
+    needs: [ci, integration, e2e]
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
@@ -82,6 +154,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx astro sync
+      # This build sets NEITHER `E2E_FAKE_LLM` NOR `CLOUDFLARE_ENV`, and both omissions are the
+      # safety property, not an oversight. Without the first, `astro.config.mjs`'s alias never fires
+      # and the fake summarizer is not bundled at all — a production Worker CANNOT serve canned
+      # summaries while charging real credits. Without the second, wrangler reads no `.dev.vars.e2e`,
+      # so the e2e run's deliberate non-credentials cannot displace the real Worker secrets.
       - run: npm run build
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

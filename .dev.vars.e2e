@@ -1,0 +1,35 @@
+# Cloudflare local-dev secrets for the E2E suite ONLY — selected by `CLOUDFLARE_ENV=e2e`, which
+# `playwright.config.ts` sets on its `webServer`. Wrangler's `loadDotDevDotVars` tries
+# `.dev.vars.<env>` FIRST and falls back to `.dev.vars`, so this file REPLACES `.dev.vars` wholesale
+# for an e2e run — every key the app needs has to be restated here.
+#
+# WHY THIS FILE EXISTS (impl-review F1). `webServer.env` cannot make the app see a non-billable vendor
+# key: @astrojs/cloudflare re-reads `.dev.vars` at `astro:config:done` and the workerd bindings come
+# from wrangler's own read of it, so a placeholder passed through the process env is overwritten by
+# the developer's real key. Verified empirically — with placeholders in `webServer.env`, the Worker
+# still read the real 35- and 73-character keys. Owning the secrets FILE is the only lever that wins.
+#
+# WHY IT IS COMMITTED, unlike `.dev.vars`. It holds no secret: the Supabase values are the CLI's fixed,
+# publicly documented local demo keys (identical on every machine, already used by CI — see README
+# "CI"), and the vendor values are deliberate non-credentials. Committing it also removes the failure
+# mode that worried us most: wrangler falls back to `.dev.vars` SILENTLY when this file is missing, so
+# an absent file would quietly restore real keys. `playwright.config.ts` additionally refuses to start
+# when this file is gone, so the fallback can never happen unnoticed.
+#
+# It is NOT covered by `.gitignore`'s `.dev.vars` entry (line 57 is an exact name, not a glob). If that
+# pattern is ever broadened to `.dev.vars*`, re-add an explicit `!.dev.vars.e2e` negation.
+
+# --- local Supabase stack: the CLI's fixed demo keys (`npx supabase status`) ---
+SUPABASE_URL=http://127.0.0.1:54321
+SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
+
+# --- paid vendors: deliberately NOT credentials ---
+# Supadata is defeated by DATA (specs pre-seed both caches through the same RPCs `generate.ts` calls),
+# so a correct run never reaches it. These values are what makes an INCORRECT run — a cache miss from a
+# seeding bug — fail with a vendor 401 instead of billing the account. They mirror the integration
+# suite's `fetch-firewall.ts`, which pins the same two keys to placeholders for the same reason.
+SUPADATA_API_KEY=e2e-placeholder-not-a-real-supadata-key
+# OpenRouter is defeated by CODE (the `E2E_FAKE_LLM` module alias in `astro.config.mjs`), so this is
+# the second lock on a door that is already bolted — it only matters if that alias ever fails to apply.
+OPENROUTER_API_KEY=e2e-placeholder-not-a-real-openrouter-key

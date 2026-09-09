@@ -1,5 +1,5 @@
 import postgres from "postgres";
-import { isLoopbackHostname } from "./integration-setup";
+import { isLoopbackHostname } from "./loopback-guard";
 
 /**
  * A test-only connection to the local Postgres instance AS ITS OWNER, not through PostgREST as

@@ -8,7 +8,12 @@ import {
   type ChargeFailedTranscriptParams,
   type ChargeFailedTranscriptResult,
 } from "@/lib/services/credits";
-import { stubFailing, stubRejecting, stubReturning } from "@/lib/services/__fixtures__/supabase-stub";
+import {
+  stubFailing,
+  stubRejecting,
+  stubReturning,
+  type SupabaseStub,
+} from "@/lib/services/__fixtures__/supabase-stub";
 
 /**
  * Risk #1 — who pays, and what the caller may claim about it.
@@ -48,6 +53,15 @@ import { stubFailing, stubRejecting, stubReturning } from "@/lib/services/__fixt
  *
  * The 25 uncovered mutants are all in `getBalance` and `refundReservation` — outside this rollout
  * phase's scope, which names only the three functions below.
+ *
+ * **Re-run 2026-09-08** after adding the balance-presence table ("which outcomes know a balance at
+ * all"): **98 killed / 26 survived / 25 uncovered — identical to the run above.** The new rows kill no
+ * mutant the value tables were not already killing, and that is recorded rather than hidden: their
+ * value is not extra mutation coverage. They state the presence rule as a rule across all five
+ * outcomes, which is what `generate.ts`'s `refusalResponse` now branches on, and they use
+ * `toHaveProperty` for the two absent cases — something `toEqual({ outcome: "notCharged" })` cannot
+ * express, since it accepts an explicit `balance: undefined` beside it. `credits.ts` itself is
+ * unchanged by that phase, so the identical score is the expected result, not a gap.
  */
 
 const CHARGE_PARAMS: ChargeFailedTranscriptParams = {
@@ -210,6 +224,76 @@ describe("chargeFailedTranscript — the notCharged/ambiguous boundary", () => {
     const stub = stubRejecting(new Error("connection reset"));
 
     await expect(chargeFailedTranscript(stub.client, CHARGE_PARAMS)).resolves.toBeDefined();
+  });
+});
+
+/**
+ * Which outcomes know a balance at all — the rule, stated once across all five.
+ *
+ * A different property from the tables above, not a restatement of them: those pin WHICH NUMBER each
+ * row returns, this pins WHETHER there is a number to return. That is the rule the endpoint branches
+ * on — `refuseAndCharge` forwards `result.balance` to `refusalResponse`, which emits
+ * `creditsRemaining` on the 422 exactly when one arrived — so the presence rule is now a wire
+ * contract, and a `notCharged` that started answering `balance: 0` would tell a user a credit left
+ * their account while every value assertion above stayed green.
+ *
+ * Oracle: README §Summary credits ("it carries the resulting balance as `creditsRemaining` whenever
+ * the server knows it") and `refusalResponse`'s documented contract, which supersedes roadmap S-09
+ * **D14**'s "no balance field" — the qualitative half of that supersession shipped as `charged` in
+ * S-06 phase 9 and the quantitative half lands with this rule. Read from those, not from the switch.
+ *
+ * Asserted with `toHaveProperty`, which the value tables cannot do for the two absent cases:
+ * `toEqual({ outcome: "notCharged" })` accepts an explicit `balance: undefined` alongside it. Each row
+ * stands on its own shape — `ambiguous` is "has no balance", never "is not `notCharged`" (§6.1).
+ */
+describe("chargeFailedTranscript — which outcomes know a balance at all", () => {
+  const rows: [string, string, () => SupabaseStub, boolean][] = [
+    // A real debit just happened and the RPC returned the balance it wrote.
+    [
+      "charged",
+      "the debit landed here, so the post-charge balance is known",
+      () => stubReturning([{ outcome: "charged", new_balance: 41 }]),
+      true,
+    ],
+    // Nothing moved on THIS attempt, but the RPC still re-reads user_credits (the migration's `replay`
+    // branch), so the number is just as authoritative — and the client is just as entitled to it.
+    [
+      "replay",
+      "no debit this time, yet the RPC still read the current balance",
+      () => stubReturning([{ outcome: "replay", new_balance: 17 }]),
+      true,
+    ],
+    // The case that proves a balance is not a claim about a charge: nothing moved, and the balance is
+    // reported anyway. Dropping this row would make `creditsRemaining` mean "you were charged".
+    [
+      "insufficient",
+      "nothing moved, and the balance is reported regardless — it is not a charge signal",
+      () => stubReturning([{ outcome: "insufficient", new_balance: 0 }]),
+      true,
+    ],
+    // A rolled-back statement learned nothing about the balance. Reporting one here would be inventing
+    // a number, which is worse than the staleness this whole rule exists to fix.
+    [
+      "notCharged",
+      "a rolled-back statement read no balance, so there is none to report",
+      () => stubFailing("relation does not exist"),
+      false,
+    ],
+    // Same absence, opposite reason: the statement may well have committed, so any number we could
+    // name might already be wrong by one credit.
+    [
+      "ambiguous",
+      "the outcome is unknown, so any balance we named could already be stale",
+      () => stubReturning([]),
+      false,
+    ],
+  ];
+
+  it.each(rows)("a %s outcome %s", async (_outcome, _why, makeStub, hasBalance) => {
+    const result = await chargeFailedTranscript(makeStub().client, CHARGE_PARAMS);
+
+    if (hasBalance) expect(result).toHaveProperty("balance", expect.any(Number));
+    else expect(result).not.toHaveProperty("balance");
   });
 });
 
@@ -513,7 +597,7 @@ const LOOKUP_PARAMS = {
  */
 describe("lookupRefusalReplay — what reaches the ledger", () => {
   it("asks about the key it was given, under the names the SQL function declares", async () => {
-    const stub = stubReturning("unavailable");
+    const stub = stubReturning([{ refusal_reason: "unavailable", balance: 4 }]);
 
     await lookupRefusalReplay(stub.client, LOOKUP_PARAMS);
 
@@ -530,9 +614,41 @@ describe("lookupRefusalReplay — the reasons that have copy behind them", () =>
   // Returned verbatim — this is an identity, and translating it here would desynchronise the lookup
   // from the column it reads.
   it.each([["unavailable"], ["empty"], ["whitespace"]])("returns %s verbatim", async (reason) => {
-    const stub = stubReturning(reason);
+    const stub = stubReturning([{ refusal_reason: reason, balance: 4 }]);
 
-    await expect(lookupRefusalReplay(stub.client, LOOKUP_PARAMS)).resolves.toBe(reason);
+    await expect(lookupRefusalReplay(stub.client, LOOKUP_PARAMS)).resolves.toMatchObject({ reason });
+  });
+});
+
+/**
+ * Oracle: README §Summary credits — the body "carries the resulting balance as `creditsRemaining`
+ * whenever the server knows it, so the app never keeps showing a number the last request has already
+ * changed".
+ *
+ * Why the replay in particular: it is reached by the retry of a request whose response was LOST, so it
+ * is the one caller that cannot have learned the balance from the original refusal. Returning the
+ * reason alone would confirm the charge while leaving the displayed balance one credit too high — and
+ * the form's credit gate reads that number.
+ */
+describe("lookupRefusalReplay — the balance the refusal left behind", () => {
+  it("reports the balance the ledger row was read with, not a number derived from the reason", async () => {
+    const stub = stubReturning([{ refusal_reason: "unavailable", balance: 3 }]);
+
+    await expect(lookupRefusalReplay(stub.client, LOOKUP_PARAMS)).resolves.toEqual({
+      reason: "unavailable",
+      balance: 3,
+    });
+  });
+
+  // A user with no `user_credits` row has nothing to spend; zero is the same reading
+  // `chargeFailedTranscript` and `beginGeneration`'s `insufficient` branch take of a missing row.
+  it("reads a missing credits row as zero rather than dropping the field", async () => {
+    const stub = stubReturning([{ refusal_reason: "empty", balance: null }]);
+
+    await expect(lookupRefusalReplay(stub.client, LOOKUP_PARAMS)).resolves.toEqual({
+      reason: "empty",
+      balance: 0,
+    });
   });
 });
 
@@ -542,9 +658,17 @@ describe("lookupRefusalReplay — fails toward null, the OPPOSITE direction of t
   // a new generation". That 409 is what the row was written for, so a value outside the documented
   // three must keep it rather than be coerced into a replayed 422.
   const nulls: [string, string, unknown][] = [
-    ["no row on this key", "nothing was closed by a refusal charge", null],
-    ["a row that is not a refusal charge", "an operator-side settle leaves no reason — it keeps its 409", "settled"],
-    ["an unrecognised reason", "there is no copy to reconstruct a 422 body from", "quota_exceeded"],
+    ["no row on this key", "nothing was closed by a refusal charge", []],
+    [
+      "a row that is not a refusal charge",
+      "an operator-side settle leaves no reason — it keeps its 409",
+      [{ refusal_reason: null, balance: 4 }],
+    ],
+    [
+      "an unrecognised reason",
+      "there is no copy to reconstruct a 422 body from",
+      [{ refusal_reason: "quota_exceeded", balance: 4 }],
+    ],
   ];
 
   it.each(nulls)("returns null for %s: %s", async (_label, _why, data) => {
