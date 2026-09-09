@@ -51,8 +51,10 @@ prerequisites for the Astro-on-Cloudflare-Workers path (Astro ≥ 6.0.0, adapter
 ≥ 10.40.0).
 
 **`wrangler.jsonc`** currently sets `"main": "@astrojs/cloudflare/entrypoints/server"` — the package
-entrypoint directly. Sentry's server instrumentation requires that to become a local file that wraps
-the same handler.
+entrypoint directly, and it **stays that way**. From 10.40 `@sentry/astro` detects the Cloudflare
+adapter and installs a Vite plugin that wraps the built Worker entry with `withSentry` itself, so a
+hand-written wrapper file would be a second, competing instrumentation path rather than the required
+one.
 
 ## Desired End State
 
@@ -61,9 +63,11 @@ not determine reaches the operator as a notification, without anyone going looki
 the integration suite and in an e2e run, nothing is sent at all — and that is guaranteed by the absence
 of a DSN rather than by a runtime flag.
 
-Verify by: deploying with the Worker secret set, triggering one deliberate event, and seeing it arrive
-in Sentry grouped under its own issue with a notification; then confirming that a local `npm run dev`,
-`npm test`, `npm run test:integration` and `npm run test:e2e` produce no Sentry traffic.
+Verify by: deploying with the Worker secret set, triggering **one deliberate event per runtime** — the
+two initialise independently, so one event proves one of them and says nothing about the other — and
+seeing both arrive in Sentry, each grouped under its own issue, with a notification; then confirming
+that a local `npm run dev`, `npm test`, `npm run test:integration` and `npm run test:e2e` produce no
+Sentry traffic.
 
 ### Key Discoveries:
 
@@ -97,14 +101,49 @@ in Sentry grouped under its own issue with a notification; then confirming that 
 - Alerting on product metrics (the PRD's 75% "good enough" criterion is a different kind of measurement
   and a roadmap-wide open question).
 - Committing the Sentry MCP entry to `.mcp.json` — it is installed at user scope only (decision D7).
-- Promoting the remaining console sites (`middleware.ts:53`, `summaries.astro:31`,
-  `src/pages/api/summaries/index.ts:40`, `[id].ts:69`, `metadata.ts:209`, `generate.ts:473`
-  duplicate-transcript-fetch). They are read-path or informational; leaving them out is the calibration
-  decision, not an oversight.
+- Promoting the console sites listed as **excluded** in the Promotion Roster below. Leaving each of them
+  out is the calibration decision, not an oversight — which is why every one of them is named with its
+  reason rather than passed over in silence.
 - Replacing any `console.*` call. Every promoted site keeps its console line — Workers Logs stays the
   forensic fallback, and Sentry treats console output as breadcrumbs on other events.
 - Changing any event's payload shape, key or wording. `BUDGET_EVENT` and `BudgetThresholdEvent` are
   unchanged; this is a routing change.
+
+## Promotion Roster
+
+Every operator-relevant `console.error` / `console.warn` in `src/` outside the seam, classified. An
+implementer should not have to guess whether an unlisted site was considered; a future site is added
+here before it is promoted or dismissed.
+
+**Promoted — money integrity (Phase 4)**
+
+| Site | Key | Why it is signal |
+| --- | --- | --- |
+| `credits.ts:300,315,320` | `[charge-ambiguous:*]` | The app cannot tell whether a credit moved; only an operator can reconcile the row. |
+| `credits.ts:438,447` (`CREDIT_LEAK`) | `[credit-leak:refund-failed]`, `[credit-leak:refund-threw]` | A refund that failed leaves the reservation open — the user is out a credit until someone reconciles. The message already says so. |
+| `credits.ts:378,397` (`get_refusal_replay`) | `[replay-read:rpc-error]`, `[replay-read:threw]` | Fails **open**: both paths return `null`, which reads as "no replay", so a retry of an already-charged refusal can be charged again. |
+| `generate.ts:909,922,1058,1072,1096` | `[paid-path:*]` | Charge and delivery can end up out of step. |
+
+**Promoted — silent degradation (Phase 5)**
+
+| Site | Key | Why it is signal |
+| --- | --- | --- |
+| `transcript-cache.ts`, `metadata-cache.ts`, `transcript-guard.ts` (14 sites) | `[<module>:<operation>]` | A broken cache re-pays both vendors on every request while the app keeps working. |
+| `supadata-ledger.ts:180,184`, `supadata-budget.ts:586,596,600`, `generation-lock.ts:62,68,72` | `[<module>:<operation>]` | Bookkeeping failures make the budget guard's own numbers untrustworthy. |
+| `generate.ts:194` (`acquireGenerationLease failed`) | `[generation-lock:acquire-threw]` | Same lock family; a lease that cannot be taken fails every generation for that user. |
+| `generate.ts:681` (`recordTranscriptAttempt failed`) | `[transcript-guard:record-threw]` | Same guard family; the rate limiter in front of the unbounded fetch is down. |
+
+**Excluded, deliberately**
+
+| Site | Why it is not worth an alert |
+| --- | --- |
+| `credits.ts:291` (`REFUSAL_NOT_CHARGED`) | Proves no debit landed — there is nothing to reconcile. |
+| `generate.ts:512`, `:534` | Fail **closed** before any charge or vendor call; nothing is debited or fetched, and the same database trouble surfaces through the promoted post-charge siblings. |
+| `generate.ts:706` (`fetchTranscript failed`) | A vendor outage the user is told about and is not charged for; during an incident it is the highest-volume line in the app, which is exactly what erodes trust in the inbox. |
+| `generate.ts:978` (`fetchVideoMetadata threw despite being total`) | Degrades presentation only — the summary is still delivered and the credit outcome is unaffected. |
+| `generate.ts:473` (`[duplicate-transcript-fetch]`) | Informational by construction; it already says nothing failed. |
+| `metadata.ts:209` | Same presentation-only degradation as `:978`, one layer down. |
+| `middleware.ts:53`, `summaries.astro:31`, `api/summaries/index.ts:40`, `[id].ts:69` | Read-path failures the user sees immediately and retries; no money and no hidden state. |
 
 ## Implementation Approach
 
@@ -131,13 +170,20 @@ never charged for work they did not receive. `reportEvent` must return synchrono
 `captureMessage` is already non-blocking (it enqueues), but the wrapper cannot depend on that staying
 true across SDK versions.
 
-**Ordering within Phase 2.** `wrangler.jsonc`'s `main` and the new wrapper file must land in the same
-commit — a `main` pointing at a file that does not exist breaks `npm run dev`, `npm run preview` and
-therefore the whole e2e suite, which builds and starts its own server.
+**One instrumentation path, not two.** `@sentry/astro` owns both runtimes: registering `sentry()`
+injects the client and server init files and wraps the Worker entry through its Cloudflare Vite plugin.
+This plan therefore adds `sentry.server.config.ts` and `sentry.client.config.ts` and changes
+`wrangler.jsonc` not at all. A hand-written `withSentry` wrapper on top of that double-wraps the handler
+and gives the build-time public DSN a second, unintended way to initialise server reporting.
 
-**The e2e runner will exercise the new entrypoint.** `playwright.config.ts` builds the app and starts
-`preview` with `CLOUDFLARE_ENV=e2e`; the wrapper must be a no-op when `env.SENTRY_DSN` is undefined,
-which is the state `.dev.vars.e2e` guarantees.
+**The server DSN has to be observed arriving at runtime.** The injected `sentry.server.config.ts` runs
+inside workerd, where a Worker secret is a runtime binding rather than a build-time constant. Phase 2
+does not get to assume `astro:env/server` resolves there — it has to see it in a real `npm run preview`
+boot with a scratch DSN before Phase 6 depends on it.
+
+**The e2e runner will exercise the instrumented entrypoint.** `playwright.config.ts` builds the app and
+starts `preview` with `CLOUDFLARE_ENV=e2e`; the injected server init must be a no-op when `SENTRY_DSN`
+is undefined, which is the state `.dev.vars.e2e` guarantees.
 
 ---
 
@@ -185,10 +231,35 @@ vendor non-credentials.
 **Contract**: `.env.example` gains both keys **commented out**, with a line saying local development
 deliberately does not report and that setting them locally will file real issues. `.dev.vars.e2e` gains
 a comment block in its "paid vendors" spirit explaining that no DSN appears here on purpose, and that
-because the file replaces `.dev.vars` wholesale an e2e run cannot inherit one. `README.md`'s
-environment-variable table gains both rows, marked optional, with the production-only note.
+because the file replaces `.dev.vars` wholesale an e2e run cannot inherit one. `README.md` needs more than two table rows, because this change
+**invalidates statements it already makes**: “All variables … are treated as server-only secrets — they
+are never exposed to the client” is false of `PUBLIC_SENTRY_DSN`, which is inlined into the browser
+bundle by design, and “Set all five runtime secrets” becomes a count of six. So: the environment-variable
+table gains both rows marked optional; the paragraph introducing it gains the public/server distinction;
+the deployment section's Worker-secret list gains `SENTRY_DSN` (and only that one — the public DSN is a
+*build* input, not a Worker secret); and the CI repository-secret table gains `PUBLIC_SENTRY_DSN`, used
+by the deploy job's build step only. A runbook that contradicts itself is worse than one that is
+silent.
 
-#### 4. Sentry MCP (local, not committed)
+#### 4. E2E environment guard
+
+**File**: `playwright.config.ts`
+
+**Intent**: Make the e2e suite's silence a property of the runner rather than of a developer's luck.
+`.dev.vars.e2e` governs the Worker's bindings; it does **not** govern the client *build*, which is what
+`PUBLIC_SENTRY_DSN` is inlined into. `npm run test:e2e` starts Node with `--env-file-if-exists=.env`,
+and Playwright hands the parent `process.env` to the `webServer` child — so a developer who has ever put
+a DSN in `.env` builds a browser bundle that reports, and `src/test/fetch-firewall.ts` never sees it
+because the app is a different process.
+
+**Contract**: A third config-load guard beside the loopback and `.dev.vars.e2e` checks — same placement,
+for the same reason: they run while Playwright loads the file, before `webServer` starts, and
+`globalSetup` is too late. It **throws** when either `SENTRY_DSN` or `PUBLIC_SENTRY_DSN` is set,
+naming the variable and saying the run would otherwise file real issues against the operator's project.
+Fail closed: refuse to start rather than reconfigure quietly. `webServer.env` additionally pins both to
+`""` so the child cannot inherit one by some other route.
+
+#### 5. Sentry MCP (local, not committed)
 
 **File**: `context/changes/error-monitoring/docs/sentry-mcp.md` (new)
 
@@ -210,6 +281,8 @@ exact user-scope install command. `.mcp.json` is **not** modified.
 - Linting passes: `npm run lint`
 - Build succeeds with no DSN set: `npm run build`
 - No DSN is inlined anywhere in the output: `grep -r "ingest.*sentry.io" dist/` returns nothing
+- The e2e runner refuses to start with a DSN present: `PUBLIC_SENTRY_DSN=x npm run test:e2e` exits
+  non-zero before the build, and the same holds for `SENTRY_DSN`
 
 #### Manual Verification:
 
@@ -223,12 +296,13 @@ for manual confirmation from the human before proceeding to the next phase.
 
 ---
 
-## Phase 2: Server transport — wrap the Cloudflare entrypoint
+## Phase 2: Server transport — instrument the Worker
 
 ### Overview
 
-Instrument the Worker: `Sentry.withSentry` around `@astrojs/cloudflare`'s server handler, with data
-collection tightened so the SDK cannot send more than decision D2 granted. Still no seam routing and
+Instrument the Worker through `@sentry/astro`'s own Cloudflare path — the integration wraps the
+adapter's handler with `withSentry` for us — with data collection tightened so the SDK cannot send more
+than decision D2 granted. Still no seam routing and
 still no DSN in any environment — this phase's whole claim is "the app builds, boots and behaves
 identically."
 
@@ -240,23 +314,31 @@ identically."
 
 **Intent**: Add the two Sentry packages the Astro-on-Cloudflare-Workers path requires.
 
-**Contract**: `@sentry/astro` and `@sentry/cloudflare`, both `>= 10.40.0` (the documented minimum for
-this combination), as runtime dependencies.
+**Contract**: `@sentry/astro` and `@sentry/cloudflare` as runtime dependencies, **on the same v10
+release**, pinned with this repo's usual caret (`^10.x`) against a version verified at install time to
+be **≥ 10.54**. Two separate bounds are at work and the higher one wins: 10.40 is the documented minimum
+for Astro-on-Cloudflare-Workers *support*, but the `dataCollection` object §2 specifies exactly did not
+land until 10.54 — a 10.4x install would type-check and then silently keep the permissive defaults this
+plan exists to tighten. The caret is also what bounds the range below 11: an open `>=` would let a
+breaking major in on a routine `npm install`. Confirm the resolved version and that `dataCollection` is
+in its types before moving on.
 
-#### 2. Worker entry wrapper
+#### 2. Server initialisation
 
-**File**: `src/sentry-worker-entry.ts` (new)
+**File**: `sentry.server.config.ts` (new, project root)
 
-**Intent**: Give the Worker a Sentry-instrumented entrypoint that is a complete no-op when no DSN is
-present, and that never sends session cookies or request bodies.
+**Intent**: Give the Worker its Sentry initialisation through the file `@sentry/astro` injects for the
+Cloudflare adapter — a complete no-op when no DSN is present, and one that never sends session cookies
+or request bodies.
 
-**Contract**: Default-exports `Sentry.withSentry(configFn, handler)` where `handler` is the default
-import of `@astrojs/cloudflare/entrypoints/server` and `configFn` is `(env) => ({ … })`. The config is
-where decision D8 lives, so it is specified exactly:
+**Contract**: Calls `Sentry.init` with the config below. The DSN comes from the **server** value only —
+`SENTRY_DSN` via `astro:env/server`, never `PUBLIC_SENTRY_DSN` — so a browser DSN present at build time
+cannot switch the Worker on. A missing DSN must leave the SDK uninitialised rather than throw. The
+config is where decision D8 lives, so it is specified exactly:
 
 ```ts
 {
-  dsn: env.SENTRY_DSN,          // undefined ⇒ SDK disabled; this is the CI/e2e/dev guarantee
+  dsn: SENTRY_DSN,              // undefined ⇒ SDK disabled; this is the CI/e2e/dev guarantee
   environment: "production",
   tracesSampleRate: 0,          // performance tracing is explicitly out of scope
   dataCollection: {
@@ -271,25 +353,35 @@ where decision D8 lives, so it is specified exactly:
 
 #### 3. Worker configuration
 
-**File**: `wrangler.jsonc`
+**File**: `wrangler.jsonc` — **unchanged**, deliberately.
 
-**Intent**: Point the Worker at the wrapper instead of the package entrypoint.
+**Intent**: Record the non-change, because the obvious move is the wrong one.
 
-**Contract**: `main` changes from `"@astrojs/cloudflare/entrypoints/server"` to the new file. Must land
-in the same commit as the file itself — a dangling `main` breaks `dev`, `preview` and the whole e2e
-suite.
+**Contract**: `main` stays `"@astrojs/cloudflare/entrypoints/server"`. The integration's Cloudflare Vite
+plugin wraps that entry with `withSentry` at build time; pointing `main` at a hand-written wrapper as
+well would instrument the handler twice and open a second initialisation path.
 
 #### 4. Astro integration
 
 **File**: `astro.config.mjs`
 
-**Intent**: Register `@sentry/astro` so the client bundle can be instrumented in Phase 3, without it
-also injecting a Node-based server SDK — workerd is not Node, and the server side is already handled by
-the entrypoint wrapper.
+**Intent**: Register `@sentry/astro` — the single owner of both runtimes' instrumentation on this stack.
 
-**Contract**: `sentry()` added to `integrations`. Source-map upload stays off unless `SENTRY_AUTH_TOKEN`
-is present in the build environment, so a contributor build without it still succeeds; if wired, `org`
-and `project` come from the same place.
+**Contract**: `sentry()` added to `integrations`, with both runtimes enabled (its default), so it injects
+the server config from §2 and the client config from Phase 3 §2 and installs the Cloudflare entry
+wrapper. Source maps are §5, not a default we inherit.
+
+#### 5. Source maps
+
+**File**: `astro.config.mjs`
+
+**Intent**: Keep a contributor build without Sentry credentials working, and keep hidden source-map
+generation from switching on by accident.
+
+**Contract**: `sourcemaps.disable` is set **explicitly** from whether the build environment carries
+`SENTRY_AUTH_TOKEN` — absent ⇒ `disable: true`, so nothing is uploaded and no hidden maps are emitted;
+present ⇒ upload enabled, with `org` and `project` from the same place. The integration's default is not
+relied on.
 
 ### Success Criteria:
 
@@ -301,7 +393,9 @@ and `project` come from the same place.
 - Build succeeds: `npm run build`
 - Unit suite passes: `npm test`
 - Integration suite passes: `npm run test:integration`
-- E2e suite passes against the new entrypoint: `npm run test:e2e`
+- E2e suite passes against the instrumented Worker: `npm run test:e2e`
+- Both Sentry packages resolve to the same v10 release, ≥ 10.54, and their types carry
+  `dataCollection`: `npm ls @sentry/astro @sentry/cloudflare`
 - Deploy is still valid without deploying: `npx wrangler deploy --dry-run`
 
 #### Manual Verification:
@@ -309,6 +403,9 @@ and `project` come from the same place.
 - `npm run dev` boots and the app behaves identically with no DSN set
 - Generating a summary locally still works end to end
 - No Sentry network request is visible in the browser devtools Network tab
+- With a scratch `SENTRY_DSN` in `.dev.vars` and the SDK's `debug` on, `npm run preview` shows the
+  injected server config initialising with that value — proving a Worker secret reaches it at runtime,
+  which every later phase assumes. The scratch value is removed immediately afterwards
 
 **Implementation Note**: After completing this phase and all automated verification passes, pause here
 for manual confirmation from the human before proceeding to the next phase.
@@ -331,10 +428,26 @@ load-bearing.
 **File**: `src/lib/services/reporting.ts`
 
 **Intent**: Add Sentry forwarding beside the existing console output, without changing the function's
-signature, its severity rule, or any event's key or payload.
+signature, its severity rule, or any event's key or payload — and split *forwarding* from *logging*, so
+the sites promoted in Phases 4–5 (which already write their own console line) can forward without
+logging a second one.
 
-**Contract**: `reportEvent(key, severity, payload)` keeps its signature and both console branches. After
-logging, it forwards to Sentry with:
+**Contract**: Two exports, one transport.
+
+- `captureEvent(key, severity, payload)` — **new, sink only**. Forwards to Sentry and writes nothing to
+  the console. This is what Phases 4–5's promoted sites call, immediately after their existing
+  `console.*` line, so console output stays byte-for-byte what it is today instead of doubling.
+- `reportEvent(key, severity, payload)` — unchanged signature and both console branches, then calls
+  `captureEvent`. The two existing families keep behaving exactly as they do.
+
+Both carry the same never-throws / never-blocks contract; `captureEvent` is the only place the transport
+lives.
+
+**The sink is injected through one named seam**, not by mocking Sentry: the module holds a
+module-scoped `sink` that defaults to the lazy runtime-split loader below, plus an exported
+`setReportingSink(sink | null)` — test-only by convention, documented as such, and `null` restoring the
+default. This is what `reporting.test.ts` drives, and it is also what Phases 4–5's promotion tests use to
+observe forwarding without touching Sentry or `fetch`. Forwarding is done with:
 
 - **Level mapping**: `warn` → Sentry `"warning"`; everything else → `"error"`. Same rule as the console
   branch, so the two can never disagree.
@@ -344,14 +457,35 @@ logging, it forwards to Sentry with:
 - **`fingerprint: [key, severity]`**: one condition, one issue, regardless of the figures. This is the
   mechanism decision D3 rests on — every event is still sent, so the dashboard shows the full stream,
   but the operator's inbox gets one notification per condition (Phase 6 sets the rules).
+  **The corollary binds Phases 4 and 5**: since the payload does *not* participate in the fingerprint,
+  two failures an operator would act on differently must arrive under **different keys**. A shared key
+  plus a payload discriminator collapses them into one issue — which is why every promoted site below
+  gets its own `[family:stage]` key rather than a family key and a payload field.
 - **Fire-and-forget**: never `await`ed; a synchronous throw and a rejected promise are both swallowed.
 - **No `astro:env` import** — the DSN is supplied at `init` time by the two runtime entrypoints, never
   here, so this module stays reachable from the `unit` Vitest project.
-- **Runtime split**: `import.meta.env.SSR` selects a **dynamic** import of a server sink
-  (`@sentry/cloudflare`) or a client sink (`@sentry/astro`). Both arms dynamic — a static import on
-  either one defeats the tree-shake and lands the Worker SDK in the client bundle.
+- **Runtime split**: `import.meta.env.SSR` selects a **dynamic** import of a server sink module
+  (wrapping `@sentry/cloudflare`) or a client sink module (wrapping `@sentry/astro`). Both arms
+  dynamic — a static import on either one defeats the tree-shake and lands the Worker SDK in the client
+  bundle.
 
-#### 2. Browser initialisation
+#### 2. The two sink modules
+
+**Files**: `src/lib/services/reporting-sink.server.ts`, `src/lib/services/reporting-sink.client.ts`
+(both new)
+
+**Intent**: Give each arm of the split a module of its own, so the tree-shake has something to cut and
+so bundle purity has something **the app owns** to grep for. Rollup rewrites and drops package
+specifiers, so `grep "@sentry/cloudflare" dist/_astro/` can come back clean from a bundle that contains
+the Worker SDK — which is why the existing fake-LLM proof greps `E2E_FAKE_SUMMARIZER`, an application
+sentinel, and not a package name.
+
+**Contract**: Each module exports the same single-function sink interface (message, level, fingerprint,
+context) over its own SDK, and each carries a distinct literal sentinel constant —
+`SENTRY_WORKER_SINK` and `SENTRY_BROWSER_SINK` — referenced at module scope so no minifier can drop it.
+Those two strings are what Phase 3's purity criterion greps, in both directions.
+
+#### 3. Browser initialisation
 
 **File**: `sentry.client.config.ts` (new, project root)
 
@@ -362,7 +496,7 @@ logging, it forwards to Sentry with:
 integrations off, and the D8 `dataCollection` object mirrored. A missing DSN must leave the SDK
 uninitialised rather than throw.
 
-#### 3. Seam tests
+#### 4. Seam tests
 
 **File**: `src/lib/services/reporting.test.ts` (new)
 
@@ -370,10 +504,26 @@ uninitialised rather than throw.
 is the contract that protects the paid path, so it is the one thing here worth testing directly.
 
 **Contract**: Cases that must each catch a different regression — a sink that throws synchronously does
-not propagate; a sink that returns a rejected promise does not produce an unhandled rejection; a sink
+not propagate; a sink that returns a rejected promise does not produce an unhandled rejection;
+`captureEvent` writes nothing to the console while `reportEvent` still writes exactly one line; a sink
 that never settles does not delay `reportEvent`'s return; no initialised client is a silent no-op; the
-`warn` → `warning` / other → `error` mapping; and the fingerprint is `[key, severity]` and stable across
-differing payloads. The sink is the injected seam — do not stub `fetch` or Sentry's transport.
+`warn` → `warning` / other → `error` mapping; and the fingerprint is stable across differing payloads
+while distinct keys stay distinct — table-driven over the promoted key set, so a future site that reuses
+a sibling's key fails here rather than silently merging two issues in the dashboard. The sink is the injected seam — do not stub `fetch` or Sentry's
+transport.
+
+#### 5. Browser-seam e2e coverage
+
+**Files**: `tests/e2e/fixtures/account.ts` (or a sibling fixture), one existing spec
+
+**Intent**: The browser half of the no-outbound promise is currently asserted by nobody: no spec
+exercises the `[unsupported-feature]` seam, and browser traffic is invisible to `fetch-firewall.ts`.
+Phase 1's guard stops a DSN from reaching the build; this observes the consequence.
+
+**Contract**: A Playwright route handler installed for every test **aborts** requests to Sentry's
+ingest hosts (`*.ingest.sentry.io`, `*.sentry.io`) and counts them; a run with a non-zero count fails.
+One existing spec additionally clicks the top-up button so the browser seam is actually walked rather
+than merely unused — the assertion is the unchanged Polish notice plus a zero attempt count.
 
 ### Success Criteria:
 
@@ -383,7 +533,9 @@ differing payloads. The sink is the injected seam — do not stub `fetch` or Sen
 - Linting passes: `npm run lint`
 - Unit suite passes, including the new seam tests: `npm test`
 - Build succeeds: `npm run build`
-- Client bundle purity: `grep -rl "@sentry/cloudflare" dist/_astro/` returns nothing
+- Client bundle purity, proved in both directions: `grep -rl SENTRY_WORKER_SINK dist/_astro/` returns
+  nothing **and** `grep -rl SENTRY_WORKER_SINK dist/server/` finds it — an absence-only grep also
+  passes when the sentinel is misspelled
 - Integration suite passes: `npm run test:integration`
 - E2e suite passes: `npm run test:e2e`
 
@@ -402,9 +554,10 @@ for manual confirmation from the human before proceeding to the next phase.
 
 ### Overview
 
-Route the failures that mean a user may have paid for work they did not receive — including the
-ambiguous-charge case, which carries account identifiers as the deliberate, documented exception
-decision D2 granted.
+Route the failures that mean a user may have paid for work they did not receive, or may pay twice for
+work they already paid for — including the cases that carry account identifiers as the deliberate,
+documented exception decision D2 granted. The Promotion Roster above is the authority on which sites
+these are.
 
 ### Changes Required:
 
@@ -417,21 +570,36 @@ doc comment currently states "No user identifiers in the payload" as a property 
 phase that is a property of _most_ events, with one named exception.
 
 **Contract**: A module-level doc comment stating: the seam's default is no user identifiers; the
-`[charge-ambiguous]` event is the single exception; the reason (the event is only actionable because it
-names the row to reconcile); and the retention position (identifiers are opaque UUIDs, never emails, and
-are subject to the Sentry project's retention window). Any future exception must be added here.
+**reconciliation family** is the exception — `[charge-ambiguous:*]`, `[credit-leak:*]` and
+`[replay-read:*]`, and nothing else; the reason (each is only actionable because it names the row an
+operator has to go and fix); and the retention position (identifiers are opaque UUIDs, never emails, and
+are subject to the Sentry project's retention window). Any future exception must be added here, and the
+Phase 4 §4 payload field-set test is what stops one being added anywhere else.
 
-#### 2. Ambiguous charge
+#### 2. Credit-integrity events
 
 **File**: `src/lib/services/credits.ts`
 
-**Intent**: Promote the three `REFUSAL_CHARGE_AMBIGUOUS` markers onto the seam, so the one event whose
-resolution requires an operator to reconcile a specific ledger row actually reaches the operator.
+**Intent**: Promote the events whose resolution requires an operator to reconcile a specific ledger row:
+the three `REFUSAL_CHARGE_AMBIGUOUS` markers, the two `CREDIT_LEAK` sites, and the two replay-read
+failures.
 
-**Contract**: The sites at `:300`, `:315` and `:320` each additionally call `reportEvent` with a new key
-(e.g. `[charge-ambiguous]`), severity `error`, and a payload carrying `userId`, `requestId`,
-`refusalReason` and a short cause discriminator distinguishing the three (no row returned / unknown
-outcome / rejected promise). Console lines stay. `REFUSAL_NOT_CHARGED` (`:291`) is deliberately **not**
+**Contract**: The sites at `:300`, `:315` and `:320` each additionally call `captureEvent` at severity
+`error` under **its own** key in one family — `[charge-ambiguous:no-row]`,
+`[charge-ambiguous:unknown-outcome]`, `[charge-ambiguous:rejected]` — because the three causes are
+reconciled differently and the fingerprint is `[key, severity]`. The payload carries `userId`,
+`requestId` and `refusalReason`; it describes the row, it does not do the discriminating.
+
+`CREDIT_LEAK` (`:438`, `:447`) routes the same way, under `[credit-leak:refund-failed]` and
+`[credit-leak:refund-threw]` at `error`, carrying `userId` and `reservationId` — the reservation is left
+open and only that pair identifies what to close. This is the strongest money event in the file: the
+message itself already tells an operator to reconcile, and until now it told only the log.
+
+`get_refusal_replay` (`:378`, `:397`) routes under `[replay-read:rpc-error]` and `[replay-read:threw]` at
+`error`, carrying `userId` and `requestId`. It is promoted because it fails **open**: both paths return
+`null`, the caller reads that as "no replay exists", and a retry of an already-charged refusal can
+therefore be charged a second time. A silent guard failure that costs a user money is precisely this
+plan's target. Console lines stay. `REFUSAL_NOT_CHARGED` (`:291`) is deliberately **not**
 promoted — it proves no debit landed, so nothing needs reconciling.
 
 #### 3. Paid-path integrity
@@ -443,10 +611,29 @@ out of step. `withSentry`'s automatic capture will not see these — they never 
 
 **Contract**: The five sites at `:909` (`begin_generation failed`), `:922` (`summarize failed`), `:1058`
 (`persist summary failed`), `:1072` (`persist summary skipped`) and `:1096` (`replayed summary could not
-be read back`) each additionally call `reportEvent` under one key (e.g. `[paid-path]`) at severity
-`error`, with a per-site discriminator in the payload so the fingerprint separates them. Console lines
+be read back`) each additionally call `captureEvent` at severity `error` under **its own** key in one
+family: `[paid-path:begin]`, `[paid-path:summarize]`, `[paid-path:persist]`,
+`[paid-path:persist-skipped]`, `[paid-path:replay-readback]`. Five stages an operator would act on
+differently are five issues; the payload carries the failing detail, never the discrimination. Console lines
 stay. No user identifiers beyond what decision D2 granted — these carry the failing stage, not the
 account.
+
+#### 4. Promotion tests
+
+**Files**: `src/lib/services/credits.test.ts` (existing),
+`src/pages/api/summaries/generate.int.test.ts` (existing)
+
+**Intent**: Make the promotion itself falsifiable. The existing suites assert business outcomes and
+silence console output, so today every `captureEvent` call in this phase could be deleted and every
+automated criterion would still pass — the deliverable would have no test at all.
+
+**Contract**: Install a recording sink via `setReportingSink` and drive each promoted branch through the
+failure seams those suites already have (`stubFailing` / `stubRejecting` for credits; the stubbed vendor
+`fetch` and mocked client constructors for generate). One parameterized case per promoted site,
+asserting three things and no more: the **key**, the **severity**, and the **payload field set**. The
+last one is the automated form of this phase's identifier rule — `[charge-ambiguous:*]` may carry
+`userId` / `requestId`, everything else may not, and an email address may never appear anywhere. Do not
+assert console copy and do not reach into Sentry.
 
 ### Success Criteria:
 
@@ -454,14 +641,16 @@ account.
 
 - Type checking passes: `npm run typecheck`
 - Linting passes: `npm run lint`
-- Unit suite passes: `npm test`
-- Integration suite passes, including the ambiguous-charge scenarios: `npm run test:integration`
+- Unit suite passes, including the credits promotion cases: `npm test`
+- Integration suite passes, including the ambiguous-charge scenarios and their promoted events:
+  `npm run test:integration`
+- Deleting any single promoted `captureEvent` call turns a test red — verified once, by hand, on one
+  site per family
 - Build succeeds: `npm run build`
 
 #### Manual Verification:
 
 - The amended seam contract reads as a granted exception, not as a contradiction of the old comment
-- No promoted payload carries an email address or any identifier beyond `userId` / `requestId`
 
 **Implementation Note**: After completing this phase and all automated verification passes, pause here
 for manual confirmation from the human before proceeding to the next phase.
@@ -482,30 +671,48 @@ that teaches you to ignore Sentry.
 #### 1. Cache and guard failures
 
 **Files**: `src/lib/services/transcript-cache.ts`, `src/lib/services/metadata-cache.ts`,
-`src/lib/services/transcript-guard.ts`
+`src/lib/services/transcript-guard.ts`, `src/pages/api/summaries/generate.ts`
 
 **Intent**: Report read/write failures against the caches that stand between the app and a paid vendor
 call, so a regression that silently disables caching is visible before the vendor bill is.
 
 **Contract**: Each existing `console.error` site (`transcript-cache.ts:117,138,215,222`,
-`metadata-cache.ts:75,94,131,135`, `transcript-guard.ts:92,110,154,158,187,191`) additionally calls
-`reportEvent` under a per-module key (so fingerprints separate by module) at severity `error`, with the
-operation name and the error message in the payload. **No user identifiers** — the D2 exception is
+`metadata-cache.ts:75,94,131,135`, `transcript-guard.ts:92,110,154,158,187,191`, plus
+`generate.ts:681` — `recordTranscriptAttempt failed`, under `[transcript-guard:record-threw]`, which
+belongs to this family even though it lives in the endpoint) additionally calls
+`captureEvent` at severity `error` under a `[<module>:<operation>]` key — so a failing cache *read* and a
+failing cache *write* are separate issues rather than one — with the error message in the payload. **No user identifiers** — the D2 exception is
 narrow and does not extend here. Console lines stay.
 
 #### 2. Ledger and lock failures
 
 **Files**: `src/lib/services/supadata-ledger.ts`, `src/lib/services/generation-lock.ts`,
-`src/lib/services/supadata-budget.ts`
+`src/lib/services/supadata-budget.ts`, `src/pages/api/summaries/generate.ts`
 
 **Intent**: Report the bookkeeping failures that make the budget guard's own numbers untrustworthy — a
 lost ledger flush or an unsettled reservation degrades the very data `reportBudgetThreshold` reasons
 about.
 
-**Contract**: `supadata-ledger.ts:180,184`, `generation-lock.ts:62,72` and the settle failures at
-`supadata-budget.ts:586,596,600` route at severity `error`; `generation-lock.ts:68` (a lease already
-swept as stale — expected under load) routes at `warn`. Reservation ids are operational identifiers, not
+**Contract**: Each site additionally calls `captureEvent` (never `reportEvent` — the console line is
+already there). `supadata-ledger.ts:180,184`, `generation-lock.ts:62,72` and the settle failures at
+`supadata-budget.ts:586,596,600` and `generate.ts:194` (`acquireGenerationLease failed`, under
+`[generation-lock:acquire-threw]`) route at severity `error`; `generation-lock.ts:68` (a lease already
+swept as stale — expected under load) routes at `warn`. Same key rule as §1: `[<module>:<operation>]`,
+one key per condition an operator would act on separately. Reservation ids are operational identifiers, not
 account identifiers, and may travel. Console lines stay.
+
+#### 3. Promotion tests
+
+**Files**: the existing colocated unit tests for the six touched modules
+
+**Intent**: Same falsifiability as Phase 4 §4, on a family whose failures are by definition invisible
+— a degradation event nobody asserts is a degradation event nobody will notice missing.
+
+**Contract**: A recording sink via `setReportingSink`, then one parameterized row per promoted site over
+the failure seams those tests already use, asserting **key**, **severity** (including
+`generation-lock.ts:68`'s `warn`, which is the row that proves the severity argument is real rather than
+a constant) and **payload field set** — no `userId` anywhere in this family. Reservation ids are
+operational and allowed.
 
 ### Success Criteria:
 
@@ -513,14 +720,15 @@ account identifiers, and may travel. Console lines stay.
 
 - Type checking passes: `npm run typecheck`
 - Linting passes: `npm run lint`
-- Unit suite passes: `npm test`
+- Unit suite passes, including the degradation promotion cases: `npm test`
+- No degradation payload carries a `userId` — asserted by the payload field-set cases, not by eye
 - Integration suite passes: `npm run test:integration`
 - Build succeeds: `npm run build`
 
 #### Manual Verification:
 
-- Each module's events fingerprint separately (distinct keys), so one failing cache does not mask another
-- No degradation payload carries a `userId`
+- Each promoted condition fingerprints separately (distinct keys), so one failing operation does not mask
+  another
 
 **Implementation Note**: After completing this phase and all automated verification passes, pause here
 for manual confirmation from the human before proceeding to the next phase.
@@ -568,31 +776,72 @@ so the `[supadata-budget]` / `warn` issue — which re-fires roughly once per re
 the budget stays high — notifies once and then accumulates silently under the fingerprint set in Phase 3.
 Confirm the spend cap from Phase 1 is active.
 
-#### 4. Live verification record
+#### 4. The two live smoke cases
+
+**Intent**: The Worker and the browser now initialise from different values delivered by different
+mechanisms (a Worker secret read at runtime; a repository secret inlined at build time). A single event
+therefore proves at most half the end state — and the half it does not prove is the half that fails
+silently.
+
+**Contract**: Two events, recorded separately.
+
+- **Browser** — no new code: sign in on production and click the top-up button. That walks the existing
+  `[unsupported-feature]` seam, which is exactly what the client transport is for.
+- **Worker** — a deliberate, explicitly temporary trigger: one `captureEvent("[smoke:worker]", "warn",
+  …)` guarded behind an exact query flag on the authenticated `GET /api/summaries` handler, so only a
+  signed-in operator who knows the flag can fire it and no user path can. It is deployed, fired once,
+  and **removed in the immediately following commit**; the record carries both the firing and the
+  revert sha, and the removal is re-verified against production after the revert deploys.
+
+A natural Worker event (a budget near-miss) is not a substitute: it cannot be summoned on demand, so a
+missing one is indistinguishable from a broken transport.
+
+#### 5. Live verification record
 
 **File**: `context/changes/error-monitoring/reviews/manual-verification.md` (new)
 
 **Intent**: The account wiring — right DSN, right project, grouping, alert rule — is only provable live,
 so the record is what gives that pass lasting value.
 
-**Contract**: Records the deliberate event fired, the issue it grouped under, whether the notification
-arrived, and the negative checks (a local run, an integration run and an e2e run each sending nothing).
+**Contract**: Records **both** smoke events — event id, issue, notification outcome, and for the Worker
+case the revert sha and the post-revert re-check — and and the negative checks — each of which is an observation rather than an absence
+of noticing:
+
+- **Integration**: the suite passes, and `fetch-firewall.ts` throws on any non-loopback `fetch`, so an
+  escaping event is a failing test by construction.
+- **Browser**: the e2e route handler from Phase 3 §5 counts zero aborted Sentry requests across a run
+  that walked the top-up seam.
+- **Worker**: the e2e `webServer` boot log (Playwright pipes it) shows the injected server config
+  declining to initialise for want of a DSN, and `grep -r "ingest.*sentry.io" dist/` — which covers
+  both the inlined client value and the `.dev.vars` wrangler bakes into `dist/server/` — returns
+  nothing.
+- **Local dev**: `npm run dev` with no DSN set, same two observations by hand.
 **No account identifiers**: describe the role ("the operator's account"), never an email or UUID — the
 repo is public, and this is a real-environment pass.
 
-#### 5. Documentation
+#### 6. Documentation
 
 **Files**: `README.md`, `CLAUDE.md`, `AGENTS.md`
 
 **Intent**: Leave the environment story and the alert set discoverable, and record that the DSN's absence
 outside production is a decision.
 
-**Contract**: `README.md` gains an "Error monitoring" section covering the two DSNs, why neither is set
-locally, what is alerted on and what is deliberately not monitored. `CLAUDE.md` and `AGENTS.md` gain a
-line on the seam's new role and the client/server bundle constraint — and must stay byte-identical to
-each other.
+**Contract**: `README.md` gains an "Error monitoring" section covering the two DSNs and their two
+delivery mechanisms, why neither is set locally (and that the e2e runner refuses to start if one is),
+what is alerted on, what is deliberately not monitored (§Promotion Roster's excluded column in one
+sentence), and the rollback — unset the Worker secret. The Phase 1 corrections to the env table,
+Worker-secret list and repository-secret table are assumed already landed; this section is the narrative
+half.
 
-#### 6. Tracker sync
+`CLAUDE.md` and `AGENTS.md` each gain the **same short paragraph** on the seam's new role, the
+`captureEvent` / `reportEvent` split, and the client/server bundle constraint. The requirement is that
+**that paragraph** stays identical between them — not the whole file: the two already diverge
+deliberately below the shared body (different headers, different 10xDevs lesson blocks), and demanding
+byte identity would mean overwriting one tool's guidance with the other's. Both files are gitignored, so
+neither edit reaches the repository: `README.md` is the only committed home for this, which is why its
+section carries the full story.
+
+#### 7. Tracker sync
 
 **Files**: `context/foundation/roadmap.md`, Linear MAR-24
 
@@ -612,9 +861,13 @@ in one edit; the Linear issue moves to the matching state with a comment summari
 
 #### Manual Verification:
 
-- A deliberate event fired in production arrives in Sentry under its own fingerprinted issue
-- The alert rule delivers exactly one notification for that issue, not one per event
-- `npm run dev` locally, `npm run test:integration` and `npm run test:e2e` each send nothing
+- The browser smoke event (a top-up click in production) arrives in Sentry under its own fingerprinted
+  issue
+- The Worker smoke event arrives under its own fingerprinted issue, and its temporary trigger is gone
+  from production afterwards — re-checked, not assumed
+- The alert rule delivers exactly one notification per issue, not one per event
+- Each of the four negative checks above is recorded with its observed result, not asserted from
+  absence of noticing
 - The verification record contains no account identifiers
 - The roadmap and Linear reflect the closed slice
 
@@ -626,15 +879,20 @@ in one edit; the Linear issue moves to the matching state with a comment summari
 
 - The seam's never-throws / never-blocks contract (`reporting.test.ts`, Phase 3): synchronous throw,
   rejected promise, never-settling sink, no client initialised.
-- Level mapping (`warn` → `warning`, everything else → `error`) and fingerprint stability across
-  differing payloads.
+- Level mapping (`warn` → `warning`, everything else → `error`); fingerprint stability across differing
+  payloads, and fingerprint *distinctness* across the promoted key set (table-driven).
 - Existing suites for the promoted modules must stay green — promotion adds a call, it does not change
   any outcome.
+- **Promotion assertions** (Phases 4–5): a recording sink installed through `setReportingSink`, driven
+  by each module's existing failure seams, one parameterized row per promoted site asserting key,
+  severity and payload field set. Without these the promotion has no oracle: the suites would pass just
+  as green with every `captureEvent` call deleted.
 
 ### Integration Tests:
 
 - The existing ambiguous-charge scenarios in `generate.int.test.ts` continue to pass with the promoted
-  reporting call in place.
+  reporting call in place, and additionally assert the event it forwards (key, severity, payload field
+  set) through the recording sink.
 - No new integration test is added for outbound suppression: `fetch-firewall.ts` already throws on every
   non-loopback fetch in that project, so an escaping event fails the suite by construction.
 
@@ -644,8 +902,9 @@ in one edit; the Linear issue moves to the matching state with a comment summari
    and no request reaches Sentry.
 2. Click the top-up button and confirm the `[unsupported-feature]` line still appears in the browser
    console with no network request.
-3. Deploy with the Worker secret set; fire one deliberate event; confirm it arrives, groups under its own
-   issue, and produces exactly one notification.
+3. Deploy with the Worker secret set; fire **both** smoke cases (browser top-up click, and the temporary
+   Worker trigger); confirm each arrives, groups under its own issue, and produces exactly one
+   notification. Then revert the Worker trigger, redeploy, and confirm it no longer fires.
 4. Re-run the e2e suite after deploying and confirm no events appear for it.
 
 ## Performance Considerations
@@ -657,8 +916,9 @@ islands, kept minimal by omitting the replay and tracing integrations.
 
 ## Migration Notes
 
-No database changes, no data migration. The one irreversible-feeling step is `wrangler.jsonc`'s `main`
-moving to a local wrapper; reverting is a one-line change back to the package entrypoint.
+No database changes, no data migration, and no `wrangler.jsonc` edit — the integration wraps the Worker
+entry at build time, so there is no entrypoint change to revert. Backing the whole thing out is removing
+`sentry()` from `astro.config.mjs` and deleting the two config files.
 
 Rollback at any point after Phase 6 is unsetting the Worker secret — the SDK disables itself with an
 undefined DSN, and the app returns to console-only reporting with no code change.
@@ -668,13 +928,15 @@ undefined DSN, and the app returns to console-only reporting with no code change
 - Roadmap slice: `context/foundation/roadmap.md` §S-13 (and §S-09 decisions D5 / D5b, which built this
   seam and deferred its receiver)
 - The seam: `src/lib/services/reporting.ts`, `src/lib/services/supadata-budget.ts:195-250`
+- The promotion inventory: §Promotion Roster above — the authority on which console sites are promoted
+  and which are deliberately left alone
 - Environment-isolation precedent: `astro.config.mjs:15-45`, `.dev.vars.e2e`, `src/test/fetch-firewall.ts`
 - Sentry MCP: `context/changes/error-monitoring/docs/sentry-mcp.md`
 - Linear: MAR-24
 
 ## Progress
 
-> Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles. See `references/progress-format.md`.
+> Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles. See `.claude/skills/10x-plan/references/progress-format.md`.
 
 ### Phase 1: Sentry project, env plumbing, and the MCP
 
@@ -684,16 +946,17 @@ undefined DSN, and the app returns to console-only reporting with no code change
 - [ ] 1.2 Astro type checking passes: `npm run typecheck:astro`
 - [ ] 1.3 Linting passes: `npm run lint`
 - [ ] 1.4 Build succeeds with no DSN set: `npm run build`
-- [ ] 1.5 No DSN is inlined anywhere in the output
+- [ ] 1.5 No DSN is inlined anywhere in the output: `grep -r "ingest.*sentry.io" dist/` returns nothing
+- [ ] 1.6 The e2e runner refuses to start with a DSN present: `PUBLIC_SENTRY_DSN=x npm run test:e2e` exits non-zero before the build, and the same holds for `SENTRY_DSN`
 
 #### Manual
 
-- [ ] 1.6 Sentry project exists; org slug, project slug and DSN recorded (not committed)
-- [ ] 1.7 A spend cap or client-key rate limit is set on the project
-- [ ] 1.8 The Sentry MCP is connected at user scope and `/mcp` lists its tools
-- [ ] 1.9 `.dev.vars.e2e` still contains no DSN, and its new comment says so explicitly
+- [ ] 1.7 Sentry project exists; org slug, project slug and DSN recorded (not committed)
+- [ ] 1.8 A spend cap or client-key rate limit is set on the project
+- [ ] 1.9 The Sentry MCP is connected at user scope and `/mcp` lists its tools
+- [ ] 1.10 `.dev.vars.e2e` still contains no DSN, and its new comment says so explicitly
 
-### Phase 2: Server transport — wrap the Cloudflare entrypoint
+### Phase 2: Server transport — instrument the Worker
 
 #### Automated
 
@@ -703,14 +966,16 @@ undefined DSN, and the app returns to console-only reporting with no code change
 - [ ] 2.4 Build succeeds: `npm run build`
 - [ ] 2.5 Unit suite passes: `npm test`
 - [ ] 2.6 Integration suite passes: `npm run test:integration`
-- [ ] 2.7 E2e suite passes against the new entrypoint: `npm run test:e2e`
-- [ ] 2.8 Deploy is still valid without deploying: `npx wrangler deploy --dry-run`
+- [ ] 2.7 E2e suite passes against the instrumented Worker: `npm run test:e2e`
+- [ ] 2.8 Both Sentry packages resolve to the same v10 release, ≥ 10.54, and their types carry `dataCollection`: `npm ls @sentry/astro @sentry/cloudflare`
+- [ ] 2.9 Deploy is still valid without deploying: `npx wrangler deploy --dry-run`
 
 #### Manual
 
-- [ ] 2.9 `npm run dev` boots and the app behaves identically with no DSN set
-- [ ] 2.10 Generating a summary locally still works end to end
-- [ ] 2.11 No Sentry network request is visible in the browser devtools Network tab
+- [ ] 2.10 `npm run dev` boots and the app behaves identically with no DSN set
+- [ ] 2.11 Generating a summary locally still works end to end
+- [ ] 2.12 No Sentry network request is visible in the browser devtools Network tab
+- [ ] 2.13 With a scratch `SENTRY_DSN` in `.dev.vars` and the SDK's `debug` on, `npm run preview` shows the injected server config initialising with that value — proving a Worker secret reaches it at runtime, which every later phase assumes. The scratch value is removed immediately afterwards
 
 ### Phase 3: Route the seam through Sentry
 
@@ -720,13 +985,13 @@ undefined DSN, and the app returns to console-only reporting with no code change
 - [ ] 3.2 Linting passes: `npm run lint`
 - [ ] 3.3 Unit suite passes, including the new seam tests: `npm test`
 - [ ] 3.4 Build succeeds: `npm run build`
-- [ ] 3.5 Client bundle purity: no client asset references the Worker SDK
+- [ ] 3.5 Client bundle purity, proved in both directions: `grep -rl SENTRY_WORKER_SINK dist/_astro/` returns nothing **and** `grep -rl SENTRY_WORKER_SINK dist/server/` finds it — an absence-only grep also passes when the sentinel is misspelled
 - [ ] 3.6 Integration suite passes: `npm run test:integration`
 - [ ] 3.7 E2e suite passes: `npm run test:e2e`
 
 #### Manual
 
-- [ ] 3.8 With no DSN set, the top-up button logs to the browser console and issues no network request
+- [ ] 3.8 With no DSN set, clicking the top-up button still logs to the browser console and issues no network request
 - [ ] 3.9 With no DSN set, a local generation still logs `[supadata-budget]` lines to the Worker console
 
 ### Phase 4: Promote the money events
@@ -735,14 +1000,14 @@ undefined DSN, and the app returns to console-only reporting with no code change
 
 - [ ] 4.1 Type checking passes: `npm run typecheck`
 - [ ] 4.2 Linting passes: `npm run lint`
-- [ ] 4.3 Unit suite passes: `npm test`
-- [ ] 4.4 Integration suite passes, including the ambiguous-charge scenarios: `npm run test:integration`
-- [ ] 4.5 Build succeeds: `npm run build`
+- [ ] 4.3 Unit suite passes, including the credits promotion cases: `npm test`
+- [ ] 4.4 Integration suite passes, including the ambiguous-charge scenarios and their promoted events: `npm run test:integration`
+- [ ] 4.5 Deleting any single promoted `captureEvent` call turns a test red — verified once, by hand, on one site per family
+- [ ] 4.6 Build succeeds: `npm run build`
 
 #### Manual
 
-- [ ] 4.6 The amended seam contract reads as a granted exception, not a contradiction
-- [ ] 4.7 No promoted payload carries an email address or any identifier beyond `userId` / `requestId`
+- [ ] 4.7 The amended seam contract reads as a granted exception, not as a contradiction of the old comment
 
 ### Phase 5: Promote the degradation events
 
@@ -750,14 +1015,14 @@ undefined DSN, and the app returns to console-only reporting with no code change
 
 - [ ] 5.1 Type checking passes: `npm run typecheck`
 - [ ] 5.2 Linting passes: `npm run lint`
-- [ ] 5.3 Unit suite passes: `npm test`
-- [ ] 5.4 Integration suite passes: `npm run test:integration`
-- [ ] 5.5 Build succeeds: `npm run build`
+- [ ] 5.3 Unit suite passes, including the degradation promotion cases: `npm test`
+- [ ] 5.4 No degradation payload carries a `userId` — asserted by the payload field-set cases, not by eye
+- [ ] 5.5 Integration suite passes: `npm run test:integration`
+- [ ] 5.6 Build succeeds: `npm run build`
 
 #### Manual
 
-- [ ] 5.6 Each module's events fingerprint separately, so one failing cache does not mask another
-- [ ] 5.7 No degradation payload carries a `userId`
+- [ ] 5.7 Each promoted condition fingerprints separately (distinct keys), so one failing operation does not mask another
 
 ### Phase 6: Turn it on — calibration, live verification, and docs
 
@@ -765,12 +1030,13 @@ undefined DSN, and the app returns to console-only reporting with no code change
 
 - [ ] 6.1 All three CI jobs pass on the PR: `ci`, `integration`, `e2e`
 - [ ] 6.2 Build succeeds locally without either DSN: `npm run build`
-- [ ] 6.3 No DSN in a non-deploy build's output
+- [ ] 6.3 No DSN in a non-deploy build's output: `grep -r "ingest.*sentry.io" dist/` returns nothing
 
 #### Manual
 
-- [ ] 6.4 A deliberate production event arrives in Sentry under its own fingerprinted issue
-- [ ] 6.5 The alert rule delivers exactly one notification for that issue, not one per event
-- [ ] 6.6 A local dev run, an integration run and an e2e run each send nothing
-- [ ] 6.7 The verification record contains no account identifiers
-- [ ] 6.8 The roadmap and Linear reflect the closed slice
+- [ ] 6.4 The browser smoke event (a top-up click in production) arrives in Sentry under its own fingerprinted issue
+- [ ] 6.5 The Worker smoke event arrives under its own fingerprinted issue, and its temporary trigger is gone from production afterwards — re-checked, not assumed
+- [ ] 6.6 The alert rule delivers exactly one notification per issue, not one per event
+- [ ] 6.7 Each of the four negative checks above is recorded with its observed result, not asserted from absence of noticing
+- [ ] 6.8 The verification record contains no account identifiers
+- [ ] 6.9 The roadmap and Linear reflect the closed slice

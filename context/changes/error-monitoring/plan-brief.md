@@ -37,21 +37,22 @@ being trusted.
 | ----------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | -------- |
 | Receiver                | Sentry                                                                       | D5b already priced and rejected the alternatives (Workers Logs and an operator script are pull-only; the webhook was dropped for this). | Roadmap  |
 | Transport scope         | Two — Worker **and** browser                                                 | The unsupported-feature family is emitted from an island, and server-only reporting would leave it invisible exactly as its own code comment warns. | Plan     |
-| Personal data           | Route `[charge-ambiguous]` **with** `userId` + `requestId`, as a named exception | The event is only actionable because it names the row to reconcile; the seam's no-identifiers contract is amended rather than contradicted. | Plan     |
+| Personal data           | Route the **reconciliation family** — `[charge-ambiguous:*]`, `[credit-leak:*]`, `[replay-read:*]` — with `userId` + `requestId`, as a named exception | Each is only actionable because it names the row an operator has to go and fix; the seam's no-identifiers contract is amended rather than contradicted, and a payload field-set test stops the exception spreading. | Plan     |
 | Severity routing        | Every seam severity alerts                                                   | Nothing the seam emits should have to be discovered by checking a dashboard.                                                  | Plan     |
 | Noise control           | Sentry-side `fingerprint` + first-seen/regression alert rules                 | Every event still reaches the dashboard, but one ongoing condition produces one notification — and no app code owns throttling state, which Workers isolates cannot share anyway. | Plan     |
-| Promotion set           | Paid-path integrity + cache/ledger/lock + automatic unhandled                | These are the failures that cost money or degrade silently; read-path and informational sites stay on the console.             | Plan     |
+| Promotion set           | A roster, not a rule of thumb: paid-path integrity, credit leaks, the fail-open replay read, cache/ledger/lock, plus automatic unhandled | These are the failures that cost money or degrade silently; every remaining console site is named in §Promotion Roster with the reason it stays on the console, so nothing is left to the implementer's guess. | Plan     |
 | DSN isolation           | Optional `astro:env` keys, absent everywhere but production                  | Matches how all five current secrets work, and fails closed by absence rather than by a flag someone must remember to set.     | Plan     |
 | Data collection         | Disable `userInfo`, cookies, HTTP bodies, GenAI; keep headers and query params | The SDK's `dataCollection` defaults are permissive, and this app's cookies are Supabase session tokens.                        | Plan     |
 | Tier & sampling         | Free tier, no sampling, `tracesSampleRate: 0`                                | A single-operator MVP should produce a handful of events a week; tracing is out of scope and costs both quota and bundle size. | Plan     |
 | Sentry MCP              | Installed at user scope, not committed to `.mcp.json`                        | Keeps the org and project slugs out of a public repo while still honouring the change note's ask.                              | Plan     |
-| Verification            | Unit tests on the seam contract + one deliberate live event                   | The code contract is cheap to test; the account wiring (DSN, grouping, alert rule) is only provable live.                      | Plan     |
+| Verification            | Unit tests on the seam contract, promotion assertions on every promoted site, and **two** deliberate live events — one per runtime | The code contract is cheap to test, and promotion without an oracle would pass just as green if every call were deleted; the account wiring is only provable live, and the two runtimes initialise independently so one event proves only one of them. | Plan     |
 
 ## Scope
 
-**In scope:** both DSNs as optional env values; `withSentry` around the Cloudflare entrypoint; browser
-SDK init; seam forwarding with a runtime split and fingerprints; promotion of the ambiguous-charge,
-paid-path, cache, ledger and lock sites; Sentry-side alert rules and spend cap; a live verification
+**In scope:** both DSNs as optional env values; `@sentry/astro` registered as the single owner of both
+runtimes, which wraps the Cloudflare entrypoint itself (`wrangler.jsonc` is deliberately untouched);
+server and client init files; seam forwarding with a runtime split and per-condition fingerprints;
+promotion of the reconciliation, paid-path, cache, ledger and lock sites; Sentry-side alert rules and spend cap; a live verification
 record; README/CLAUDE.md/AGENTS.md and tracker updates; a local Sentry MCP install documented in the
 change folder.
 
@@ -61,12 +62,19 @@ the read-path console sites; committing the MCP entry; changing any event's key,
 
 ## Architecture / Approach
 
-One seam, two sinks. `reportEvent` keeps its signature and its console output, then forwards to Sentry —
-choosing between `@sentry/cloudflare` and the browser SDK via `import.meta.env.SSR`, which Vite replaces
-with a literal per bundle, so the Worker SDK is tree-shaken out of the client build entirely (proved by
-grepping the built assets, the same way this repo already proves the fake summarizer cannot ship). The
-DSN never enters the seam — it is supplied by the two initialisation sites, which keeps the module
-reachable from the unit test project. Forwarding is fire-and-forget and swallows its own failure, because
+One seam, two sinks, and a split between logging and forwarding. `captureEvent` is sink-only — it is what
+the promoted sites call after their existing `console.*` line, so console output does not double — and
+`reportEvent` keeps its signature, its console output, and then calls `captureEvent`. The sink is chosen
+between a Worker module (`@sentry/cloudflare`) and a browser module (`@sentry/astro`) via
+`import.meta.env.SSR`, which Vite replaces with a literal per bundle, so the Worker SDK is tree-shaken out
+of the client build entirely. Each sink module carries its own literal sentinel, and the purity proof
+greps for that sentinel in **both** directions — absent from the client assets, present in the server
+bundle — because Rollup rewrites package specifiers, so an absence-only grep for a package name proves
+nothing. That is the same shape as this repo's existing proof that the fake summarizer cannot ship, which
+greps `E2E_FAKE_SUMMARIZER` rather than a module path. The DSN never enters the seam — it is supplied by
+the two initialisation sites, which keeps the module reachable from the unit test project — and the sink
+itself is swappable through one named `setReportingSink` seam, which is what both the contract tests and
+the promotion tests drive. Forwarding is fire-and-forget and swallows its own failure, because
 the seam sits immediately before the first paid vendor call in a request whose whole design is that a
 user is never charged for work they did not receive.
 
@@ -75,10 +83,10 @@ user is never charged for work they did not receive.
 | Phase                                        | What it delivers                                                        | Key risk                                                                                      |
 | -------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | 1. Project, env plumbing, MCP                | Sentry project with a spend cap; both DSNs declared optional; MCP local  | Forgetting the spend cap — a looping bug can burn a free quota in an hour                      |
-| 2. Server transport                          | `withSentry` around the Cloudflare entrypoint, data collection locked down | `wrangler.jsonc`'s `main` must land with its wrapper file or `dev`, `preview` and e2e all break |
+| 2. Server transport                          | `@sentry/astro` registered for both runtimes; injected server config with data collection locked down | The Worker secret must be **observed** reaching the injected config in a real workerd boot — assuming it does is how Phase 6 fails silently |
 | 3. Route the seam                            | Both runtimes forwarding; unit tests for the never-throws contract       | A static SDK import defeats the tree-shake and lands the Worker SDK in the client bundle        |
-| 4. Promote the money events                  | Ambiguous charge (with identifiers) + five paid-path sites               | The identifier exception must be documented, not just implemented                              |
-| 5. Promote the degradation events            | Cache, ledger and lock failures, fingerprinted per module                | ~20 sites — the phase most likely to produce noise if fingerprints are wrong                   |
+| 4. Promote the money events                  | The reconciliation family (ambiguous charge, credit leak, replay read) + five paid-path sites | The identifier exception must be documented and test-enforced, not just implemented |
+| 5. Promote the degradation events            | Cache, ledger and lock failures, fingerprinted per condition             | ~22 sites — the phase most likely to produce noise; a key per *module* rather than per *condition* silently merges issues |
 | 6. Turn it on: calibration, live proof, docs | Production secrets, alert rules, a recorded live pass, docs and trackers | The live half is manual and unrepeatable; without the written record it has no lasting value    |
 
 **Prerequisites:** S-09 and S-06 are done and live (they built the seam and the second event family). A
@@ -97,9 +105,18 @@ mostly operator work in the Sentry UI.
   be re-created by hand if the project were ever recreated.
 - **A missing DSN is silent by design.** A production deploy that forgets the Worker secret reports
   nothing and looks identical to a healthy one — hence the deliberate live event in Phase 6.
-- **`@sentry/astro`'s integration may try to contribute a Node-based server config**, which workerd cannot
-  run. Phase 2 assumes it can be registered for its client role alone; if not, the client transport may
-  need to be initialised without the integration.
+- **The integration owns both runtimes, so there is exactly one initialisation path — by choice.** The
+  rejected alternative was a hand-written `withSentry` entrypoint alongside it, which double-wraps the
+  handler and lets the build-time public DSN switch on server reporting independently of the Worker
+  secret. The residual risk is the opposite one: the injected server config's `astro:env/server` read has
+  to be observed working in workerd, which is a Phase 2 verification step rather than an assumption.
+- **An e2e run could inherit a developer's `PUBLIC_SENTRY_DSN`.** `.dev.vars.e2e` governs Worker
+  bindings, not the client *build*, and Playwright hands the parent environment to its `webServer`. A
+  fail-closed config-load guard now refuses to start such a run — that guard is why this is a controlled
+  risk rather than an open one.
+- **The Phase 6 Worker smoke trigger is temporary code in production.** It is flag-guarded on an
+  authenticated route and reverted in the following commit, with the revert re-verified against
+  production — but it exists, briefly, and the record has to show it gone.
 - **A public browser DSN is abusable** by third parties sending events against the quota. Mitigated by the
   spend cap, not eliminated.
 
