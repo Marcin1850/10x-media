@@ -942,19 +942,19 @@ undefined DSN, and the app returns to console-only reporting with no code change
 
 #### Automated
 
-- [ ] 1.1 Type checking passes: `npm run typecheck`
-- [ ] 1.2 Astro type checking passes: `npm run typecheck:astro`
-- [ ] 1.3 Linting passes: `npm run lint`
-- [ ] 1.4 Build succeeds with no DSN set: `npm run build`
-- [ ] 1.5 No DSN is inlined anywhere in the output: `grep -r "ingest.*sentry.io" dist/` returns nothing
-- [ ] 1.6 The e2e runner refuses to start with a DSN present: `PUBLIC_SENTRY_DSN=x npm run test:e2e` exits non-zero before the build, and the same holds for `SENTRY_DSN`
+- [x] 1.1 Type checking passes: `npm run typecheck`
+- [x] 1.2 Astro type checking passes: `npm run typecheck:astro`
+- [x] 1.3 Linting passes: `npm run lint`
+- [x] 1.4 Build succeeds with no DSN set: `npm run build`
+- [x] 1.5 No DSN is inlined anywhere in the output: `grep -r "ingest.*sentry.io" dist/` returns nothing
+- [x] 1.6 The e2e runner refuses to start with a DSN present: `PUBLIC_SENTRY_DSN=x npm run test:e2e` exits non-zero before the build, and the same holds for `SENTRY_DSN`
 
 #### Manual
 
-- [ ] 1.7 Sentry project exists; org slug, project slug and DSN recorded (not committed)
-- [ ] 1.8 A spend cap or client-key rate limit is set on the project
-- [ ] 1.9 The Sentry MCP is connected at user scope and `/mcp` lists its tools
-- [ ] 1.10 `.dev.vars.e2e` still contains no DSN, and its new comment says so explicitly
+- [x] 1.7 Sentry project exists; org slug, project slug and DSN recorded (not committed)
+- [x] 1.8 A spend cap or client-key rate limit is set on the project
+- [x] 1.9 The Sentry MCP is connected at user scope and `/mcp` lists its tools
+- [x] 1.10 `.dev.vars.e2e` still contains no DSN, and its new comment says so explicitly
 
 ### Phase 2: Server transport — instrument the Worker
 

@@ -111,17 +111,23 @@ The app is served at **http://localhost:4321**.
 
 ## Environment variables
 
-All variables are declared via Astro's `astro:env` schema (`astro.config.mjs`) and are treated as **server-only secrets** — they are never exposed to the client.
+All variables are declared via Astro's `astro:env` schema (`astro.config.mjs`), and all of them are **optional** — a build with none of them set still succeeds, and the app degrades with a notice rather than failing on a paid call.
 
-| Variable                    | Purpose                                                                               |
-| --------------------------- | ------------------------------------------------------------------------------------- |
-| `SUPABASE_URL`              | Supabase project URL                                                                  |
-| `SUPABASE_KEY`              | Supabase `anon` public key                                                            |
-| `SUPADATA_API_KEY`          | Supadata API key (transcripts)                                                        |
-| `OPENROUTER_API_KEY`        | OpenRouter API key (summarization)                                                    |
-| `SUPABASE_SERVICE_ROLE_KEY` | Service-role key — account deletion, summary generation, and offline operator scripts |
+Two contexts are in play, and the distinction is load-bearing. Everything except `PUBLIC_SENTRY_DSN` is a **server secret**: read at runtime through `astro:env/server`, never exposed to the client. `PUBLIC_SENTRY_DSN` is the one **client** value — it is inlined into the browser bundle at build time, on purpose, because a browser cannot report an error to Sentry without knowing where to send it. A DSN is a write-only ingest endpoint, not a credential, which is why it is the one value this project is willing to ship to the browser.
+
+| Variable                    | Context | Purpose                                                                               |
+| --------------------------- | ------- | ------------------------------------------------------------------------------------- |
+| `SUPABASE_URL`              | server  | Supabase project URL                                                                  |
+| `SUPABASE_KEY`              | server  | Supabase `anon` public key                                                            |
+| `SUPADATA_API_KEY`          | server  | Supadata API key (transcripts)                                                        |
+| `OPENROUTER_API_KEY`        | server  | OpenRouter API key (summarization)                                                    |
+| `SUPABASE_SERVICE_ROLE_KEY` | server  | Service-role key — account deletion, summary generation, and offline operator scripts |
+| `SENTRY_DSN`                | server  | Sentry DSN for the **Worker** runtime — a Worker secret, read at runtime              |
+| `PUBLIC_SENTRY_DSN`         | client  | Sentry DSN for the **browser** — a build input, inlined into the client bundle        |
 
 Copy `.env.example` to both `.env` and `.dev.vars` and fill in the values.
+
+Both Sentry entries are commented out in `.env.example` and should stay unset locally: an unset DSN leaves the SDK uninitialised, and that absence — not a runtime flag — is what keeps local development, both Vitest suites, the e2e run and CI from filing real issues against the operator's Sentry project. They may carry the same DSN string; there are two entries because they are delivered by two different mechanisms (a Worker secret versus a build-time input). See [CI](#ci) and [Deployment](#deployment).
 
 `SUPABASE_SERVICE_ROLE_KEY` bypasses RLS, so it is only ever read from `astro:env/server` inside server code (`src/lib/supabase-admin.ts`) and never reaches an island or the browser. It has three consumers:
 
@@ -310,7 +316,7 @@ npm run build
 npx wrangler deploy
 ```
 
-Set all five runtime secrets in your Cloudflare dashboard or via `npx wrangler secret put`:
+Set all six runtime secrets in your Cloudflare dashboard or via `npx wrangler secret put`:
 
 ```bash
 npx wrangler secret put SUPABASE_URL
@@ -318,7 +324,10 @@ npx wrangler secret put SUPABASE_KEY
 npx wrangler secret put SUPADATA_API_KEY
 npx wrangler secret put OPENROUTER_API_KEY
 npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+npx wrangler secret put SENTRY_DSN
 ```
+
+`PUBLIC_SENTRY_DSN` is deliberately **not** in that list. It is a client variable, so it is consumed by the _build_ and inlined into the browser bundle — setting it as a Worker secret would have no effect on what the browser ships. It belongs in the deploy job's build step instead, as a GitHub repository secret (see [CI](#ci)).
 
 `SUPABASE_SERVICE_ROLE_KEY` is required in production: `POST /api/account/delete` needs it to remove the `auth.users` record, and `POST /api/summaries/generate` needs it to reserve/refund credits around the paid call. Skip it and both endpoints return `503` (account deletion and summary generation are unavailable) — auth and browsing keep working, so the gap is easy to miss.
 
@@ -340,14 +349,17 @@ Locally, git hooks catch most of the `ci` job's checks earlier: **pre-commit** r
 
 Required repository secrets:
 
-| Secret                  | Used by     |
-| ----------------------- | ----------- |
-| `SUPABASE_URL`          | Build step  |
-| `SUPABASE_KEY`          | Build step  |
-| `CLOUDFLARE_API_TOKEN`  | Deploy step |
-| `CLOUDFLARE_ACCOUNT_ID` | Deploy step |
+| Secret                  | Used by                            |
+| ----------------------- | ---------------------------------- |
+| `SUPABASE_URL`          | Build step                         |
+| `SUPABASE_KEY`          | Build step                         |
+| `PUBLIC_SENTRY_DSN`     | Build step (`deploy` job **only**) |
+| `CLOUDFLARE_API_TOKEN`  | Deploy step                        |
+| `CLOUDFLARE_ACCOUNT_ID` | Deploy step                        |
 
 The build does not need the Supadata or OpenRouter keys — every variable in the `astro:env` schema is declared `optional`, so the build succeeds without them. Neither the `integration` nor the `e2e` job needs any of these repository secrets.
+
+`PUBLIC_SENTRY_DSN` reaches the **`deploy` job's build step and nothing else**, and that narrowness is the point: the `ci` and `e2e` jobs build without it, so the browser bundles they produce physically cannot carry a DSN and cannot report. The Worker's own `SENTRY_DSN` never appears here at all — it is a Cloudflare secret, set once with `wrangler secret put` (see [Deployment](#deployment)), not something the pipeline injects.
 
 ## Project status
 

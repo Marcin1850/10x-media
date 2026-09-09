@@ -35,6 +35,12 @@ const APP_URL = "http://localhost:4321";
  * 2. **The e2e secrets file.** `CLOUDFLARE_ENV=e2e` (below) makes wrangler prefer `.dev.vars.e2e`, but
  *    its fallback to `.dev.vars` is SILENT: delete the file and the run quietly regains the
  *    developer's real, billable vendor keys. This turns that fallback into a refusal to start.
+ * 3. **No Sentry DSN.** `.dev.vars.e2e` governs the Worker's bindings; it does NOT govern the client
+ *    BUILD, which is what `PUBLIC_SENTRY_DSN` is inlined into. `npm run test:e2e` starts Node with
+ *    `--env-file-if-exists=.env`, and Playwright hands the parent `process.env` to the `webServer`
+ *    child — so a developer who has ever put a DSN in `.env` would build a browser bundle that
+ *    reports, and `src/test/fetch-firewall.ts` would never see it because the app is a different
+ *    process. An e2e run is not an incident; it must not file issues against the operator's project.
  */
 assertLoopbackSupabaseUrl(process.env.SUPABASE_URL);
 
@@ -45,6 +51,24 @@ if (!existsSync(E2E_DEV_VARS)) {
       "falls back to `.dev.vars` — your REAL keys — without saying so when it is absent. The file is " +
       "committed and contains no secrets; restore it (`git checkout .dev.vars.e2e`) before running.",
   );
+}
+
+/**
+ * Guard 3. Fail CLOSED — refuse to start rather than quietly unset the variable, because a developer
+ * who set a DSN deliberately deserves to be told which run is being blocked and why, and because a
+ * silent reconfiguration is exactly the class of "the suite is fine, it just isn't testing what you
+ * think" that guards 1 and 2 exist to end. `webServer.env` pins both to `""` as well, so the child
+ * cannot inherit one by some other route; this check is what makes that pinning observable.
+ */
+for (const name of ["SENTRY_DSN", "PUBLIC_SENTRY_DSN"] as const) {
+  if (process.env[name]) {
+    throw new Error(
+      `\`${name}\` is set. The e2e suite refuses to run with a Sentry DSN in the environment: the ` +
+        "run would file real issues against the operator's Sentry project, mixed in with production " +
+        `incidents. Unset it for this run (it most likely comes from your \`.env\`, which ` +
+        "`npm run test:e2e` loads) and start again.",
+    );
+  }
 }
 
 export default defineConfig({
@@ -165,8 +189,15 @@ export default defineConfig({
      * deliberate non-credentials. There is intentionally NO `env.e2e` section in `wrangler.jsonc`:
      * absent, wrangler warns once and keeps the top-level config, so the bindings (ASSETS, KV, Images)
      * stay identical to a normal run; adding one would silently drop every non-inheritable binding.
+     *
+     * `SENTRY_DSN` / `PUBLIC_SENTRY_DSN` are pinned EMPTY. The config-load guard above already
+     * refuses to start when either is set, so this is belt-and-braces for the one thing that guard
+     * cannot see: something between config load and the child's spawn putting a DSN into the
+     * environment. Empty is as good as absent to the SDK (`dsn: ""` is falsy ⇒ uninitialised), and
+     * unlike the vendor keys these two are NOT overwritten by wrangler's read of `.dev.vars.e2e` —
+     * `PUBLIC_SENTRY_DSN` is consumed by the BUILD, which reads this object directly.
      */
-    env: { E2E_FAKE_LLM: "1", CLOUDFLARE_ENV: "e2e" },
+    env: { E2E_FAKE_LLM: "1", CLOUDFLARE_ENV: "e2e", SENTRY_DSN: "", PUBLIC_SENTRY_DSN: "" },
     url: `${APP_URL}/`,
     /**
      * NEVER reuse, in either environment. Reuse was the concrete path by which this suite could spend

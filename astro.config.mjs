@@ -114,6 +114,20 @@ export default defineConfig({
       SUPABASE_SERVICE_ROLE_KEY: envField.string({ context: "server", access: "secret", optional: true }),
       SUPADATA_API_KEY: envField.string({ context: "server", access: "secret", optional: true }),
       OPENROUTER_API_KEY: envField.string({ context: "server", access: "secret", optional: true }),
+
+      // Sentry, one DSN delivered by two different mechanisms — which is why there are two entries
+      // and not one. `SENTRY_DSN` is a Worker secret read at RUNTIME by the injected server config;
+      // `PUBLIC_SENTRY_DSN` is INLINED into the client bundle at BUILD time, so it has to reach the
+      // build step (a GitHub repo secret on the `deploy` job) rather than wrangler.
+      //
+      // Both `optional` — like every other secret here — and that is the load-bearing part: a build
+      // with neither still succeeds, and an unset DSN leaves the SDK uninitialised rather than
+      // throwing. That is what keeps local dev, `npm test`, the integration suite, the e2e run and
+      // the `ci` job silent BY CONSTRUCTION rather than by a runtime flag someone has to remember to
+      // set. The asymmetry pays off twice: the `e2e` job builds without `PUBLIC_SENTRY_DSN`, so its
+      // browser bundle physically cannot carry one.
+      SENTRY_DSN: envField.string({ context: "server", access: "secret", optional: true }),
+      PUBLIC_SENTRY_DSN: envField.string({ context: "client", access: "public", optional: true }),
     },
   },
 });
