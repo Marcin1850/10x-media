@@ -1,7 +1,6 @@
 import type { APIRoute } from "astro";
 import { createClient } from "@/lib/supabase";
 import { listSummaries } from "@/lib/services/summary-list";
-import { captureEvent } from "@/lib/services/reporting";
 
 export const prerender = false;
 
@@ -33,13 +32,6 @@ export const GET: APIRoute = async (context) => {
     // the dashboard's getBalance call.
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
     const summaries = await listSummaries(supabase, context.locals.user.id);
-    // TEMPORARY — S-13 Phase 6 §4 Worker smoke trigger, removed in the immediately following commit.
-    // Signed-in only (the 401 above), exact flag only, and fired at the TAIL of the request on purpose:
-    // an event emitted just before the response is the one most likely to lose the race against
-    // `withSentry`'s end-of-request flush, so this is the placement that proves the most.
-    if (context.url.searchParams.get("sentry-smoke") === "worker") {
-      captureEvent("[smoke:worker]", "warn", { trigger: "s13-phase-6" });
-    }
     return Response.json({ summaries }, { status: 200 });
   } catch (error) {
     // Mask the provider's message behind a stable generic 500, matching generate.ts and
