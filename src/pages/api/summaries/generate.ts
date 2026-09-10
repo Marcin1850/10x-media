@@ -30,6 +30,7 @@ import {
   lookupRefusalReplay,
   type RefusalReason,
 } from "@/lib/services/credits";
+import { captureEvent } from "@/lib/services/reporting";
 import { generateSchema } from "@/lib/schemas/generate-summary";
 import { acquireGenerationLease, releaseGenerationLease } from "@/lib/services/generation-lock";
 import {
@@ -192,6 +193,10 @@ export const POST: APIRoute = async (context) => {
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("acquireGenerationLease failed:", error);
+    // Forwarded as well as logged (S-13): a lease that cannot be taken fails EVERY generation for this
+    // user, and the 500 is swallowed into a response `withSentry` never sees. Degradation family — the
+    // failure only, never the account.
+    captureEvent("[generation-lock:acquire-threw]", "error", { error: String(error) });
     return Response.json({ error: "Something went wrong. Please try again.", code: "generic" }, { status: 500 });
   }
   if (lease === null) {
@@ -679,6 +684,9 @@ async function runGeneration({
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error("recordTranscriptAttempt failed:", error);
+      // Forwarded (S-13): the rate limiter in front of the unbounded fetch is down, so every paid request
+      // fails closed until it is back. Belongs to `transcript-guard`'s family though it is caught here.
+      captureEvent("[transcript-guard:record-threw]", "error", { error: String(error) });
       await releaseUnspentTranscriptBudget();
       return Response.json({ error: "Something went wrong. Please try again.", code: "generic" }, { status: 500 });
     }
@@ -907,6 +915,11 @@ async function runGeneration({
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("begin_generation failed:", error);
+    // Forwarded as well as logged (S-13). Every `[paid-path:*]` exit is swallowed into a response, so
+    // `withSentry`'s automatic capture never sees one. One key per stage — the fingerprint ignores the
+    // payload, so a shared key would merge five different repairs into one issue — and the payload
+    // carries the failing detail only: this family is NOT part of the seam's identifier exception.
+    captureEvent("[paid-path:begin]", "error", { error: String(error) });
     return Response.json({ error: "Something went wrong. Please try again.", code: "generic" }, { status: 500 });
   }
 
@@ -920,6 +933,7 @@ async function runGeneration({
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("summarize failed:", error);
+    captureEvent("[paid-path:summarize]", "error", { error: String(error) });
     await refundReservation(admin, userId, reservationId);
     return Response.json({ error: "The summarization service failed. Please try again." }, { status: 502 });
   }
@@ -1056,6 +1070,7 @@ async function runGeneration({
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("persist summary failed:", error);
+    captureEvent("[paid-path:persist]", "error", { error: String(error) });
     await refundReservation(admin, userId, reservationId);
     return Response.json(
       { error: "Something went wrong saving your summary. Please try again.", code: "saveFailed" },
@@ -1070,6 +1085,9 @@ async function runGeneration({
   if (!persisted.ok) {
     // eslint-disable-next-line no-console
     console.error(`persist summary skipped: reservation ${reservationId} for ${userId} was ${persisted.reason}`);
+    // The reason only. The console line keeps the reservation and account for Workers Logs; the
+    // forwarded event does not, because `[paid-path:*]` is outside the seam's identifier exception.
+    captureEvent("[paid-path:persist-skipped]", "error", { reason: persisted.reason });
     return Response.json(
       { error: "Something went wrong saving your summary. Please try again.", code: "saveFailed" },
       { status: 500 },
@@ -1094,6 +1112,7 @@ async function runGeneration({
       // No refund: the work IS saved and the charge IS settled — only this response can't be built.
       // eslint-disable-next-line no-console
       console.error(`replayed summary ${persisted.summaryId} could not be read back:`, error);
+      captureEvent("[paid-path:replay-readback]", "error", { error: String(error) });
       return Response.json(
         { error: "Something went wrong saving your summary. Please try again.", code: "saveFailed" },
         { status: 500 },

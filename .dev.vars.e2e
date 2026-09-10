@@ -33,3 +33,20 @@ SUPADATA_API_KEY=e2e-placeholder-not-a-real-supadata-key
 # OpenRouter is defeated by CODE (the `E2E_FAKE_LLM` module alias in `astro.config.mjs`), so this is
 # the second lock on a door that is already bolted — it only matters if that alias ever fails to apply.
 OPENROUTER_API_KEY=e2e-placeholder-not-a-real-openrouter-key
+
+# --- Sentry: NO DSN HERE, ON PURPOSE ---
+# The other paid boundaries above are neutralised with a non-credential; this one is neutralised by
+# ABSENCE, because that is the stronger move available: an unset DSN leaves the Sentry SDK
+# uninitialised, so there is no transport to mis-fire, and no placeholder DSN that a future SDK
+# version might decide to parse and attempt. An e2e run must never file an issue against the
+# operator's project — the run is not an incident.
+#
+# This file is what makes that true for the WORKER: it REPLACES `.dev.vars` wholesale for an e2e run
+# (see the header), so a `SENTRY_DSN` in your own `.dev.vars` cannot be inherited here — deleting the
+# variable from this file is not an omission, it is the deletion.
+#
+# It does NOT cover the BROWSER half. `PUBLIC_SENTRY_DSN` is a CLIENT variable, inlined into the
+# bundle at BUILD time from the build process's env, which wrangler's secrets file never touches. A
+# DSN sitting in your `.env` would reach the build through `npm run test:e2e`'s
+# `--env-file-if-exists=.env`. That gap is closed one level up, by the config-load guard in
+# `playwright.config.ts` that refuses to start when either variable is set.

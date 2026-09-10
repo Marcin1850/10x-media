@@ -141,4 +141,17 @@ test("a generated summary reaches the card, and the card matches what was charge
 
   // No paid fetch happened. A row here would mean a cache seed missed and Supadata was really called.
   await expect(readSupadataCalls([video.youtubeId])).resolves.toEqual([]);
+
+  // --- The browser reporting seam, walked ------------------------------------------------------
+  // `[unsupported-feature]` is the one event family emitted from a hydrated island, so the BROWSER
+  // transport is the only thing that carries it — and until this click nothing in the suite walked
+  // it, which made the `sentryIngestGuard` fixture's zero-attempt verdict true for the boring reason
+  // that no browser event was ever emitted. Clicking makes the zero mean something.
+  //
+  // The assertion here is that the user-facing behaviour is UNCHANGED by Phase 3: the same Polish
+  // notice, in place. The other half — that emitting it sent nothing — is asserted for every test in
+  // the suite by the guard fixture at teardown (`fixtures/no-sentry.ts`).
+  await page.getByRole("banner").getByRole("button", { name: copy.nav.account }).click();
+  await page.getByRole("menuitem", { name: copy.nav.topUp }).click();
+  await expect(page.getByRole("status").filter({ hasText: copy.nav.topUpNotice })).toBeVisible();
 });

@@ -1,7 +1,11 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "10x-media",
-  "main": "@astrojs/cloudflare/entrypoints/server",
+  // NOT the adapter's own `@astrojs/cloudflare/entrypoints/server` (the adapter's default): `worker.ts`
+  // re-exports exactly that handler through `@sentry/cloudflare`'s `withSentry`, which is the only
+  // place the Cloudflare SDK can be configured — see the header comment there for why the
+  // `@sentry/astro` integration cannot do this for us on Astro 6 + adapter v13.
+  "main": "./worker.ts",
   "compatibility_date": "2026-05-08",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {

@@ -3,11 +3,14 @@ import {
   beginGeneration,
   chargeFailedTranscript,
   lookupRefusalReplay,
+  refundReservation,
   type BeginGenerationParams,
   type BeginGenerationResult,
   type ChargeFailedTranscriptParams,
   type ChargeFailedTranscriptResult,
 } from "@/lib/services/credits";
+import { setReportingSink, type ReportedEvent } from "@/lib/services/reporting";
+import { expectPromotedEvent } from "@/lib/services/__fixtures__/reporting-recorder";
 import {
   stubFailing,
   stubRejecting,
@@ -62,6 +65,16 @@ import {
  * `toHaveProperty` for the two absent cases — something `toEqual({ outcome: "notCharged" })` cannot
  * express, since it accepts an explicit `balance: undefined` beside it. `credits.ts` itself is
  * unchanged by that phase, so the identical score is the expected result, not a gap.
+ *
+ * **Run 2026-09-10 (S-13 Phase 4)**, narrowed to the seven promoted `captureEvent` lines only
+ * (`--mutate "src/lib/services/credits.ts:305-305,…:469-469"`): **21 killed / 0 survived / 0 uncovered.**
+ * Each "operator events" row kills its line's three mutants — the key string blanked, the severity
+ * string blanked, and the payload object emptied — so nothing needed triage. Stryker has no mutator
+ * that deletes the call statement itself; that case was checked by hand instead, deleting one call per
+ * family and seeing its row go red. The rest of the module was not re-scored: this phase added calls
+ * and changed no outcome. The five `[paid-path:*]` sites in `generate.ts` are out of Stryker's reach
+ * (its config runs the unit project, and the endpoint is integration-only), so for them the by-hand
+ * deletion is the only mutation-style check.
  */
 
 const CHARGE_PARAMS: ChargeFailedTranscriptParams = {
@@ -685,5 +698,91 @@ describe("lookupRefusalReplay — fails toward null, the OPPOSITE direction of t
     ["a rejected request", stubRejecting(new TypeError("fetch failed"))],
   ])("returns null on %s rather than throwing", async (_label, stub) => {
     await expect(lookupRefusalReplay(stub.client, LOOKUP_PARAMS)).resolves.toBeNull();
+  });
+});
+
+/**
+ * The reconciliation family reaches the operator (S-13 Phase 4).
+ *
+ * Oracle: the plan's Promotion Roster and `reporting.ts`'s PERSONAL DATA contract, which names these
+ * three families as the ONE exception to "no user identifiers" and lists each one's fields — the
+ * identifiers an operator needs to find the row. Not read off `credits.ts`.
+ *
+ * Why these need rows of their own when every branch above is already covered: those tables assert
+ * what the CALLER is told, with the console silenced. Delete a `captureEvent` and every one of them
+ * stays green — the operator simply stops hearing about a credit only they can reconcile.
+ *
+ * One key per cause: the fingerprint is `[key, severity]` and ignores the payload, so two causes an
+ * operator repairs differently must not share a key. `REFUSAL_NOT_CHARGED` has no row because it is
+ * deliberately not promoted — it proves no debit landed, so there is nothing to reconcile.
+ */
+describe("operator events — the reconciliation family", () => {
+  let events: ReportedEvent[];
+
+  beforeEach(() => {
+    events = [];
+    setReportingSink((event) => {
+      events.push(event);
+    });
+  });
+
+  afterEach(() => {
+    setReportingSink(null);
+  });
+
+  const CHARGE_FIELDS = ["userId", "requestId", "refusalReason"];
+  const REPLAY_FIELDS = ["userId", "requestId"];
+  const LEAK_FIELDS = ["userId", "reservationId"];
+
+  const rows: [key: string, why: string, run: () => Promise<unknown>, fields: string[]][] = [
+    [
+      "[charge-ambiguous:no-row]",
+      "the statement ran and returned nothing, so the debit may have landed",
+      () => chargeFailedTranscript(stubReturning([]).client, CHARGE_PARAMS),
+      CHARGE_FIELDS,
+    ],
+    [
+      "[charge-ambiguous:unknown-outcome]",
+      "the statement ran and answered in a vocabulary the app does not know",
+      () => chargeFailedTranscript(stubReturning([{ outcome: "settled", new_balance: 2 }]).client, CHARGE_PARAMS),
+      CHARGE_FIELDS,
+    ],
+    [
+      "[charge-ambiguous:rejected]",
+      "the transport died, possibly after Postgres committed",
+      () => chargeFailedTranscript(stubRejecting(new TypeError("fetch failed")).client, CHARGE_PARAMS),
+      CHARGE_FIELDS,
+    ],
+    [
+      "[replay-read:rpc-error]",
+      "fails open to null, so a retry of an already-charged refusal can be charged again",
+      () => lookupRefusalReplay(stubFailing("permission denied for function get_refusal_replay").client, LOOKUP_PARAMS),
+      REPLAY_FIELDS,
+    ],
+    [
+      "[replay-read:threw]",
+      "the same fail-open, reached through a rejected request",
+      () => lookupRefusalReplay(stubRejecting(new TypeError("fetch failed")).client, LOOKUP_PARAMS),
+      REPLAY_FIELDS,
+    ],
+    [
+      "[credit-leak:refund-failed]",
+      "the refund raised, so the reservation stays open and the user stays out a credit",
+      () => refundReservation(stubFailing("synthetic refund failure").client, CHARGE_PARAMS.userId, RESERVATION_ID),
+      LEAK_FIELDS,
+    ],
+    [
+      "[credit-leak:refund-threw]",
+      "the refund's outcome was never learned, so the reservation may still be open",
+      () =>
+        refundReservation(stubRejecting(new TypeError("fetch failed")).client, CHARGE_PARAMS.userId, RESERVATION_ID),
+      LEAK_FIELDS,
+    ],
+  ];
+
+  it.each(rows)("%s: %s", async (key, _why, run, fields) => {
+    await run();
+
+    expectPromotedEvent(events, { key, severity: "error", fields });
   });
 });

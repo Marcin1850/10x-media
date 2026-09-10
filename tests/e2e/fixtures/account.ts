@@ -1,7 +1,7 @@
-import { test as base } from "@playwright/test";
 import { createSyntheticAccount } from "@/test/synthetic-account";
 import { adminClient, type AdminClient } from "./admin";
 import { closeDbOwnerConnection } from "@/test/db-owner";
+import { noSentryTest as base } from "./no-sentry";
 import { E2E_ACCOUNT_EMAIL_PREFIX } from "./registry";
 
 /**
@@ -58,6 +58,10 @@ interface WorkerFixtures {
 /**
  * The auth layer of the spec fixture stack. Specs do not import this directly — they import the
  * composed `test` from `./test`, which adds cache seeding on top.
+ *
+ * It extends `noSentryTest` rather than Playwright's own `test`, so the "no e2e run reports to
+ * Sentry" watch is on every spec in the suite by construction — there is no opt-in step a new spec
+ * can forget.
  */
 export const accountTest = base.extend<E2eAccountOptions & { account: E2eAccount }, WorkerFixtures>({
   accountCredits: [null, { option: true }],

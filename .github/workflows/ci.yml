@@ -159,10 +159,21 @@ jobs:
       # and the fake summarizer is not bundled at all — a production Worker CANNOT serve canned
       # summaries while charging real credits. Without the second, wrangler reads no `.dev.vars.e2e`,
       # so the e2e run's deliberate non-credentials cannot displace the real Worker secrets.
+      #
+      # It is also the ONLY build in this workflow that sets `PUBLIC_SENTRY_DSN`, and that is the
+      # other half of the same property. The value is a client `astro:env` variable, inlined into the
+      # browser bundle at BUILD time — so the `ci` job's build above and the build `e2e`'s Playwright
+      # `webServer` runs produce bundles that physically cannot report, and `integration` builds no
+      # browser bundle at all. The `ci`, `integration` and `e2e` jobs deliberately do not set it; that
+      # omission is what keeps CI from filing incidents against itself. Do not add it anywhere else.
+      # The Worker's own `SENTRY_DSN` is absent here on purpose too: it is a Cloudflare secret
+      # (`wrangler secret put`), read from the request's `env` at runtime, which a build-time value
+      # would never reach.
       - run: npm run build
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          PUBLIC_SENTRY_DSN: ${{ secrets.PUBLIC_SENTRY_DSN }}
       - run: npx wrangler deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

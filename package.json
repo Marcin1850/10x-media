@@ -30,6 +30,8 @@
     "@eslint/config-helpers": "^0.6.0",
     "@openrouter/ai-sdk-provider": "^3.0.0",
     "@radix-ui/react-slot": "^1.1.2",
+    "@sentry/astro": "^10.74.0",
+    "@sentry/cloudflare": "^10.74.0",
     "@supabase/ssr": "^0.10.3",
     "@supabase/supabase-js": "^2.99.1",
     "@supadata/js": "^1.4.0",
