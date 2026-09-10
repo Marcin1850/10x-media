@@ -1044,18 +1044,18 @@ undefined DSN, and the app returns to console-only reporting with no code change
 
 #### Automated
 
-- [x] 3.1 Type checking passes: `npm run typecheck`
-- [x] 3.2 Linting passes: `npm run lint`
-- [x] 3.3 Unit suite passes, including the new seam tests: `npm test`
-- [x] 3.4 Build succeeds: `npm run build`
-- [x] 3.5 Client bundle purity, proved in both directions: `grep -rl SENTRY_WORKER_SINK dist/_astro/` returns nothing **and** `grep -rl SENTRY_WORKER_SINK dist/server/` finds it — an absence-only grep also passes when the sentinel is misspelled
-- [x] 3.6 Integration suite passes: `npm run test:integration`
-- [x] 3.7 E2e suite passes: `npm run test:e2e`
+- [x] 3.1 Type checking passes: `npm run typecheck` — b46fbd7
+- [x] 3.2 Linting passes: `npm run lint` — b46fbd7
+- [x] 3.3 Unit suite passes, including the new seam tests: `npm test` — b46fbd7
+- [x] 3.4 Build succeeds: `npm run build` — b46fbd7
+- [x] 3.5 Client bundle purity, proved in both directions: `grep -rl SENTRY_WORKER_SINK dist/_astro/` returns nothing **and** `grep -rl SENTRY_WORKER_SINK dist/server/` finds it — an absence-only grep also passes when the sentinel is misspelled — b46fbd7
+- [x] 3.6 Integration suite passes: `npm run test:integration` — b46fbd7
+- [x] 3.7 E2e suite passes: `npm run test:e2e` — b46fbd7
 
 #### Manual
 
-- [x] 3.8 With no DSN set, clicking the top-up button still logs to the browser console and issues no network request
-- [x] 3.9 With no DSN set, a local generation still logs `[supadata-budget]` lines to the Worker console
+- [x] 3.8 With no DSN set, clicking the top-up button still logs to the browser console and issues no network request — b46fbd7
+- [x] 3.9 With no DSN set, a local generation still logs `[supadata-budget]` lines to the Worker console — b46fbd7
 
 ### Phase 4: Promote the money events
 
