@@ -419,6 +419,12 @@ query are dropped, not filtered — stricter than "keep the rest"), add the omit
 query-free URL in `beforeSend`. `sentry-worker-options.test.ts` asserts sentinel absence on the serialized
 envelope through the real `withSentry` pipeline._
 
+_Amended 2026-09-11 (impl-review follow-up #1): breadcrumbs were a second channel none of the above
+touched — a stored production event carried a Supabase fetch breadcrumb whose URL held a `user_id=eq.…`
+filter. `beforeBreadcrumb: scrubBreadcrumb` now drops console breadcrumbs (app console lines interpolate
+user ids) and strips query and fragment from breadcrumb URLs; the envelope test covers each branch with
+its own sentinel id._
+
 #### 3. Worker configuration
 
 **File**: `wrangler.jsonc`
