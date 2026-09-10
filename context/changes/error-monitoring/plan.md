@@ -1023,39 +1023,39 @@ undefined DSN, and the app returns to console-only reporting with no code change
 
 #### Automated
 
-- [x] 2.1 Type checking passes: `npm run typecheck`
-- [x] 2.2 Astro type checking passes: `npm run typecheck:astro`
-- [x] 2.3 Linting passes: `npm run lint`
-- [x] 2.4 Build succeeds: `npm run build`
-- [x] 2.5 Unit suite passes: `npm test`
-- [x] 2.6 Integration suite passes: `npm run test:integration`
-- [x] 2.7 E2e suite passes against the instrumented Worker: `npm run test:e2e`
-- [x] 2.8 Both Sentry packages resolve to the same v10 release, ≥ 10.54, and their types carry `dataCollection`: `npm ls @sentry/astro @sentry/cloudflare`
-- [x] 2.9 Deploy is still valid without deploying: `npx wrangler deploy --dry-run`
+- [x] 2.1 Type checking passes: `npm run typecheck` — 8d778e2
+- [x] 2.2 Astro type checking passes: `npm run typecheck:astro` — 8d778e2
+- [x] 2.3 Linting passes: `npm run lint` — 8d778e2
+- [x] 2.4 Build succeeds: `npm run build` — 8d778e2
+- [x] 2.5 Unit suite passes: `npm test` — 8d778e2
+- [x] 2.6 Integration suite passes: `npm run test:integration` — 8d778e2
+- [x] 2.7 E2e suite passes against the instrumented Worker: `npm run test:e2e` — 8d778e2
+- [x] 2.8 Both Sentry packages resolve to the same v10 release, ≥ 10.54, and their types carry `dataCollection`: `npm ls @sentry/astro @sentry/cloudflare` — 8d778e2
+- [x] 2.9 Deploy is still valid without deploying: `npx wrangler deploy --dry-run` — 8d778e2
 
 #### Manual
 
-- [x] 2.10 `npm run dev` boots and the app behaves identically with no DSN set
-- [x] 2.11 Generating a summary locally still works end to end
-- [x] 2.12 No Sentry network request is visible in the browser devtools Network tab
-- [x] 2.13 With a scratch `SENTRY_DSN` in `.dev.vars` and the SDK's `debug` on, `npm run preview` shows `worker.ts` initialising with that value — proving a Worker secret reaches it at runtime, which every later phase assumes. The scratch value is removed immediately afterwards
+- [x] 2.10 `npm run dev` boots and the app behaves identically with no DSN set — 8d778e2
+- [x] 2.11 Generating a summary locally still works end to end — 8d778e2
+- [x] 2.12 No Sentry network request is visible in the browser devtools Network tab — 8d778e2
+- [x] 2.13 With a scratch `SENTRY_DSN` in `.dev.vars` and the SDK's `debug` on, `npm run preview` shows `worker.ts` initialising with that value — proving a Worker secret reaches it at runtime, which every later phase assumes. The scratch value is removed immediately afterwards — 8d778e2
 
 ### Phase 3: Route the seam through Sentry
 
 #### Automated
 
-- [ ] 3.1 Type checking passes: `npm run typecheck`
-- [ ] 3.2 Linting passes: `npm run lint`
-- [ ] 3.3 Unit suite passes, including the new seam tests: `npm test`
-- [ ] 3.4 Build succeeds: `npm run build`
-- [ ] 3.5 Client bundle purity, proved in both directions: `grep -rl SENTRY_WORKER_SINK dist/_astro/` returns nothing **and** `grep -rl SENTRY_WORKER_SINK dist/server/` finds it — an absence-only grep also passes when the sentinel is misspelled
-- [ ] 3.6 Integration suite passes: `npm run test:integration`
-- [ ] 3.7 E2e suite passes: `npm run test:e2e`
+- [x] 3.1 Type checking passes: `npm run typecheck`
+- [x] 3.2 Linting passes: `npm run lint`
+- [x] 3.3 Unit suite passes, including the new seam tests: `npm test`
+- [x] 3.4 Build succeeds: `npm run build`
+- [x] 3.5 Client bundle purity, proved in both directions: `grep -rl SENTRY_WORKER_SINK dist/_astro/` returns nothing **and** `grep -rl SENTRY_WORKER_SINK dist/server/` finds it — an absence-only grep also passes when the sentinel is misspelled
+- [x] 3.6 Integration suite passes: `npm run test:integration`
+- [x] 3.7 E2e suite passes: `npm run test:e2e`
 
 #### Manual
 
-- [ ] 3.8 With no DSN set, clicking the top-up button still logs to the browser console and issues no network request
-- [ ] 3.9 With no DSN set, a local generation still logs `[supadata-budget]` lines to the Worker console
+- [x] 3.8 With no DSN set, clicking the top-up button still logs to the browser console and issues no network request
+- [x] 3.9 With no DSN set, a local generation still logs `[supadata-budget]` lines to the Worker console
 
 ### Phase 4: Promote the money events
 
