@@ -59,6 +59,23 @@ const e2eFakeLlmPlugins = process.env.E2E_FAKE_LLM
     ]
   : [];
 
+/**
+ * Source-map upload is ALL-OR-NOTHING on four values (impl-review F2). `SENTRY_AUTH_TOKEN`,
+ * `SENTRY_ORG` and `SENTRY_PROJECT` are what the upload needs; `PUBLIC_SENTRY_DSN` is what makes the
+ * browser bundle able to report at all, so a build that cannot report never uploads maps for itself. In
+ * this workflow the four meet on the `deploy` job's build alone.
+ *
+ * With `disable: true`, `@sentry/astro` does not register its Vite plugin at all — no upload, no hidden
+ * maps, no plugin telemetry. That is also why the decision has to be made here rather than by passing
+ * `undefined` values below: the plugin falls back to reading the same three names off `process.env`.
+ */
+const uploadSourceMaps = Boolean(
+  process.env.SENTRY_AUTH_TOKEN &&
+  process.env.SENTRY_ORG &&
+  process.env.SENTRY_PROJECT &&
+  process.env.PUBLIC_SENTRY_DSN,
+);
+
 // https://astro.build/config
 export default defineConfig({
   output: "server",
@@ -81,12 +98,10 @@ export default defineConfig({
     // and has no business on workerd.
     sentry({
       enabled: { client: true, server: false },
-      // Source-map upload is decided EXPLICITLY, not inherited. The integration's default is to upload
-      // (and to flip `vite.build.sourcemap` to `"hidden"` to have something to upload), which would
-      // make a contributor build without Sentry credentials emit maps it then cannot ship. Tie it to
-      // the one credential an upload actually needs: no `SENTRY_AUTH_TOKEN` in the build environment ⇒
-      // no hidden maps and no upload attempt.
-      sourcemaps: { disable: !process.env.SENTRY_AUTH_TOKEN },
+      // Source-map upload is decided EXPLICITLY, not inherited — see `uploadSourceMaps` above. The
+      // integration's default is to upload (and to flip `vite.build.sourcemap` to `"hidden"` to have
+      // something to upload), which would make a contributor build emit maps it then cannot ship.
+      sourcemaps: { disable: !uploadSourceMaps },
       org: process.env.SENTRY_ORG,
       project: process.env.SENTRY_PROJECT,
       authToken: process.env.SENTRY_AUTH_TOKEN,
@@ -146,7 +161,7 @@ export default defineConfig({
       OPENROUTER_API_KEY: envField.string({ context: "server", access: "secret", optional: true }),
 
       // Sentry, one DSN delivered by two different mechanisms — which is why there are two entries
-      // and not one. `SENTRY_DSN` is a Worker secret read at RUNTIME by the injected server config;
+      // and not one. `SENTRY_DSN` is a Worker secret read at RUNTIME by the Worker entry wrapper (`worker.ts`);
       // `PUBLIC_SENTRY_DSN` is INLINED into the client bundle at BUILD time, so it has to reach the
       // build step (a GitHub repo secret on the `deploy` job) rather than wrangler.
       //

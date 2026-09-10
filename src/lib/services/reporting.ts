@@ -70,8 +70,15 @@ export interface ReportedEvent {
   readonly message: string;
   readonly level: ReportedLevel;
   /**
-   * One condition, one issue, regardless of the figures. Every event is still sent — the dashboard
-   * shows the full stream — but the operator's inbox gets one notification per condition.
+   * One condition, one issue, regardless of the figures. Events are sent rather than throttled here —
+   * the dashboard shows the stream — but the operator's inbox gets one notification per condition.
+   *
+   * ONE ACCEPTED EXCEPTION to "every event is sent" (impl-review F5): both SDKs keep Sentry's default
+   * `Dedupe` integration, which drops an event identical to the IMMEDIATELY PREVIOUS one from the same
+   * client. On the Worker a client lives for one request, so repeats across requests are all sent; in
+   * the browser it lives for one page session, so a repeated identical click there counts once. Occurrence
+   * counts are therefore per-request / per-session, not exact. A family that needs exact counts has to
+   * revisit this rather than inherit it.
    *
    * THE COROLLARY BINDS EVERY PROMOTED SITE: since the payload does not participate in the
    * fingerprint, two failures an operator would act on differently must arrive under DIFFERENT KEYS.
@@ -174,7 +181,7 @@ export function captureEvent(key: string, severity: string, payload: unknown): v
  * untouched — and now also reach the receiver.
  */
 export function reportEvent(key: string, severity: string, payload: unknown): void {
-  const message = `${key} ${JSON.stringify(payload)}`;
+  const message = `${key} ${describePayload(payload)}`;
   if (severity === "warn") {
     // eslint-disable-next-line no-console
     console.warn(message);
@@ -196,6 +203,20 @@ export function reportEvent(key: string, severity: string, payload: unknown): vo
  */
 export function reportUnsupportedFeature(feature: string): void {
   reportEvent(UNSUPPORTED_FEATURE_EVENT, "warn", { feature });
+}
+
+/**
+ * The console line's rendering of a payload, which must not be able to throw either. `JSON.stringify`
+ * throws on a circular structure, a `bigint` or a throwing `toJSON`, and `payload` is `unknown`, so the
+ * seam cannot rule any of them out (impl-review F3). The line degrades to a marker; the payload itself
+ * still reaches the sink untouched.
+ */
+function describePayload(payload: unknown): string {
+  try {
+    return JSON.stringify(payload);
+  } catch {
+    return "[unserializable payload]";
+  }
 }
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {

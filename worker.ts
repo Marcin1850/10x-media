@@ -17,71 +17,18 @@
  *     deliberately exports no `init`. Its own `defineCloudflareOptions` docs give the reason — "the
  *     options cannot be applied at module load time on Cloudflare: the DSN and other settings
  *     typically come from the per-request `env`, which only exists inside the handler". Reading the
- *     DSN off `env` in the callback below is therefore not a shortcut around `astro:env/server`; it is
- *     the only place a Worker secret exists.
+ *     DSN off `env` in the callback is therefore not a shortcut around `astro:env/server`; it is the
+ *     only place a Worker secret exists.
  *
  * The file is named `worker.ts`, not `sentry.server.config.ts`, on purpose: the latter is the name
  * `@sentry/astro` probes for and would inject into every page's SSR module.
+ *
+ * The options themselves — the DSN switch and decision D8's data lockdown — live in
+ * `src/lib/services/sentry-worker-options.ts`, where a unit test can drive them through the real SDK.
+ * This file cannot be imported by Vitest, because the adapter entry above cannot be resolved there.
  */
 import * as Sentry from "@sentry/cloudflare";
 import handler from "@astrojs/cloudflare/entrypoints/server";
+import { sentryWorkerOptions, type SentryWorkerEnv } from "./src/lib/services/sentry-worker-options";
 
-/**
- * The one binding this file reads. `SENTRY_DSN` is a Worker secret (`wrangler secret put`), declared
- * `optional` in `astro.config.mjs`'s env schema and absent from `.dev.vars.e2e` by design.
- */
-interface SentryWorkerEnv {
-  SENTRY_DSN?: string;
-}
-
-/**
- * The header and query-parameter names `@sentry/core`'s own non-PII baseline denies. Reproduced here
- * because the constant is internal to the SDK, and because a present `dataCollection` (see below)
- * would otherwise select the wider `true` for these two fields.
- */
-const PII_HEADER_DENY_LIST = ["forwarded", "-ip", "remote-", "via", "-user"];
-
-export default Sentry.withSentry<SentryWorkerEnv>(
-  (env) => ({
-    /**
-     * THE DSN IS THE OFF SWITCH, and it is the SERVER value only — never `PUBLIC_SENTRY_DSN`, so a
-     * browser DSN present at build time cannot switch the Worker on. Undefined leaves the SDK
-     * disabled, which is the state of local dev, both Vitest projects, an e2e run and the `ci`/`e2e`
-     * CI jobs. Silence is a property of the environment, not of a runtime flag someone has to
-     * remember to set.
-     */
-    dsn: env.SENTRY_DSN,
-    environment: "production",
-    // Performance tracing is explicitly out of scope for this change (decision D6).
-    tracesSampleRate: 0,
-    /**
-     * Decision D8, spelled out in FULL — and every field below is load-bearing rather than a
-     * restatement of a default. `@sentry/core`'s `resolveDataCollectionOptions` picks one of two
-     * baselines: with `dataCollection` ABSENT it uses the tight `sendDefaultPii: false` baseline, but
-     * the moment ANY field is set the baseline flips to the fully permissive `DEFAULTS`. A partial
-     * object would therefore LOOSEN this Worker — omitting `httpBodies` alone would start shipping
-     * request bodies. Do not drop a line here as "the default anyway".
-     */
-    dataCollection: {
-      // No `user.*` fields populated from instrumentation.
-      userInfo: false,
-      // These are Supabase auth cookies — i.e. session tokens.
-      cookies: false,
-      // `generate.ts`'s request bodies carry user content and its responses carry summaries.
-      httpBodies: [],
-      // Keep headers and query params — minus the same PII names the SDK's own baseline denies, which
-      // is what "keep the rest" (D8) means. Genuinely sensitive keys (`auth`, `token`, `session`,
-      // `cookie`, …) are filtered unconditionally by the SDK on top of this list.
-      httpHeaders: {
-        request: { deny: PII_HEADER_DENY_LIST },
-        response: { deny: PII_HEADER_DENY_LIST },
-      },
-      urlQueryParams: { deny: PII_HEADER_DENY_LIST },
-      // Supabase query values and returned rows are user content.
-      databaseQueryData: false,
-      // No LLM prompt or completion text.
-      genAI: { inputs: false, outputs: false },
-    },
-  }),
-  handler,
-);
+export default Sentry.withSentry<SentryWorkerEnv>(sentryWorkerOptions, handler);

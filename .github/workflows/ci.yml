@@ -169,11 +169,19 @@ jobs:
       # The Worker's own `SENTRY_DSN` is absent here on purpose too: it is a Cloudflare secret
       # (`wrangler secret put`), read from the request's `env` at runtime, which a build-time value
       # would never reach.
+      #
+      # The three source-map upload values are deploy-only for the same reason (impl-review F2).
+      # `astro.config.mjs` uploads maps only when all three AND `PUBLIC_SENTRY_DSN` are present, so this
+      # is the one build that de-minifies production stack traces, and no other job may carry them.
+      # Until the repository secrets exist they expand to empty strings and the upload stays off.
       - run: npm run build
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           PUBLIC_SENTRY_DSN: ${{ secrets.PUBLIC_SENTRY_DSN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
       - run: npx wrangler deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

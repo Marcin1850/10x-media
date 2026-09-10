@@ -42,6 +42,13 @@ async function settle(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/** A payload `JSON.stringify` cannot serialize because it contains itself. */
+function circularPayload(): Record<string, unknown> {
+  const payload: Record<string, unknown> = { stage: "reserve" };
+  payload.self = payload;
+  return payload;
+}
+
 let consoleWarn: MockInstance<typeof console.warn>;
 let consoleError: MockInstance<typeof console.error>;
 
@@ -132,6 +139,35 @@ describe("the transport can never break its caller", () => {
     } finally {
       process.off("unhandledRejection", onUnhandled);
     }
+  });
+
+  // `payload` is `unknown`, so the console line's serialization is as much a way to fail the caller as
+  // the transport is (impl-review F3). Each row defeats a different PARTIAL fix: a cycle-detecting
+  // replacer still throws on a bigint, a bigint replacer still meets a throwing `toJSON`.
+  it.each([
+    { shape: "a circular reference", payload: circularPayload() },
+    { shape: "a bigint", payload: { spent: 10n } },
+    {
+      shape: "a toJSON that throws",
+      payload: {
+        toJSON: () => {
+          throw new Error("toJSON exploded");
+        },
+      },
+    },
+  ])("survives a payload with $shape, logging a marker and forwarding the payload intact", ({ payload }) => {
+    const { events, sink } = recordingSink();
+    setReportingSink(sink);
+
+    expect(() => {
+      reportEvent("[supadata-budget]", "stop", payload);
+    }).not.toThrow();
+
+    // The forensic line survives as a marker instead of vanishing with the throw...
+    expect(consoleError).toHaveBeenCalledWith("[supadata-budget] [unserializable payload]");
+    // ...and the receiver still gets the original object, which its own serializer can normalise.
+    expect(events).toHaveLength(1);
+    expect(events[0].context.payload).toBe(payload);
   });
 });
 

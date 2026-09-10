@@ -317,9 +317,11 @@ The events that matter operationally — a budget threshold crossed, a generatio
 
 The two initialise independently: a Worker that reports proves nothing about the browser, and vice versa. Both lock data collection down the same way — no cookies (they are Supabase session tokens), no request or response bodies, no database query data, no LLM inputs or outputs — and neither enables performance tracing or session replay.
 
-**Why neither DSN is set anywhere else.** An unset DSN leaves the SDK uninitialised, and that absence is the whole guarantee: local development, both Vitest suites, the e2e run and the `ci`/`integration`/`e2e` CI jobs send nothing because they have no DSN, not because a flag is switched off. Keep both keys commented out in `.env` and `.dev.vars` — a local DSN files real issues against the operator's project, mixed in with production incidents. Three guards back this up: the e2e runner **refuses to start** if either variable is set (`playwright.config.ts`), its browser fixture fails any test whose page attempts a Sentry request (`tests/e2e/fixtures/no-sentry.ts`), and the integration suite's `fetch` firewall throws on any non-loopback request.
+**Why neither DSN is set anywhere else.** An unset DSN leaves the SDK uninitialised, and that absence is the whole guarantee: local development, both Vitest suites, the e2e run and the `ci`/`integration`/`e2e` CI jobs send nothing because they have no DSN, not because a flag is switched off. Keep both keys commented out in `.env` and `.dev.vars` — a local DSN files real issues against the operator's project, mixed in with production incidents. Three guards back this up: the e2e runner **refuses to start** if either DSN — or the source-map upload token — is set (`playwright.config.ts`), its browser fixture fails any test whose page attempts a Sentry request (`tests/e2e/fixtures/no-sentry.ts`), and the integration suite's `fetch` firewall throws on any non-loopback request.
 
-**What notifies.** Every event reaches the Sentry dashboard, but the alert rule notifies only when an issue is **first seen or regresses** — never once per event. That is what makes alerting on `warn` survivable: the budget near-miss re-fires roughly once per budget reading for as long as the budget stays high, and it produces one notification, then accumulates quietly on its issue. The rule is configured in the Sentry UI, not in this repository, so recreating the project means recreating it by hand. The families that report:
+**Source maps.** Production stack traces are de-minified by uploading source maps at build time. The upload runs only when `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` **and** `PUBLIC_SENTRY_DSN` are all present in the build environment (`astro.config.mjs`) — in this workflow, the `deploy` job's build alone. Every other build emits no maps and never runs Sentry's upload plugin. Keep these three out of `.env` just like the DSNs.
+
+**What notifies.** Every event reaches the Sentry dashboard — except that Sentry's default `Dedupe` drops an exact repeat of the previous event from the same client, so identical browser events within one page session count once — but the alert rule notifies only when an issue is **first seen or regresses** — never once per event. That is what makes alerting on `warn` survivable: the budget near-miss re-fires roughly once per budget reading for as long as the budget stays high, and it produces one notification, then accumulates quietly on its issue. The rule is configured in the Sentry UI, not in this repository, so recreating the project means recreating it by hand. The families that report:
 
 - **Money integrity** — `[charge-ambiguous:*]`, `[credit-leak:*]`, `[replay-read:*]`, `[paid-path:*]`
 - **Silent degradation** — `[transcript-cache:*]`, `[metadata-cache:*]`, `[transcript-guard:*]`, `[supadata-ledger:*]`, `[supadata-budget:settle-*]`, `[generation-lock:*]`
@@ -388,12 +390,15 @@ Required repository secrets:
 | `SUPABASE_URL`          | Build step                         |
 | `SUPABASE_KEY`          | Build step                         |
 | `PUBLIC_SENTRY_DSN`     | Build step (`deploy` job **only**) |
+| `SENTRY_AUTH_TOKEN`     | Build step (`deploy` job **only**) |
+| `SENTRY_ORG`            | Build step (`deploy` job **only**) |
+| `SENTRY_PROJECT`        | Build step (`deploy` job **only**) |
 | `CLOUDFLARE_API_TOKEN`  | Deploy step                        |
 | `CLOUDFLARE_ACCOUNT_ID` | Deploy step                        |
 
 The build does not need the Supadata or OpenRouter keys — every variable in the `astro:env` schema is declared `optional`, so the build succeeds without them. Neither the `integration` nor the `e2e` job needs any of these repository secrets.
 
-`PUBLIC_SENTRY_DSN` reaches the **`deploy` job's build step and nothing else**, and that narrowness is the point: the `ci` and `e2e` jobs build without it, so the browser bundles they produce physically cannot carry a DSN and cannot report. The Worker's own `SENTRY_DSN` never appears here at all — it is a Cloudflare secret, set once with `wrangler secret put` (see [Deployment](#deployment)), not something the pipeline injects.
+`PUBLIC_SENTRY_DSN` reaches the **`deploy` job's build step and nothing else**, and that narrowness is the point: the `ci` and `e2e` jobs build without it, so the browser bundles they produce physically cannot carry a DSN and cannot report. The Worker's own `SENTRY_DSN` never appears here at all — it is a Cloudflare secret, set once with `wrangler secret put` (see [Deployment](#deployment)), not something the pipeline injects. The three source-map upload secrets follow the same deploy-only rule; until they exist the upload simply stays off, and the deploy still succeeds with minified production stack traces.
 
 ## Project status
 

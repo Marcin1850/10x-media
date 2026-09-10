@@ -13,8 +13,11 @@ import * as Sentry from "@sentry/astro";
 import { PUBLIC_SENTRY_DSN } from "astro:env/client";
 
 /**
- * The header and query-parameter names `@sentry/core`'s own non-PII baseline denies. Reproduced from
- * `worker.ts` — the constant is internal to the SDK — so the two runtimes lock down identically.
+ * The header and query-parameter names `@sentry/core`'s own non-PII baseline denies, reproduced because
+ * the constant is internal to the SDK. The Worker no longer uses this list: since impl-review F1 its
+ * options (`src/lib/services/sentry-worker-options.ts`) drop headers and query strings outright, because
+ * the SDK applies these deny lists to span attributes only, never to events. This bundle has not yet been
+ * probed at the envelope level — F1's recorded open item.
  */
 const PII_HEADER_DENY_LIST = ["forwarded", "-ip", "remote-", "via", "-user"];
 
@@ -38,11 +41,16 @@ if (PUBLIC_SENTRY_DSN) {
      * three are expensive in bundle size as well as quota. Filtering the SDK's own defaults keeps
      * what actually matters — the global error/rejection handlers and breadcrumbs — instead of
      * passing `integrations: []` and silently losing them too.
+     *
+     * `Dedupe` is kept ON PURPOSE (impl-review F5, operator decision in `manual-verification.md`): it
+     * drops an event identical to the previous one in the same page session, so a repeated
+     * `[unsupported-feature]` click counts once. See `reporting.ts`'s fingerprint note for the contract.
      */
     integrations: (defaults) =>
       defaults.filter((integration) => !/^(Replay|ReplayCanvas|BrowserTracing|Feedback)$/.test(integration.name)),
     /**
-     * Decision D8, mirrored field for field from `worker.ts`. Every line is load-bearing rather than
+     * Decision D8 as originally specified. The Worker's copy has since been tightened (impl-review F1,
+     * `src/lib/services/sentry-worker-options.ts`); this one has not. Every line is load-bearing rather than
      * a restatement of a default: `@sentry/core`'s `resolveDataCollectionOptions` uses the tight
      * baseline only while `dataCollection` is ABSENT, and flips to the fully permissive `DEFAULTS`
      * the moment any field is set. A partial object would therefore LOOSEN this bundle. Do not drop

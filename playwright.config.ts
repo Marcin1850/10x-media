@@ -41,6 +41,8 @@ const APP_URL = "http://localhost:4321";
  *    child — so a developer who has ever put a DSN in `.env` would build a browser bundle that
  *    reports, and `src/test/fetch-firewall.ts` would never see it because the app is a different
  *    process. An e2e run is not an incident; it must not file issues against the operator's project.
+ *    The source-map upload token is refused for the matching reason: an e2e build is not a release,
+ *    and must not upload maps as one (impl-review F2).
  */
 assertLoopbackSupabaseUrl(process.env.SUPABASE_URL);
 
@@ -57,16 +59,30 @@ if (!existsSync(E2E_DEV_VARS)) {
  * Guard 3. Fail CLOSED — refuse to start rather than quietly unset the variable, because a developer
  * who set a DSN deliberately deserves to be told which run is being blocked and why, and because a
  * silent reconfiguration is exactly the class of "the suite is fine, it just isn't testing what you
- * think" that guards 1 and 2 exist to end. `webServer.env` pins both to `""` as well, so the child
- * cannot inherit one by some other route; this check is what makes that pinning observable.
+ * think" that guards 1 and 2 exist to end. `webServer.env` pins all of them to `""` as well, so the
+ * child cannot inherit one by some other route; this check is what makes that pinning observable.
+ *
+ * `SENTRY_AUTH_TOKEN` is defence in depth rather than the only barrier: `astro.config.mjs` uploads maps
+ * only when `PUBLIC_SENTRY_DSN` is present too, and that is refused on the line above it. It is refused
+ * anyway because it is the credential, and a gate that someone loosens later should still meet a wall
+ * here. `SENTRY_ORG` / `SENTRY_PROJECT` are not credentials, so they are pinned but not refused.
  */
-for (const name of ["SENTRY_DSN", "PUBLIC_SENTRY_DSN"] as const) {
+const SENTRY_DSN_CONSEQUENCE =
+  "a Sentry DSN in the environment: the run would file real issues against the operator's Sentry " +
+  "project, mixed in with production incidents";
+const SENTRY_REFUSALS = {
+  SENTRY_DSN: SENTRY_DSN_CONSEQUENCE,
+  PUBLIC_SENTRY_DSN: SENTRY_DSN_CONSEQUENCE,
+  SENTRY_AUTH_TOKEN:
+    "a Sentry source-map upload token in the environment: the build would upload its source maps to " +
+    "the operator's Sentry project as a release, beside production's",
+} as const;
+
+for (const [name, consequence] of Object.entries(SENTRY_REFUSALS)) {
   if (process.env[name]) {
     throw new Error(
-      `\`${name}\` is set. The e2e suite refuses to run with a Sentry DSN in the environment: the ` +
-        "run would file real issues against the operator's Sentry project, mixed in with production " +
-        `incidents. Unset it for this run (it most likely comes from your \`.env\`, which ` +
-        "`npm run test:e2e` loads) and start again.",
+      `\`${name}\` is set. The e2e suite refuses to run with ${consequence}. Unset it for this run (it ` +
+        "most likely comes from your `.env`, which `npm run test:e2e` loads) and start again.",
     );
   }
 }
@@ -196,8 +212,19 @@ export default defineConfig({
      * environment. Empty is as good as absent to the SDK (`dsn: ""` is falsy ⇒ uninitialised), and
      * unlike the vendor keys these two are NOT overwritten by wrangler's read of `.dev.vars.e2e` —
      * `PUBLIC_SENTRY_DSN` is consumed by the BUILD, which reads this object directly.
+     *
+     * `SENTRY_AUTH_TOKEN` / `SENTRY_ORG` / `SENTRY_PROJECT` are pinned EMPTY for the same reason: they
+     * are BUILD inputs too, and `astro.config.mjs` treats an empty value as absent (impl-review F2).
      */
-    env: { E2E_FAKE_LLM: "1", CLOUDFLARE_ENV: "e2e", SENTRY_DSN: "", PUBLIC_SENTRY_DSN: "" },
+    env: {
+      E2E_FAKE_LLM: "1",
+      CLOUDFLARE_ENV: "e2e",
+      SENTRY_DSN: "",
+      PUBLIC_SENTRY_DSN: "",
+      SENTRY_AUTH_TOKEN: "",
+      SENTRY_ORG: "",
+      SENTRY_PROJECT: "",
+    },
     url: `${APP_URL}/`,
     /**
      * NEVER reuse, in either environment. Reuse was the concrete path by which this suite could spend
