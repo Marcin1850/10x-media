@@ -1091,16 +1091,16 @@ undefined DSN, and the app returns to console-only reporting with no code change
 
 #### Automated
 
-- [x] 5.1 Type checking passes: `npm run typecheck`
-- [x] 5.2 Linting passes: `npm run lint`
-- [x] 5.3 Unit suite passes, including the degradation promotion cases: `npm test`
-- [x] 5.4 No degradation payload carries a `userId` — asserted by the payload field-set cases, not by eye
-- [x] 5.5 Integration suite passes: `npm run test:integration`
-- [x] 5.6 Build succeeds: `npm run build`
+- [x] 5.1 Type checking passes: `npm run typecheck` — 8ecc533
+- [x] 5.2 Linting passes: `npm run lint` — 8ecc533
+- [x] 5.3 Unit suite passes, including the degradation promotion cases: `npm test` — 8ecc533
+- [x] 5.4 No degradation payload carries a `userId` — asserted by the payload field-set cases, not by eye — 8ecc533
+- [x] 5.5 Integration suite passes: `npm run test:integration` — 8ecc533
+- [x] 5.6 Build succeeds: `npm run build` — 8ecc533
 
 #### Manual
 
-- [x] 5.7 Each promoted condition fingerprints separately (distinct keys), so one failing operation does not mask another
+- [x] 5.7 Each promoted condition fingerprints separately (distinct keys), so one failing operation does not mask another — 8ecc533
 
 ### Phase 6: Turn it on — calibration, live verification, and docs
 
