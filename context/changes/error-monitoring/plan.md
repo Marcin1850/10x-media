@@ -1067,16 +1067,16 @@ undefined DSN, and the app returns to console-only reporting with no code change
 
 #### Automated
 
-- [x] 4.1 Type checking passes: `npm run typecheck`
-- [x] 4.2 Linting passes: `npm run lint`
-- [x] 4.3 Unit suite passes, including the credits promotion cases: `npm test`
-- [x] 4.4 Integration suite passes, including the ambiguous-charge scenarios and their promoted events: `npm run test:integration`
-- [x] 4.5 Deleting any single promoted `captureEvent` call turns a test red — verified once, by hand, on one site per family
-- [x] 4.6 Build succeeds: `npm run build`
+- [x] 4.1 Type checking passes: `npm run typecheck` — f2e9800
+- [x] 4.2 Linting passes: `npm run lint` — f2e9800
+- [x] 4.3 Unit suite passes, including the credits promotion cases: `npm test` — f2e9800
+- [x] 4.4 Integration suite passes, including the ambiguous-charge scenarios and their promoted events: `npm run test:integration` — f2e9800
+- [x] 4.5 Deleting any single promoted `captureEvent` call turns a test red — verified once, by hand, on one site per family — f2e9800
+- [x] 4.6 Build succeeds: `npm run build` — f2e9800
 
 #### Manual
 
-- [x] 4.7 The amended seam contract reads as a granted exception, not as a contradiction of the old comment
+- [x] 4.7 The amended seam contract reads as a granted exception, not as a contradiction of the old comment — f2e9800
 
 ### Phase 5: Promote the degradation events
 
