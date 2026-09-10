@@ -1107,8 +1107,8 @@ undefined DSN, and the app returns to console-only reporting with no code change
 #### Automated
 
 - [ ] 6.1 All three CI jobs pass on the PR: `ci`, `integration`, `e2e`
-- [ ] 6.2 Build succeeds locally without either DSN: `npm run build`
-- [ ] 6.3 No DSN in a non-deploy build's output: `grep -r "ingest.*sentry.io" dist/` returns nothing
+- [x] 6.2 Build succeeds locally without either DSN: `npm run build`
+- [x] 6.3 No DSN in a non-deploy build's output: `grep -r "ingest.*sentry.io" dist/` returns nothing
 
 #### Manual
 

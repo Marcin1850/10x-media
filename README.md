@@ -105,6 +105,7 @@ The app is served at **http://localhost:4321**.
 ├── scripts/ # Offline operator scripts
 ├── public/ # Public assets
 ├── worker.ts # Worker entry: the adapter's handler wrapped with Sentry's `withSentry`
+├── sentry.client.config.ts # Browser Sentry init, injected into every page by `@sentry/astro`
 ├── wrangler.jsonc # Cloudflare Workers config (`main` points at worker.ts)
 ├── playwright.config.ts # E2E runner (see "End-to-end tests")
 ├── .dev.vars.e2e # Committed, non-secret env for e2e runs — do not gitignore
@@ -300,6 +301,38 @@ Three things are worth knowing before the first run:
 - **`.dev.vars.e2e` is committed, and that is deliberate.** It holds the Supabase CLI's public local demo keys plus deliberate non-credentials for the two vendors, and it is what stops an e2e run from picking up the real keys in your `.dev.vars`. Do not add it to `.gitignore`; the suite refuses to start without it.
 
 The full cookbook — locators, waits, the two-sided oracle, and what is deliberately not covered — is `context/foundation/test-plan.md` §6.4.
+
+## Error monitoring
+
+The events that matter operationally — a budget threshold crossed, a generation whose credit outcome the app could not determine, a refund that failed, a cache that stopped working — reach [Sentry](https://sentry.io/), so the operator is notified instead of having to go and read logs. **Production is the only environment that reports.**
+
+**One seam.** Every event goes through `src/lib/services/reporting.ts`. `reportEvent(key, severity, payload)` writes a console line and forwards it; `captureEvent` only forwards, for sites that already log their own line. Forwarding is fire-and-forget and never throws, because the seam runs inside the paid generation path. Each event is fingerprinted by its key and severity, so one ongoing condition is one Sentry issue however often it fires, and the payload travels as structured context rather than as message text. Events carry no user identifiers, with one documented exception: the reconciliation family (`[charge-ambiguous:*]`, `[credit-leak:*]`, `[replay-read:*]`) carries the opaque ids of the ledger row an operator has to go and fix. The module's header comment is the authority on that rule.
+
+**Two runtimes, two DSNs, two delivery mechanisms.**
+
+| Runtime | Initialised by                                                         | DSN                 | How the DSN gets there                                                                    |
+| ------- | ---------------------------------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------- |
+| Worker  | `worker.ts` — the adapter's handler wrapped with `withSentry`          | `SENTRY_DSN`        | Cloudflare Worker secret, read at runtime from the request's `env`                        |
+| Browser | `sentry.client.config.ts`, injected into every page by `@sentry/astro` | `PUBLIC_SENTRY_DSN` | GitHub repository secret, inlined into the client bundle by the `deploy` job's build step |
+
+The two initialise independently: a Worker that reports proves nothing about the browser, and vice versa. Both lock data collection down the same way — no cookies (they are Supabase session tokens), no request or response bodies, no database query data, no LLM inputs or outputs — and neither enables performance tracing or session replay.
+
+**Why neither DSN is set anywhere else.** An unset DSN leaves the SDK uninitialised, and that absence is the whole guarantee: local development, both Vitest suites, the e2e run and the `ci`/`integration`/`e2e` CI jobs send nothing because they have no DSN, not because a flag is switched off. Keep both keys commented out in `.env` and `.dev.vars` — a local DSN files real issues against the operator's project, mixed in with production incidents. Three guards back this up: the e2e runner **refuses to start** if either variable is set (`playwright.config.ts`), its browser fixture fails any test whose page attempts a Sentry request (`tests/e2e/fixtures/no-sentry.ts`), and the integration suite's `fetch` firewall throws on any non-loopback request.
+
+**What notifies.** Every event reaches the Sentry dashboard, but the alert rule notifies only when an issue is **first seen or regresses** — never once per event. That is what makes alerting on `warn` survivable: the budget near-miss re-fires roughly once per budget reading for as long as the budget stays high, and it produces one notification, then accumulates quietly on its issue. The rule is configured in the Sentry UI, not in this repository, so recreating the project means recreating it by hand. The families that report:
+
+- **Money integrity** — `[charge-ambiguous:*]`, `[credit-leak:*]`, `[replay-read:*]`, `[paid-path:*]`
+- **Silent degradation** — `[transcript-cache:*]`, `[metadata-cache:*]`, `[transcript-guard:*]`, `[supadata-ledger:*]`, `[supadata-budget:settle-*]`, `[generation-lock:*]`
+- **The original two** — `[supadata-budget]` thresholds (Worker) and `[unsupported-feature]` (browser)
+
+On top of those, the SDKs report any exception that escapes unhandled. Expect few: this codebase resolves failures into outcomes rather than throwing.
+
+**What is deliberately not monitored.** Failures the user already sees and retries, or that cost nothing and hide nothing, stay on the console only — read-path errors, a transcript-vendor outage the user is told about and not charged for, metadata trouble that only degrades presentation, and refusals that provably did not charge. The `error-monitoring` change plan's Promotion Roster names every such site with its reason. Uptime checks, performance tracing, session replay and product metrics are out of scope.
+
+**Rolling back.** Neither half needs a code change, but they switch off differently:
+
+- **Worker** — `npx wrangler secret delete SENTRY_DSN`. Wrangler deploys a new version without the binding, and the SDK disables itself from the next request.
+- **Browser** — the DSN is baked into the deployed bundle, so deleting the `PUBLIC_SENTRY_DSN` repository secret stops reporting only after the **next deploy** (re-run the `deploy` job, or push to `master`).
 
 ## Deployment
 
