@@ -18,7 +18,7 @@
 | 6.6 | One notification per issue, not per event | **pass** — two issues, three events, exactly two emails |
 | 6.7 | Four negative checks recorded with observed results | **pass** — integration, Worker (two-sided), browser (e2e counter), local dev (by hand) |
 | 6.8 | No account identifiers in this record | **pass** — swept at close over this file plus the lines this phase added to `plan.md` and `roadmap.md`: no emails, UUIDs, Sentry org slug or org/project ids, DSN key, IP values (only the local `127.0.0.1` stand-in), alert-rule ids, operator name, city or time-zone values, tokens or keys |
-| 6.9 | Roadmap and Linear reflect the closed slice | **pass** — roadmap S-13 `done` in the At a glance row, the slice body and the Backlog Handoff row; Linear MAR-24 phase-6 comment posted and description corrected, state kept **In Progress** until `/10x-impl-review` (operator decision: Done means reviewed and merged) |
+| 6.9 | Roadmap and Linear reflect the closed slice | **pass** — roadmap S-13 `done` in the At a glance row, the slice body and the Backlog Handoff row; Linear MAR-24 phase-6 comment posted and description corrected, state kept **In Progress** until `/10x-impl-review` (operator decision: Done means reviewed and merged). _Updated 2026-09-10 (impl-review F4): moved to **Done** at the end of review triage, with a review-verdict comment, by operator decision._ |
 
 ## Automated (local)
 
@@ -112,7 +112,7 @@ Set by the operator the same day, then confirmed **by name only** (no value was 
 `SENTRY_DSN`. The `ci`, `integration` and `e2e` jobs still set neither (`ci.yml` parsed: `SENTRY`
 appears only in the `deploy` job's build env).
 
-## Alert rule and spend cap (§3) — _pending_
+## Alert rule and spend cap (§3)
 
 **Baseline, read through the Sentry MCP before any production event (2026-09-10):**
 
@@ -147,7 +147,7 @@ budget both checked in the Sentry UI before the trigger was pushed. Operator-rep
 the project has a single client key, so both DSNs are the same key, and the MCP lists that key but does
 not expose its rate limit.
 
-## Smoke events (§4) — _pending_
+## Smoke events (§4)
 
 ### Browser (6.4)
 

@@ -33,7 +33,7 @@
   - Tradeoff: Removes some automatic HTTP context from Worker events and adds a version-sensitive integration test.
   - Confidence: HIGH — reproduced against the exact installed SDK and corroborated by its shipped `httpServer` and `requestData` implementations.
   - Blind spot: The browser SDK needs a separate envelope-level privacy probe; the demonstrated exploit is the Worker path.
-- **Decision**: PENDING
+- **Decision**: FIXED (Fix now, 2026-09-10). Options moved to `src/lib/services/sentry-worker-options.ts` (`worker.ts` imports them): `httpServerIntegration({ maxRequestBodySize: "none" })` and `requestDataIntegration` with data/headers/query_string/cookies/ip off replace the defaults; `dataCollection` sets `httpHeaders`/`urlQueryParams` to `false` and adds `graphQL`, `stackFrameVariables: false`, `frameContextLines: 5`; `beforeSend: scrubRequestData` keeps only method + query/fragment-free URL. New `sentry-worker-options.test.ts` drives the real `withSentry` with a recording transport and asserts no sentinel (password, email, bearer, session cookie, callback code, fragment, client IP) appears in the serialized envelope, two-sided (event marker and path present). Deliberate breaks seen red: integrations+beforeSend removed → password/email/code/fragment leaked; scrubber no-op alone → code/fragment leaked and scrubber case failed. Plan D8 amended inline. Gates: unit 222/222, `tsc`, eslint, prettier, build, wrangler dry-run, `ingest.*sentry.io` 0 files, worker-sink sentinel client 0 / server 1. Integration and e2e suites not re-run. **Still open**: outbound `fetch` and console breadcrumbs (e.g. Supabase PostgREST URLs with `user_id=eq.…`) are not covered by this probe; the browser SDK has no envelope-level probe.
 
 ### F2 — Source-map upload is off in production but can run during local e2e
 
@@ -47,7 +47,7 @@
   - Tradeoff: Adds three deployment settings and requires maintaining their repository-secret configuration.
   - Confidence: HIGH — the config reads the values, the deploy job does not supply them, and the e2e guard enumerates only the DSNs.
   - Blind spot: The review did not inspect the Sentry project's source-map releases because no current build can upload one.
-- **Decision**: PENDING
+- **Decision**: FIXED (Fix now, 2026-09-10). `astro.config.mjs` gates `sourcemaps.disable` on `uploadSourceMaps` = `SENTRY_AUTH_TOKEN && SENTRY_ORG && SENTRY_PROJECT && PUBLIC_SENTRY_DSN` (with `disable: true`, `@sentry/astro` never registers its Vite plugin — no upload, hidden maps or plugin telemetry). `ci.yml` passes the three upload values to the `deploy` build step only. `playwright.config.ts` refuses to start with `SENTRY_AUTH_TOKEN` set (own consequence message) and pins `SENTRY_AUTH_TOKEN`/`SENTRY_ORG`/`SENTRY_PROJECT` to `""` in `webServer.env`. `.env.example`, README (guard sentence, Source maps paragraph, secrets table, deploy-only note) and plan §5 amended. Verified: `tsc`, eslint, prettier; e2e config with `SENTRY_AUTH_TOKEN` set exits 1 at config load with the new message, control without it lists 5 tests; build with token/org/project set, no DSN and `SENTRY_URL` on unroutable loopback → exit 0, 0 `.map` files, 0 plugin/upload log lines. **Not exercised**: the enabled arm (all four present) — first proven by the first `deploy` after the operator creates the `SENTRY_AUTH_TOKEN`, `SENTRY_ORG` and `SENTRY_PROJECT` repository secrets; until then the deploy stays unchanged with minified traces.
 
 ### F3 — `reportEvent` can still throw while serializing a payload
 
@@ -57,7 +57,7 @@
 - **Location**: `src/lib/services/reporting.ts:177`
 - **Detail**: `JSON.stringify(payload)` executes outside the transport `try/catch`. Because the public parameter is `unknown`, a circular object, `bigint`, or throwing `toJSON` propagates synchronously, contradicting the seam's stated never-throws contract. Current call sites use plain serializable objects, so this is a contract hole rather than a currently observed paid-path failure.
 - **Fix**: Use a never-throwing serializer/fallback for the console message and add circular-object and `bigint` contract cases.
-- **Decision**: PENDING
+- **Decision**: FIXED (Fix now, 2026-09-10). `reportEvent` renders its console line through a module-private `describePayload` that returns `"[unserializable payload]"` when `JSON.stringify` throws; the sink still receives the original payload. `reporting.test.ts` gained one `it.each` in the never-throws block — circular reference, `bigint`, throwing `toJSON` — each asserting no throw, the marker console line, and the untouched payload forwarded once. Written first and seen red against the unfixed code (three distinct throws: circular structure, BigInt, `toJSON exploded`). Gates: unit 225/225, `tsc`, eslint, prettier.
 
 ### F4 — Linear MAR-24 is still In Progress although Progress 6.9 says closed
 
@@ -67,7 +67,7 @@
 - **Location**: `context/changes/error-monitoring/reviews/manual-verification.md:21`
 - **Detail**: The roadmap records S-13 as `done`, but the verification record says MAR-24 intentionally remains **In Progress** until `/10x-impl-review`. Nevertheless, Progress 6.9 and the record's status table mark “Roadmap and Linear reflect the closed slice” as passed. At review completion, the external tracker is therefore the one remaining unchecked outcome hidden behind a checked box.
 - **Fix**: Move MAR-24 to Done/Reviewed and post the implementation-review verdict; then correct the 6.9 evidence so the recorded state matches the tracker.
-- **Decision**: PENDING
+- **Decision**: FIXED (user variant of Fix B, deferred to the end of triage, 2026-09-10): "Move both to Done, but at the very end of this review." MAR-24 had no parent, sub-issue or relation, so "both" = the Linear issue and the local 6.9 record. MAR-24 moved to **Done** (completedAt 2026-09-10T21:18Z) with a review-verdict comment that flags the F1–F3 fixes as not yet committed or deployed; Progress 6.9 and the record's 6.9 row updated to match. Note: this closes the issue before the review fixes are merged — an explicit operator override of the standing Done-requires-merge rule.
 
 ### F5 — Browser deduplication contradicts the plan's full-stream contract
 
@@ -86,7 +86,7 @@
   - Tradeoff: Increases event volume and can make repeated client failures noisier without changing first-seen/regression notifications.
   - Confidence: HIGH — the installed SDK exposes the integration and the live record identifies it as the cause.
   - Blind spot: Event-volume impact has not been measured with production usage.
-- **Decision**: PENDING
+- **Decision**: FIXED via Fix A (2026-09-10). Amended: `reporting.ts` fingerprint contract (one accepted exception — default `Dedupe` drops an event identical to the previous one from the same client: once per Worker request, once per browser page session; a family needing exact counts must revisit); `plan.md` Phase 3 fingerprint bullet (inline `_Amended_`) and Phase 6 §3 intent; `plan-brief.md` Noise-control row; README "What notifies"; `sentry.client.config.ts` integrations comment (Dedupe kept on purpose). No behaviour change. Same pass also corrected two `sentry.client.config.ts` comments made stale by F1 ("reproduced from/mirrored from `worker.ts`") and added an F1 note to `plan-brief.md`'s Data-collection row. Gates: eslint, prettier.
 
 ### F6 — Accepted Phase 6 evidence changes were not amended into the plan
 
@@ -96,7 +96,7 @@
 - **Location**: `context/changes/error-monitoring/plan.md:892`, `context/changes/error-monitoring/plan.md:936`
 - **Detail**: Three Phase 6 deviations are explicit and reasonable in the live record but absent from the plan's amendments: CI was observed on a direct master push rather than “on the PR”; the impossible no-debug Worker boot-log check was replaced with a stronger two-sided loopback-ingest probe; and README correctly documents a two-step rollback (Worker secret plus client build secret/redeploy) instead of the plan's Worker-only rollback. These are evidence/source-of-truth drift, not implementation defects.
 - **Fix**: Add a Phase 6 amendment summarizing the three accepted substitutions and propagate it to `plan-brief.md` where applicable.
-- **Decision**: PENDING
+- **Decision**: FIXED (Fix now, 2026-09-10). Four inline `_Amended 2026-09-10 (impl-review F6)_` notes in `plan.md`, original text and Progress checkboxes untouched: §5 Worker negative check → two-sided loopback-ingest probe; §6 Documentation rollback → two steps; Automated criterion "on the PR" → observed on `master` push run `34475037695` (no PR, user decision); Migration Notes → `wrangler.jsonc` `main` now points at `worker.ts` (backing out restores it and deletes `worker.ts` + `sentry-worker-options.ts`), rollback two steps. The fourth (Migration Notes) was an additional stale spot found during the fix. `plan-brief.md` carries no PR/rollback/boot-log wording — nothing to propagate. Gate: prettier.
 
 ### F7 — Completed verification still carries stale “pending” and ownership wording
 
@@ -106,7 +106,7 @@
 - **Location**: `context/changes/error-monitoring/reviews/manual-verification.md:115`, `context/changes/error-monitoring/reviews/manual-verification.md:150`, `astro.config.mjs:149`
 - **Detail**: The completed manual record still labels the alert/spend-cap and smoke sections `_pending_`, while `astro.config.mjs` says the server DSN is read by an “injected server config” even though the amended architecture assigns it to the hand-written `worker.ts` wrapper. The evidence and runtime wiring below those labels are otherwise complete.
 - **Fix**: Remove the two `_pending_` suffixes and change “injected server config” to “Worker entry wrapper”.
-- **Decision**: PENDING
+- **Decision**: FIXED (Fix now, 2026-09-10). `manual-verification.md` headings "Alert rule and spend cap (§3)" and "Smoke events (§4)" lost their `— _pending_` suffix; `astro.config.mjs`'s env-schema comment now says `SENTRY_DSN` is read "by the Worker entry wrapper (`worker.ts`)". Gates: eslint, prettier.
 
 ## Automated Verification Evidence
 
@@ -139,7 +139,7 @@ Repeated phase commands were deduplicated and run once against the reviewed `HEA
 | 3 | Browser and Worker seams, no-outbound checks and bundle split have direct code/test/build evidence. |
 | 4 | Reconciliation-family identifier exception and all money-event promotions match the amended roster and exact field-set tests. |
 | 5 | All degradation sites have distinct keys and recorder tests; no explicit user identifier is in app-owned payloads. |
-| 6 | Both live smoke events, alert delivery, trigger removal and four negative checks are recorded without committed account identifiers. Linear closure is still pending despite 6.9 being checked (F4). |
+| 6 | Both live smoke events, alert delivery, trigger removal and four negative checks are recorded without committed account identifiers. Linear closure was pending despite 6.9 being checked (F4) — resolved in triage: MAR-24 moved to Done. |
 
 ## Scope Notes
 

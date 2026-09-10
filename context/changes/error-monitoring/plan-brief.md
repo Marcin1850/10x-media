@@ -39,13 +39,13 @@ being trusted.
 | Transport scope         | Two — Worker **and** browser                                                 | The unsupported-feature family is emitted from an island, and server-only reporting would leave it invisible exactly as its own code comment warns. | Plan     |
 | Personal data           | Route the **reconciliation family** — `[charge-ambiguous:*]`, `[credit-leak:*]`, `[replay-read:*]` — with `userId` plus the row key each needs (`requestId` or `reservationId`), as a named exception | Each is only actionable because it names the row an operator has to go and fix; the seam's no-identifiers contract is amended rather than contradicted, and a payload field-set test stops the exception spreading. | Plan     |
 | Severity routing        | Every seam severity alerts                                                   | Nothing the seam emits should have to be discovered by checking a dashboard.                                                  | Plan     |
-| Noise control           | Sentry-side `fingerprint` + first-seen/regression alert rules                 | Every event still reaches the dashboard, but one ongoing condition produces one notification — and no app code owns throttling state, which Workers isolates cannot share anyway. | Plan     |
+| Noise control           | Sentry-side `fingerprint` + first-seen/regression alert rules                 | Every event still reaches the dashboard (_amended, impl-review F5:_ except exact repeats, which Sentry's default `Dedupe` drops per client — once per Worker request, once per browser page session), but one ongoing condition produces one notification — and no app code owns throttling state, which Workers isolates cannot share anyway. | Plan     |
 | Promotion set           | A roster, not a rule of thumb: paid-path integrity, credit leaks, the fail-open replay read, cache/ledger/lock, plus automatic unhandled | These are the failures that cost money or degrade silently; every remaining console site is named in §Promotion Roster with the reason it stays on the console, so nothing is left to the implementer's guess. | Plan     |
 | DSN isolation           | Optional `astro:env` keys, absent everywhere but production                  | Matches how all five current secrets work, and fails closed by absence rather than by a flag someone must remember to set.     | Plan     |
-| Data collection         | Disable `userInfo`, cookies, HTTP bodies, GenAI and DB query data; keep headers and query params on the SDK's own non-PII deny list | This app's cookies are Supabase session tokens and `generate.ts`'s bodies carry user content. _Amended in Phase 2:_ the option resolves against **two** baselines — absent it is already tight, but setting **any** field flips the baseline to fully permissive, so the block has to be exhaustive or it loosens the Worker. | Plan     |
+| Data collection         | Disable `userInfo`, cookies, HTTP bodies, GenAI and DB query data; keep headers and query params on the SDK's own non-PII deny list | This app's cookies are Supabase session tokens and `generate.ts`'s bodies carry user content. _Amended in Phase 2:_ the option resolves against **two** baselines — absent it is already tight, but setting **any** field flips the baseline to fully permissive, so the block has to be exhaustive or it loosens the Worker. _Amended after implementation (impl-review F1):_ on the Worker `dataCollection` never governed events, so headers, query strings and bodies are now dropped outright via replaced integrations and a `beforeSend` scrubber; the browser block is unchanged. | Plan     |
 | Tier & sampling         | Free tier, no sampling, `tracesSampleRate: 0`                                | A single-operator MVP should produce a handful of events a week; tracing is out of scope and costs both quota and bundle size. | Plan     |
 | Sentry MCP              | Installed at user scope, not committed to `.mcp.json`                        | Keeps the org and project slugs out of a public repo while still honouring the change note's ask.                              | Plan     |
-| Verification            | Unit tests on the seam contract, promotion assertions on every promoted site, and **two** deliberate live events — one per runtime | The code contract is cheap to test, and promotion without an oracle would pass just as green if every call were deleted; the account wiring is only provable live, and the two runtimes initialise independently so one event proves only one of them. | Plan     |
+| Verification            | Unit tests on the seam contract, promotion assertions on every promoted site, and **two** deliberate live events — one per runtime | The code contract is cheap to test, and promotion without an oracle would pass just as green if every call were deleted; the account wiring is only provable live, and the two runtimes initialise independently so one event proves only one of them. _Amended after implementation (impl-review F1):_ plus an envelope-level test that drives the real `withSentry` pipeline and asserts no request credential reaches the serialized envelope — the promotion tests inspect only the app-owned payload. | Plan     |
 
 ## Scope
 
@@ -79,7 +79,9 @@ the two initialisation sites, which keeps the module reachable from the unit tes
 itself is swappable through one named `setReportingSink` seam, which is what both the contract tests and
 the promotion tests drive. Forwarding is fire-and-forget and swallows its own failure, because
 the seam sits immediately before the first paid vendor call in a request whose whole design is that a
-user is never charged for work they did not receive.
+user is never charged for work they did not receive. _Amended after implementation (impl-review F3):_
+that includes rendering the payload for the console line — an unserializable payload (circular,
+`bigint`, a throwing `toJSON`) degrades to a marker instead of throwing.
 
 ## Phases at a Glance
 
@@ -120,7 +122,9 @@ mostly operator work in the Sentry UI.
 - **An e2e run could inherit a developer's `PUBLIC_SENTRY_DSN`.** `.dev.vars.e2e` governs Worker
   bindings, not the client *build*, and Playwright hands the parent environment to its `webServer`. A
   fail-closed config-load guard now refuses to start such a run — that guard is why this is a controlled
-  risk rather than an open one.
+  risk rather than an open one. _Amended after implementation (impl-review F2):_ the same guard refuses
+  the source-map upload token (`SENTRY_AUTH_TOKEN`) and pins the upload values empty; upload itself
+  requires the token, org, project **and** `PUBLIC_SENTRY_DSN`, which meet only on the `deploy` build.
 - **The Phase 6 Worker smoke trigger is temporary code in production.** It is flag-guarded on an
   authenticated route and reverted in the following commit, with the revert re-verified against
   production — but it exists, briefly, and the record has to show it gone.

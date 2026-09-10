@@ -293,6 +293,13 @@ naming the variable and saying the run would otherwise file real issues against 
 Fail closed: refuse to start rather than reconfigure quietly. `webServer.env` additionally pins both to
 `""` so the child cannot inherit one by some other route.
 
+_Amended 2026-09-10 (impl-review F2): the guard also refuses `SENTRY_AUTH_TOKEN` — the source-map upload
+credential, because an e2e build is not a release — with its own message, and `webServer.env` pins
+`SENTRY_AUTH_TOKEN`, `SENTRY_ORG` and `SENTRY_PROJECT` to `""` beside the DSNs. The token refusal is
+defence in depth: `astro.config.mjs` uploads only when `PUBLIC_SENTRY_DSN` is present too, which this
+guard already refuses. `SENTRY_ORG` / `SENTRY_PROJECT` are pinned but not refused — they are not
+credentials._
+
 #### 5. Sentry MCP (local, not committed)
 
 **File**: `context/changes/error-monitoring/docs/sentry-mcp.md` (new)
@@ -401,6 +408,17 @@ Discoveries) — dropping a line here **widens** what is sent:
 }
 ```
 
+_Amended 2026-09-10 (impl-review F1): the object above did not hold D8 on events. In
+@sentry/cloudflare 10.74.0 the default `HttpServer` integration captures request bodies regardless of
+`httpBodies`, and `RequestData` attaches body, full URL and raw headers to every event, applying the
+deny lists to span attributes only — a probe shipped a sign-in password, an `Authorization` header and a
+callback `?code=`. The options moved to `src/lib/services/sentry-worker-options.ts` and now replace both
+integrations with capture-nothing instances, set `httpHeaders`/`urlQueryParams` to `false` (headers and
+query are dropped, not filtered — stricter than "keep the rest"), add the omitted `graphQL`,
+`stackFrameVariables` and `frameContextLines` fields, and scrub `event.request` down to method plus
+query-free URL in `beforeSend`. `sentry-worker-options.test.ts` asserts sentinel absence on the serialized
+envelope through the real `withSentry` pipeline._
+
 #### 3. Worker configuration
 
 **File**: `wrangler.jsonc`
@@ -445,6 +463,13 @@ generation from switching on by accident.
 `SENTRY_AUTH_TOKEN` — absent ⇒ `disable: true`, so nothing is uploaded and no hidden maps are emitted;
 present ⇒ upload enabled, with `org` and `project` from the same place. The integration's default is not
 relied on.
+
+_Amended 2026-09-10 (impl-review F2): keyed on the token alone, upload was unreachable in production (the
+`deploy` build carried none of the three values) yet reachable from an e2e build fed by a developer's
+`.env`. Upload now requires `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` **and**
+`PUBLIC_SENTRY_DSN`; the three upload values reach the `deploy` job's build step only (repository
+secrets); `playwright.config.ts` refuses to start with `SENTRY_AUTH_TOKEN` set and pins all three to `""`
+in `webServer.env`._
 
 ### Success Criteria:
 
@@ -520,11 +545,20 @@ observe forwarding without touching Sentry or `fetch`. Forwarding is done with:
 - **`fingerprint: [key, severity]`**: one condition, one issue, regardless of the figures. This is the
   mechanism decision D3 rests on — every event is still sent, so the dashboard shows the full stream,
   but the operator's inbox gets one notification per condition (Phase 6 sets the rules).
+  _Amended 2026-09-10 (impl-review F5): "every event is still sent" holds modulo Sentry's default
+  `Dedupe`, kept in both SDKs by operator decision (`reviews/manual-verification.md`, event-counts
+  finding). An event identical to the previous one from the same client is dropped, so repeats count once
+  per Worker request and once per browser page session. The seam contract in `reporting.ts` records the
+  exception; a future family that needs exact counts must revisit it._
   **The corollary binds Phases 4 and 5**: since the payload does *not* participate in the fingerprint,
   two failures an operator would act on differently must arrive under **different keys**. A shared key
   plus a payload discriminator collapses them into one issue — which is why every promoted site below
   gets its own `[family:stage]` key rather than a family key and a payload field.
 - **Fire-and-forget**: never `await`ed; a synchronous throw and a rejected promise are both swallowed.
+  _Amended 2026-09-10 (impl-review F3): the never-throws contract covers `reportEvent`'s console line
+  too — `JSON.stringify` throws on a circular structure, a `bigint` or a throwing `toJSON`, so the payload
+  is rendered through a never-throwing helper that degrades to `[unserializable payload]`, and the sink
+  still receives the original payload. `reporting.test.ts` holds one case per shape._
 - **No `astro:env` import** — the DSN is supplied at `init` time by the two runtime entrypoints, never
   here, so this module stays reachable from the `unit` Vitest project.
 - **Runtime split**: `import.meta.env.SSR` selects a **dynamic** import of a server sink module
@@ -846,8 +880,8 @@ what keeps CI from filing incidents against itself.
 
 #### 3. Sentry-side calibration (manual, operator)
 
-**Intent**: Implement decision D3 — every event is sent, but a single ongoing condition produces one
-notification, not a stream. This is the calibration the roadmap calls the whole value of the slice.
+**Intent**: Implement decision D3 — every event is sent (modulo per-client `Dedupe`; see the Phase 3
+fingerprint amendment), but a single ongoing condition produces one notification, not a stream. This is the calibration the roadmap calls the whole value of the slice.
 
 **Contract**: Alert rules that notify on **first-seen and regression** of an issue rather than per event,
 so the `[supadata-budget]` / `warn` issue — which re-fires roughly once per reading TTL for as long as
@@ -893,6 +927,10 @@ of noticing:
   initialise for want of a DSN, and `grep -r "ingest.*sentry.io" dist/` — which covers
   both the inlined client value and the `.dev.vars` wrangler bakes into `dist/server/` — returns
   nothing.
+  _Amended 2026-09-10 (impl-review F6): the boot-log observation cannot exist — `worker.ts` passes no
+  `debug`, and turning debug on would need a DSN, which 6.7 forbids. Replaced by user decision with the
+  two-sided loopback-ingest probe recorded in `reviews/manual-verification.md` ("Worker — observed,
+  two-sided")._
 - **Local dev**: `npm run dev` with no DSN set, same two observations by hand.
 **No account identifiers**: describe the role ("the operator's account"), never an email or UUID — the
 repo is public, and this is a real-environment pass.
@@ -910,6 +948,11 @@ what is alerted on, what is deliberately not monitored (§Promotion Roster's exc
 sentence), and the rollback — unset the Worker secret. The Phase 1 corrections to the env table,
 Worker-secret list and repository-secret table are assumed already landed; this section is the narrative
 half.
+
+_Amended 2026-09-10 (impl-review F6): rollback is two steps, not one. Unsetting the Worker secret stops
+the Worker only; `PUBLIC_SENTRY_DSN` is baked into the deployed browser bundle, so the browser stops
+reporting only after its repository secret is deleted **and** a deploy runs. README §Error monitoring
+documents both steps._
 
 `CLAUDE.md` and `AGENTS.md` each gain the **same short paragraph** on the seam's new role, the
 `captureEvent` / `reportEvent` split, and the client/server bundle constraint. The requirement is that
@@ -934,6 +977,8 @@ in one edit; the Linear issue moves to the matching state with a comment summari
 #### Automated Verification:
 
 - All three CI jobs pass on the PR: `ci`, `integration`, `e2e`
+  _Amended 2026-09-10 (impl-review F6): no PR (user decision) — the change merged to `master` directly,
+  so the three jobs were observed on the `master` push run `34475037695`, which also gates `deploy`._
 - Build succeeds locally without either DSN: `npm run build`
 - No DSN in a non-deploy build's output: `grep -r "ingest.*sentry.io" dist/` returns nothing
 
@@ -1000,6 +1045,11 @@ entry at build time, so there is no entrypoint change to revert. Backing the who
 
 Rollback at any point after Phase 6 is unsetting the Worker secret — the SDK disables itself with an
 undefined DSN, and the app returns to console-only reporting with no code change.
+
+_Amended 2026-09-10 (impl-review F6): "no `wrangler.jsonc` edit" no longer holds — `main` points at
+`worker.ts` (Phase 2 amendment), so backing out also means restoring `main` and deleting `worker.ts` and
+`src/lib/services/sentry-worker-options.ts`. Rollback is two steps: the Worker secret stops the Worker,
+and the browser stops only after the `PUBLIC_SENTRY_DSN` repository secret is deleted and a deploy runs._
 
 ## References
 
@@ -1117,4 +1167,4 @@ undefined DSN, and the app returns to console-only reporting with no code change
 - [x] 6.6 The alert rule delivers exactly one notification per issue, not one per event — 1687fcd
 - [x] 6.7 Each of the four negative checks above is recorded with its observed result, not asserted from absence of noticing — 1687fcd
 - [x] 6.8 The verification record contains no account identifiers — 1687fcd
-- [x] 6.9 The roadmap and Linear reflect the closed slice — 1687fcd
+- [x] 6.9 The roadmap and Linear reflect the closed slice — 1687fcd (roadmap); Linear MAR-24 moved to Done 2026-09-10 at the end of `/10x-impl-review` triage (impl-review F4)
