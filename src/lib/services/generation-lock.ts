@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { captureEvent } from "@/lib/services/reporting";
 
 /**
  * Per-user in-flight generation lock, backed by `public.generation_locks`.
@@ -60,15 +61,25 @@ export async function releaseGenerationLease(admin: SupabaseClient, userId: stri
     if (error) {
       // eslint-disable-next-line no-console
       console.error(`releaseGenerationLease: failed to release lock for ${userId}: ${error.message}`);
+      // Forwarded as well as logged (S-13): a lock that will not release makes every next generation for
+      // that user wait out the stale window, and nothing but this line says why. The console keeps the
+      // account; the forwarded event does not — the degradation family is outside the seam's identifier
+      // exception (`reporting.ts`), so the payload carries the failure only.
+      captureEvent("[generation-lock:release-failed]", "error", { error: error.message });
       return;
     }
 
     if (data !== true) {
       // eslint-disable-next-line no-console
       console.warn(`releaseGenerationLease: lease ${lease} for ${userId} was already swept as stale`);
+      // `warn`, not `error`: a sweep is expected under load. What the operator wants is the RATE, which the
+      // issue's event count already is — so the payload is deliberately empty rather than carrying a lease
+      // id that names nothing once the row is gone.
+      captureEvent("[generation-lock:release-swept]", "warn", {});
     }
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error(`releaseGenerationLease: RPC threw releasing lock for ${userId}:`, err);
+    captureEvent("[generation-lock:release-threw]", "error", { error: String(err) });
   }
 }

@@ -193,6 +193,10 @@ export const POST: APIRoute = async (context) => {
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("acquireGenerationLease failed:", error);
+    // Forwarded as well as logged (S-13): a lease that cannot be taken fails EVERY generation for this
+    // user, and the 500 is swallowed into a response `withSentry` never sees. Degradation family — the
+    // failure only, never the account.
+    captureEvent("[generation-lock:acquire-threw]", "error", { error: String(error) });
     return Response.json({ error: "Something went wrong. Please try again.", code: "generic" }, { status: 500 });
   }
   if (lease === null) {
@@ -680,6 +684,9 @@ async function runGeneration({
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error("recordTranscriptAttempt failed:", error);
+      // Forwarded (S-13): the rate limiter in front of the unbounded fetch is down, so every paid request
+      // fails closed until it is back. Belongs to `transcript-guard`'s family though it is caught here.
+      captureEvent("[transcript-guard:record-threw]", "error", { error: String(error) });
       await releaseUnspentTranscriptBudget();
       return Response.json({ error: "Something went wrong. Please try again.", code: "generic" }, { status: 500 });
     }

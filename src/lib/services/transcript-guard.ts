@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { captureEvent } from "@/lib/services/reporting";
 import type { TranscriptResolvedVia } from "@/types";
 
 /**
@@ -90,6 +91,11 @@ export async function getTranscriptQuote(
     if (error) {
       // eslint-disable-next-line no-console
       console.error(`getTranscriptQuote: ${error.message}`);
+      // Forwarded as well as logged (S-13): a quote cache that cannot be read makes every long-video
+      // confirmation pay for its transcript twice, and nothing user-visible says so. One key per operation
+      // and failure shape. NO user identifiers — every function here takes a `userId`, and none of them
+      // may pass it on: the degradation family is outside the seam's exception (`reporting.ts`).
+      captureEvent("[transcript-guard:quote-get-failed]", "error", { error: error.message });
       return null;
     }
     if (!data || data.length === 0) {
@@ -108,6 +114,7 @@ export async function getTranscriptQuote(
   } catch (cause) {
     // eslint-disable-next-line no-console
     console.error("getTranscriptQuote failed:", cause);
+    captureEvent("[transcript-guard:quote-get-threw]", "error", { error: String(cause) });
     return null;
   }
 }
@@ -152,10 +159,12 @@ export async function saveTranscriptQuote(
     if (error) {
       // eslint-disable-next-line no-console
       console.error(`saveTranscriptQuote: ${error.message}`);
+      captureEvent("[transcript-guard:quote-save-failed]", "error", { error: error.message });
     }
   } catch (cause) {
     // eslint-disable-next-line no-console
     console.error("saveTranscriptQuote failed:", cause);
+    captureEvent("[transcript-guard:quote-save-threw]", "error", { error: String(cause) });
   }
 }
 
@@ -185,9 +194,11 @@ export async function discardTranscriptQuote(
     if (error) {
       // eslint-disable-next-line no-console
       console.error(`discardTranscriptQuote: ${error.message}`);
+      captureEvent("[transcript-guard:quote-discard-failed]", "error", { error: error.message });
     }
   } catch (cause) {
     // eslint-disable-next-line no-console
     console.error("discardTranscriptQuote failed:", cause);
+    captureEvent("[transcript-guard:quote-discard-threw]", "error", { error: String(cause) });
   }
 }

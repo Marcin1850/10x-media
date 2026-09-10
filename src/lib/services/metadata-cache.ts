@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { captureEvent } from "@/lib/services/reporting";
 import type { VideoMetadata } from "@/types";
 
 /**
@@ -73,6 +74,9 @@ export async function getCachedMetadata(admin: SupabaseClient, youtubeId: string
     if (error) {
       // eslint-disable-next-line no-console
       console.error(`getCachedMetadata: ${error.message}`);
+      // Forwarded as well as logged (S-13), for the reason `getCachedTranscript` gives: a broken read here
+      // silently re-pays the metadata call on every generation. Same key rule, no user identifiers.
+      captureEvent("[metadata-cache:get-failed]", "error", { error: error.message });
       return null;
     }
     if (!data || data.length === 0) return null;
@@ -92,6 +96,7 @@ export async function getCachedMetadata(admin: SupabaseClient, youtubeId: string
   } catch (cause) {
     // eslint-disable-next-line no-console
     console.error("getCachedMetadata failed:", cause);
+    captureEvent("[metadata-cache:get-threw]", "error", { error: String(cause) });
     return null;
   }
 }
@@ -129,9 +134,11 @@ export async function saveCachedMetadata(
     if (error) {
       // eslint-disable-next-line no-console
       console.error(`saveCachedMetadata: ${error.message}`);
+      captureEvent("[metadata-cache:save-failed]", "error", { error: error.message });
     }
   } catch (cause) {
     // eslint-disable-next-line no-console
     console.error("saveCachedMetadata failed:", cause);
+    captureEvent("[metadata-cache:save-threw]", "error", { error: String(cause) });
   }
 }

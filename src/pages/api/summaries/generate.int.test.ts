@@ -13,6 +13,7 @@ import {
   persistRow,
   readJson,
   stubSupadataFetch,
+  SYNTHETIC_USER_ID,
   type FakeAdmin,
   type RpcHandler,
 } from "./__fixtures__/generation-harness";
@@ -570,5 +571,51 @@ describe("paid-path integrity — every swallowed failure past the debit reaches
     await POST(makeContext({ body: generateRequestBody() }));
 
     expectPromotedEvent(events, { key, severity: "error", fields });
+  });
+});
+
+/**
+ * The degradation sites the endpoint owns reach the operator (S-13 Phase 5).
+ *
+ * Oracle: the plan's Promotion Roster — `acquireGenerationLease failed` belongs to the lock family and
+ * `recordTranscriptAttempt failed` to the guard family; both are caught HERE because those two service
+ * functions throw rather than swallow — and `reporting.ts`'s PERSONAL DATA contract, which keeps the
+ * account out of the degradation family. Both exits fail the request closed with a 500; delete either
+ * `captureEvent` and every response-level assertion above stays green.
+ */
+describe("degradation — a lock or rate limiter that fails closed reaches the operator under its own key", () => {
+  const rows: [key: string, why: string, arrange: () => FakeAdmin][] = [
+    [
+      "[generation-lock:acquire-threw]",
+      "no lease can be taken, so every generation for this user fails",
+      () => createFakeAdmin({ ...defaultAdminScript(), acquire_generation_lease: [fail("synthetic lease failure")] }),
+    ],
+    [
+      "[transcript-guard:record-threw]",
+      "the rate limiter in front of the unbounded fetch is down, so every paid request fails",
+      () => {
+        const admin = createFakeAdmin({
+          ...defaultAdminScript(),
+          record_transcript_attempt: [fail("synthetic rate-limit failure")],
+        });
+        admin.queue("begin_generation", ok([beginRow({ outcome: "fresh" })])); // the idempotency probe
+        return admin;
+      },
+    ],
+  ];
+
+  it.each(rows)("%s: %s", async (key, _why, arrange) => {
+    const admin = arrange();
+    stubSupadataFetch({
+      transcript: () => supadataTranscriptOk({ content: "a short synthetic transcript with words in it" }),
+      metadata: () => supadataMetadataOk(),
+    });
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const events: ReportedEvent[] = [];
+    const { POST } = await loadEndpoint({ admin: admin.client, supabase: createFakeSupabase(5), events });
+
+    await POST(makeContext({ body: generateRequestBody() }));
+
+    expectPromotedEvent(events, { key, severity: "error", fields: ["error"], withheld: [SYNTHETIC_USER_ID] });
   });
 });

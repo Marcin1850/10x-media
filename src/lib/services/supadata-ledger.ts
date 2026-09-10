@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { captureEvent } from "@/lib/services/reporting";
 
 /**
  * Append-only ledger of real Supadata HTTP calls (S-07).
@@ -178,10 +179,15 @@ export async function flushSupadataCalls(
     if (error) {
       // eslint-disable-next-line no-console
       console.error(`flushSupadataCalls: ${error.message}`);
+      // Forwarded as well as logged (S-13): a lost flush is a hole in the very ledger the budget guard's
+      // reconciliation reads, so its numbers stop being trustworthy without anything failing. One key
+      // per failure shape; no user identifiers, although the rows being flushed carry one.
+      captureEvent("[supadata-ledger:flush-failed]", "error", { error: error.message });
     }
   } catch (cause) {
     // eslint-disable-next-line no-console
     console.error("flushSupadataCalls failed:", cause);
+    captureEvent("[supadata-ledger:flush-threw]", "error", { error: String(cause) });
   }
 }
 

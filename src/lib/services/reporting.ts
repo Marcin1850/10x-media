@@ -18,7 +18,11 @@
  *
  * PERSONAL DATA. The seam's default is NO user identifiers in a payload, and every family not named
  * below keeps it — `[supadata-budget]`, `[unsupported-feature]` and `[paid-path:*]` carry the failing
- * stage, figure or detail, never the account.
+ * stage, figure or detail, never the account. So does the DEGRADATION family (`[transcript-cache:*]`,
+ * `[metadata-cache:*]`, `[transcript-guard:*]`, `[supadata-ledger:*]`, `[supadata-budget:settle-*]`,
+ * `[generation-lock:*]`), several of whose functions take a `userId` and must not pass it on. The
+ * `reservationId` on `[supadata-budget:settle-*]` is not an exception: it keys a fleet-wide budget
+ * reservation, not an account.
  *
  * ONE GRANTED EXCEPTION, the RECONCILIATION FAMILY, and nothing else:
  *
@@ -35,8 +39,10 @@
  * and they are kept for the Sentry project's retention window like every other event field.
  *
  * A future exception is added to this list first, or not at all. Every promoted site's payload FIELD
- * SET is asserted exactly by its promotion test (`credits.test.ts`, `generate.int.test.ts`), so an
- * identifier added anywhere else fails a test instead of quietly widening the rule one site at a time.
+ * SET is asserted exactly by its promotion test — `credits.test.ts` for the reconciliation family, each
+ * degradation module's colocated `*.test.ts`, and `generate.int.test.ts` for the sites the endpoint
+ * owns — so an identifier added anywhere else fails a test instead of quietly widening the rule one site
+ * at a time.
  *
  * NEVER THROWS, NEVER BLOCKS. This is a contract, not a style. The seam sits inside `reserveBudget`,
  * immediately before the first paid Supadata call, in a request whose entire design is that a user is

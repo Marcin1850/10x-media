@@ -1,5 +1,5 @@
-import { expect } from "vitest";
-import type { ReportedEvent } from "@/lib/services/reporting";
+import { afterEach, beforeEach, expect } from "vitest";
+import { setReportingSink, type ReportedEvent } from "@/lib/services/reporting";
 
 /**
  * The promotion oracle shared by every S-13 promotion test (plan Phases 4-5, §Testing Strategy).
@@ -26,11 +26,18 @@ export interface PromotedEventExpectation {
   severity: string;
   /** The payload's field names, exactly — order-insensitive. */
   fields: readonly string[];
+  /**
+   * Values that may not appear ANYWHERE in the payload, error strings included — typically the user id
+   * the function under test was handed. The field set cannot catch an identifier interpolated into an
+   * allowed field, and that is precisely what copying a console line (several name the account) into a
+   * payload would do.
+   */
+  withheld?: readonly string[];
 }
 
 export function expectPromotedEvent(
   events: readonly ReportedEvent[],
-  { key, severity, fields }: PromotedEventExpectation,
+  { key, severity, fields, withheld = [] }: PromotedEventExpectation,
 ): void {
   // Exactly one: zero is a deleted promotion, two is one failure doubled into the operator's stream.
   const matching = events.filter((event) => event.context.key === key);
@@ -40,5 +47,34 @@ export function expectPromotedEvent(
   expect(matching[0].context.severity).toBe(severity);
   expect(payload).toBeTypeOf("object");
   expect(Object.keys(payload as Record<string, unknown>).sort()).toEqual([...fields].sort());
-  expect(JSON.stringify(payload)).not.toMatch(EMAIL_SHAPED);
+  const serialized = JSON.stringify(payload);
+  expect(serialized).not.toMatch(EMAIL_SHAPED);
+  for (const value of withheld) {
+    expect(serialized).not.toContain(value);
+  }
+}
+
+/**
+ * Installs a recording sink around every test in the enclosing `describe` and returns the array it
+ * fills — emptied before each test, default sink restored after.
+ *
+ * For a module the test file imports statically. An endpoint loaded through `generation-harness.ts`
+ * takes `loadEndpoint`'s `events` option instead: its module registry is reset per load, so a sink
+ * installed from here would sit on a `reporting.ts` instance the endpoint never forwards through.
+ */
+export function recordReportedEvents(): readonly ReportedEvent[] {
+  const events: ReportedEvent[] = [];
+
+  beforeEach(() => {
+    events.length = 0;
+    setReportingSink((event) => {
+      events.push(event);
+    });
+  });
+
+  afterEach(() => {
+    setReportingSink(null);
+  });
+
+  return events;
 }

@@ -783,6 +783,15 @@ the failure seams those tests already use, asserting **key**, **severity** (incl
 a constant) and **payload field set** — no `userId` anywhere in this family. Reservation ids are
 operational and allowed.
 
+_Amended 2026-09-10 (Phase 5 implementation):_ "the existing colocated unit tests" did not exist — four
+of the six modules had no tests, and `supadata-ledger` / `supadata-budget` had only endpoint-driven
+`*.int.test.ts`. All six are reachable from the unit project, so each gained a new colocated
+`<module>.test.ts` over `supabase-stub.ts`. The two endpoint-owned sites (`generate.ts:194,681`) are
+rows in `generate.int.test.ts`, as Phase 4's `[paid-path:*]` are. Keys follow Phase 4's shape,
+`[<module>:<operation>-failed]` for a rolled-back statement and `-threw` for a rejected request, and
+`expectPromotedEvent` gained a `withheld` check. That check is what catches a user id interpolated into
+an allowed `error` field, which an exact field set cannot see.
+
 ### Success Criteria:
 
 #### Automated Verification:
@@ -1082,16 +1091,16 @@ undefined DSN, and the app returns to console-only reporting with no code change
 
 #### Automated
 
-- [ ] 5.1 Type checking passes: `npm run typecheck`
-- [ ] 5.2 Linting passes: `npm run lint`
-- [ ] 5.3 Unit suite passes, including the degradation promotion cases: `npm test`
-- [ ] 5.4 No degradation payload carries a `userId` — asserted by the payload field-set cases, not by eye
-- [ ] 5.5 Integration suite passes: `npm run test:integration`
-- [ ] 5.6 Build succeeds: `npm run build`
+- [x] 5.1 Type checking passes: `npm run typecheck`
+- [x] 5.2 Linting passes: `npm run lint`
+- [x] 5.3 Unit suite passes, including the degradation promotion cases: `npm test`
+- [x] 5.4 No degradation payload carries a `userId` — asserted by the payload field-set cases, not by eye
+- [x] 5.5 Integration suite passes: `npm run test:integration`
+- [x] 5.6 Build succeeds: `npm run build`
 
 #### Manual
 
-- [ ] 5.7 Each promoted condition fingerprints separately (distinct keys), so one failing operation does not mask another
+- [x] 5.7 Each promoted condition fingerprints separately (distinct keys), so one failing operation does not mask another
 
 ### Phase 6: Turn it on — calibration, live verification, and docs
 

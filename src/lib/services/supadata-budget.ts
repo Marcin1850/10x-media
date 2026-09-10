@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { RETRY_DELAY_MS } from "./metadata";
-import { reportEvent } from "./reporting";
+import { captureEvent, reportEvent } from "./reporting";
 
 /**
  * Lever C — the Supadata budget breaker (S-09 D5).
@@ -584,6 +584,11 @@ export async function settleBudget(
     if (error) {
       // eslint-disable-next-line no-console
       console.error(`${BUDGET_EVENT} settle failed for ${reservationId}: ${error.message}`);
+      // Forwarded as well as logged (S-13): an unsettled reservation is counted at its reserved maximum
+      // until the sweep, so the breaker reasons from spend that may not exist. Its own keys, never the
+      // `[supadata-budget]` threshold family's — a bookkeeping failure is not a budget crossing. The
+      // reservation id is operational, not an account identifier, and is what locates the row.
+      captureEvent("[supadata-budget:settle-failed]", "error", { reservationId, error: error.message });
       return;
     }
 
@@ -594,9 +599,11 @@ export async function settleBudget(
     if (data !== true) {
       // eslint-disable-next-line no-console
       console.error(`${BUDGET_EVENT} settle found no open reservation ${reservationId} (swept?)`);
+      captureEvent("[supadata-budget:settle-unmatched]", "error", { reservationId });
     }
   } catch (cause) {
     // eslint-disable-next-line no-console
     console.error(`${BUDGET_EVENT} settle threw for ${reservationId}:`, cause);
+    captureEvent("[supadata-budget:settle-threw]", "error", { reservationId, error: String(cause) });
   }
 }

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { captureEvent } from "@/lib/services/reporting";
 import type { FetchedResolvedVia } from "@/types";
 
 /**
@@ -115,6 +116,11 @@ export async function getCachedTranscript(
     if (error) {
       // eslint-disable-next-line no-console
       console.error(`getCachedTranscript: ${error.message}`);
+      // Forwarded as well as logged (S-13). A cache that cannot be read re-pays Supadata on every request
+      // while the app keeps working, so nothing user-visible would ever surface it. One key per operation
+      // and failure shape — a rolled-back statement and a dead transport are repaired differently — and no
+      // user identifiers: the degradation family is outside the seam's exception (`reporting.ts`).
+      captureEvent("[transcript-cache:get-failed]", "error", { error: error.message });
       return null;
     }
     if (!data || data.length === 0) return null;
@@ -136,6 +142,7 @@ export async function getCachedTranscript(
   } catch (cause) {
     // eslint-disable-next-line no-console
     console.error("getCachedTranscript failed:", cause);
+    captureEvent("[transcript-cache:get-threw]", "error", { error: String(cause) });
     return null;
   }
 }
@@ -213,6 +220,7 @@ export async function saveCachedTranscript(
     if (error) {
       // eslint-disable-next-line no-console
       console.error(`saveCachedTranscript: ${error.message}`);
+      captureEvent("[transcript-cache:save-failed]", "error", { error: error.message });
       return { duplicateFetch: false };
     }
 
@@ -220,6 +228,7 @@ export async function saveCachedTranscript(
   } catch (cause) {
     // eslint-disable-next-line no-console
     console.error("saveCachedTranscript failed:", cause);
+    captureEvent("[transcript-cache:save-threw]", "error", { error: String(cause) });
     return { duplicateFetch: false };
   }
 }

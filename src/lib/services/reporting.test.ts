@@ -243,6 +243,32 @@ const PROMOTED_KEYS: readonly (readonly [key: string, severity: string])[] = [
   ["[paid-path:persist]", "error"],
   ["[paid-path:persist-skipped]", "error"],
   ["[paid-path:replay-readback]", "error"],
+  // Phase 5 — silent degradation. One key per operation AND failure shape, so a failing read never
+  // masks a failing write, and a rolled-back statement never masks a dead transport.
+  ["[transcript-cache:get-failed]", "error"],
+  ["[transcript-cache:get-threw]", "error"],
+  ["[transcript-cache:save-failed]", "error"],
+  ["[transcript-cache:save-threw]", "error"],
+  ["[metadata-cache:get-failed]", "error"],
+  ["[metadata-cache:get-threw]", "error"],
+  ["[metadata-cache:save-failed]", "error"],
+  ["[metadata-cache:save-threw]", "error"],
+  ["[transcript-guard:quote-get-failed]", "error"],
+  ["[transcript-guard:quote-get-threw]", "error"],
+  ["[transcript-guard:quote-save-failed]", "error"],
+  ["[transcript-guard:quote-save-threw]", "error"],
+  ["[transcript-guard:quote-discard-failed]", "error"],
+  ["[transcript-guard:quote-discard-threw]", "error"],
+  ["[transcript-guard:record-threw]", "error"],
+  ["[supadata-ledger:flush-failed]", "error"],
+  ["[supadata-ledger:flush-threw]", "error"],
+  ["[supadata-budget:settle-failed]", "error"],
+  ["[supadata-budget:settle-unmatched]", "error"],
+  ["[supadata-budget:settle-threw]", "error"],
+  ["[generation-lock:acquire-threw]", "error"],
+  ["[generation-lock:release-failed]", "error"],
+  ["[generation-lock:release-swept]", "warn"],
+  ["[generation-lock:release-threw]", "error"],
 ];
 
 describe("one condition, one issue", () => {
