@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { APIContext, AstroCookies } from "astro";
+import type { ReportedEvent } from "@/lib/services/reporting";
 
 /**
  * Shared stub-layer harness for the generation endpoint's integration tests (plan Phase 4).
@@ -323,6 +324,15 @@ export interface LoadEndpointOptions {
    * when this is set. `@/lib/supabase` stays mocked, so nothing else reaches a live client.
    */
   realAdminModule?: boolean;
+  /**
+   * Collects every event the endpoint forwards through the reporting seam (S-13). Pass an empty array
+   * and read it after the request.
+   *
+   * Installed HERE, never by the test: `vi.resetModules()` gives the endpoint a fresh `reporting.ts`,
+   * so a `setReportingSink` imported at a test file's top level sits on a stale module instance the
+   * endpoint never forwards through — and the test then fails as if the promotion were missing.
+   */
+  events?: ReportedEvent[];
 }
 
 /**
@@ -348,12 +358,29 @@ export async function loadEndpoint(
   }
   vi.doMock("@/lib/supabase", () => ({ createClient: () => supabase }));
   vi.doMock("@/lib/services/llm", () => ({ summarize }));
+  // Same reason as `supabase-admin` above, and it bit: a `failed`/`timeout` test's `fetchTranscript` mock
+  // otherwise survives into every later test in the file, which then 422s before the debit instead of
+  // exercising the real `transcript.ts` against the `fetch` stub. Silent for any later test that answers
+  // from the transcript cache — which is why it went unnoticed until tests past the debit arrived.
+  vi.doUnmock("@/lib/services/transcript");
   if (options.fetchTranscript) {
     const fetchTranscript = options.fetchTranscript;
     vi.doMock("@/lib/services/transcript", () => ({ fetchTranscript, TRANSCRIPT_REQUESTED_LANG: "en" }));
   }
 
-  return import("@/pages/api/summaries/generate");
+  const endpoint = await import("@/pages/api/summaries/generate");
+
+  if (options.events) {
+    // Resolved from the SAME fresh registry the endpoint import just populated, so this is the instance
+    // `generate.ts` and `credits.ts` actually forward through.
+    const events = options.events;
+    const { setReportingSink } = await import("@/lib/services/reporting");
+    setReportingSink((event) => {
+      events.push(event);
+    });
+  }
+
+  return endpoint;
 }
 
 export async function readJson(response: Response): Promise<unknown> {

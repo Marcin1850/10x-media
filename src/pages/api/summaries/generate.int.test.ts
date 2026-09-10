@@ -4,6 +4,7 @@ import {
   createFakeAdmin,
   createFakeSupabase,
   defaultAdminScript,
+  defaultSummarizeResult,
   fail,
   generateRequestBody,
   loadEndpoint,
@@ -12,7 +13,11 @@ import {
   persistRow,
   readJson,
   stubSupadataFetch,
+  type FakeAdmin,
+  type RpcHandler,
 } from "./__fixtures__/generation-harness";
+import type { ReportedEvent } from "@/lib/services/reporting";
+import { expectPromotedEvent } from "@/lib/services/__fixtures__/reporting-recorder";
 import {
   supadataMetadataOk,
   supadataTranscriptOk,
@@ -365,7 +370,8 @@ describe("refusal exits — each charges (or doesn't) exactly as chargeFailedTra
     admin.queue("begin_generation", ok([beginRow({ outcome: "fresh" })]));
     const supabase = createFakeSupabase(5);
     const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const { POST } = await loadEndpoint({ admin: admin.client, supabase });
+    const events: ReportedEvent[] = [];
+    const { POST } = await loadEndpoint({ admin: admin.client, supabase, events });
 
     const response = await POST(makeContext({ body: generateRequestBody() }));
     const json = (await readJson(response)) as Record<string, unknown>;
@@ -376,6 +382,14 @@ describe("refusal exits — each charges (or doesn't) exactly as chargeFailedTra
     // Silent about the balance for the same reason it is silent about `charged`: the statement may
     // have committed, so any number here could already be one credit stale.
     expect(json).not.toHaveProperty("creditsRemaining");
+    // The user is told to retry; the OPERATOR is told which row to check (S-13 Phase 4). This is the
+    // scenario the reconciliation family was built for, so it is asserted end to end through the
+    // endpoint rather than only against `credits.ts` in isolation.
+    expectPromotedEvent(events, {
+      key: "[charge-ambiguous:no-row]",
+      severity: "error",
+      fields: ["userId", "requestId", "refusalReason"],
+    });
     spy.mockRestore();
   });
 
@@ -441,5 +455,120 @@ describe("refusal exits — each charges (or doesn't) exactly as chargeFailedTra
     const emptyBody = await bodyFor("empty");
 
     expect(unavailableBody.error).not.toBe(emptyBody.error);
+  });
+});
+
+/**
+ * Paid-path integrity reaches the operator (S-13 Phase 4).
+ *
+ * Oracle: the plan's Promotion Roster ("charge and delivery can end up out of step") and `reporting.ts`'s
+ * PERSONAL DATA contract, under which this family carries the failing detail and no account identifier.
+ * Every one of these exits is SWALLOWED into a 500 or 502 rather than thrown, so `withSentry`'s
+ * automatic capture never sees them — and the response-level suites above stay green with every
+ * `captureEvent` in `generate.ts` deleted.
+ *
+ * One row per stage, driven through the harness's existing seams: the scripted `admin.rpc`, the mocked
+ * `summarize`, and the Supadata `fetch` stub. The recording sink goes in through `loadEndpoint`'s
+ * `events` option, never a top-level `setReportingSink` — see that option for why.
+ */
+describe("paid-path integrity — every swallowed failure past the debit reaches the operator under its own key", () => {
+  interface Arranged {
+    admin: FakeAdmin;
+    summarize: ReturnType<typeof vi.fn>;
+  }
+
+  function summarizing(): ReturnType<typeof vi.fn> {
+    return vi.fn().mockResolvedValue(defaultSummarizeResult());
+  }
+
+  /** An ordinary run up to and including a successful debit; `script` supplies the stage under test. */
+  function debitedAdmin(script: Record<string, RpcHandler[]>): FakeAdmin {
+    const admin = createFakeAdmin({ ...defaultAdminScript(), ...script });
+    admin.queue(
+      "begin_generation",
+      ok([beginRow({ outcome: "fresh" })]), // the idempotency probe
+      ok([beginRow({ outcome: "reserved", reservation_id: "res-debit", new_balance: 4 })]),
+    );
+    return admin;
+  }
+
+  /** `readStoredSummary` reads through the query builder, which the scripted admin fake does not carry. */
+  function withFailingSummaryRead(admin: FakeAdmin): FakeAdmin {
+    const maybeSingle = (): Promise<unknown> =>
+      Promise.resolve({ data: null, error: { message: "synthetic summary read failure" } });
+    Object.assign(admin.client, { from: () => ({ select: () => ({ eq: () => ({ maybeSingle }) }) }) });
+    return admin;
+  }
+
+  const rows: [key: string, why: string, arrange: () => Arranged, fields: string[]][] = [
+    [
+      "[paid-path:begin]",
+      "the debiting call itself failed, so the endpoint cannot say what it did to the balance",
+      () => {
+        const admin = createFakeAdmin(defaultAdminScript());
+        admin.queue(
+          "begin_generation",
+          ok([beginRow({ outcome: "fresh" })]), // the idempotency probe passes
+          fail("synthetic begin_generation failure"), // the debit does not
+        );
+        return { admin, summarize: summarizing() };
+      },
+      ["error"],
+    ],
+    [
+      "[paid-path:summarize]",
+      "debited, then the paid LLM call failed — nothing was delivered",
+      () => ({
+        admin: debitedAdmin({ refund_reservation: [ok(true)] }),
+        summarize: vi.fn().mockRejectedValue(new Error("synthetic llm failure")),
+      }),
+      ["error"],
+    ],
+    [
+      "[paid-path:persist]",
+      "a finished, paid-for summary could not be saved",
+      () => ({
+        admin: debitedAdmin({ persist_summary: [fail("synthetic persist failure")], refund_reservation: [ok(true)] }),
+        summarize: summarizing(),
+      }),
+      ["error"],
+    ],
+    [
+      "[paid-path:persist-skipped]",
+      "the reservation was closed under a running request, so its summary belongs to no row",
+      () => ({
+        admin: debitedAdmin({
+          persist_summary: [ok([persistRow({ outcome: "not_reserved", video_id: null, summary_id: null })])],
+        }),
+        summarize: summarizing(),
+      }),
+      ["reason"],
+    ],
+    [
+      "[paid-path:replay-readback]",
+      "the work is saved and charged, but the response that delivers it cannot be built",
+      () => ({
+        admin: withFailingSummaryRead(
+          debitedAdmin({ persist_summary: [ok([persistRow({ outcome: "already_persisted" })])] }),
+        ),
+        summarize: summarizing(),
+      }),
+      ["error"],
+    ],
+  ];
+
+  it.each(rows)("%s: %s", async (key, _why, arrange, fields) => {
+    const { admin, summarize } = arrange();
+    stubSupadataFetch({
+      transcript: () => supadataTranscriptOk({ content: "a short synthetic transcript with words in it" }),
+      metadata: () => supadataMetadataOk(),
+    });
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const events: ReportedEvent[] = [];
+    const { POST } = await loadEndpoint({ admin: admin.client, supabase: createFakeSupabase(5), summarize, events });
+
+    await POST(makeContext({ body: generateRequestBody() }));
+
+    expectPromotedEvent(events, { key, severity: "error", fields });
   });
 });

@@ -230,6 +230,19 @@ const PROMOTED_KEYS: readonly (readonly [key: string, severity: string])[] = [
   ["[supadata-budget]", "warn"],
   ["[supadata-budget]", "untracked"],
   ["[unsupported-feature]", "warn"],
+  // Phase 4 — money integrity. One key per cause an operator reconciles differently.
+  ["[charge-ambiguous:no-row]", "error"],
+  ["[charge-ambiguous:unknown-outcome]", "error"],
+  ["[charge-ambiguous:rejected]", "error"],
+  ["[credit-leak:refund-failed]", "error"],
+  ["[credit-leak:refund-threw]", "error"],
+  ["[replay-read:rpc-error]", "error"],
+  ["[replay-read:threw]", "error"],
+  ["[paid-path:begin]", "error"],
+  ["[paid-path:summarize]", "error"],
+  ["[paid-path:persist]", "error"],
+  ["[paid-path:persist-skipped]", "error"],
+  ["[paid-path:replay-readback]", "error"],
 ];
 
 describe("one condition, one issue", () => {

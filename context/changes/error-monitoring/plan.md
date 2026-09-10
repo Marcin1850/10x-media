@@ -694,9 +694,15 @@ automated criterion would still pass — the deliverable would have no test at a
 failure seams those suites already have (`stubFailing` / `stubRejecting` for credits; the stubbed vendor
 `fetch` and mocked client constructors for generate). One parameterized case per promoted site,
 asserting three things and no more: the **key**, the **severity**, and the **payload field set**. The
-last one is the automated form of this phase's identifier rule — `[charge-ambiguous:*]` may carry
-`userId` / `requestId`, everything else may not, and an email address may never appear anywhere. Do not
-assert console copy and do not reach into Sentry.
+last one is the automated form of this phase's identifier rule — the reconciliation family carries exactly
+the identifiers §1–§2 grant it (`[charge-ambiguous:*]` → `userId`, `requestId`, `refusalReason`;
+`[credit-leak:*]` → `userId`, `reservationId`; `[replay-read:*]` → `userId`, `requestId`), `[paid-path:*]`
+carries none, and an email address may never appear anywhere. Do not assert console copy and do not reach
+into Sentry.
+
+_Amended 2026-09-10 (Phase 4 implementation):_ this paragraph previously granted identifiers to
+`[charge-ambiguous:*]` alone, contradicting §1's three-family exception and §2's field lists; §1–§2 were
+the intended rule and are what the tests enforce.
 
 ### Success Criteria:
 
@@ -1061,16 +1067,16 @@ undefined DSN, and the app returns to console-only reporting with no code change
 
 #### Automated
 
-- [ ] 4.1 Type checking passes: `npm run typecheck`
-- [ ] 4.2 Linting passes: `npm run lint`
-- [ ] 4.3 Unit suite passes, including the credits promotion cases: `npm test`
-- [ ] 4.4 Integration suite passes, including the ambiguous-charge scenarios and their promoted events: `npm run test:integration`
-- [ ] 4.5 Deleting any single promoted `captureEvent` call turns a test red — verified once, by hand, on one site per family
-- [ ] 4.6 Build succeeds: `npm run build`
+- [x] 4.1 Type checking passes: `npm run typecheck`
+- [x] 4.2 Linting passes: `npm run lint`
+- [x] 4.3 Unit suite passes, including the credits promotion cases: `npm test`
+- [x] 4.4 Integration suite passes, including the ambiguous-charge scenarios and their promoted events: `npm run test:integration`
+- [x] 4.5 Deleting any single promoted `captureEvent` call turns a test red — verified once, by hand, on one site per family
+- [x] 4.6 Build succeeds: `npm run build`
 
 #### Manual
 
-- [ ] 4.7 The amended seam contract reads as a granted exception, not as a contradiction of the old comment
+- [x] 4.7 The amended seam contract reads as a granted exception, not as a contradiction of the old comment
 
 ### Phase 5: Promote the degradation events
 

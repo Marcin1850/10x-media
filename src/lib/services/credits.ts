@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { captureEvent } from "@/lib/services/reporting";
 import type { AppSupabaseClient } from "@/lib/services/summaries";
 
 /**
@@ -298,6 +299,10 @@ export async function chargeFailedTranscript(
     if (!data || data.length === 0) {
       // eslint-disable-next-line no-console
       console.error(`${REFUSAL_CHARGE_AMBIGUOUS}: charge_failed_transcript returned no row for ${userId}/${requestId}`);
+      // Forwarded as well as logged (S-13): only an operator can settle which way this credit went. One
+      // key per cause, because the three are reconciled differently and the fingerprint ignores the
+      // payload. The identifiers are the reconciliation family's granted exception (`reporting.ts`).
+      captureEvent("[charge-ambiguous:no-row]", "error", { userId, requestId, refusalReason });
       return { outcome: "ambiguous" };
     }
     const row = data[0];
@@ -313,11 +318,13 @@ export async function chargeFailedTranscript(
         // contract mismatch, not proof of no charge.
         // eslint-disable-next-line no-console
         console.error(`${REFUSAL_CHARGE_AMBIGUOUS}: unknown outcome '${row.outcome}' for ${userId}/${requestId}`);
+        captureEvent("[charge-ambiguous:unknown-outcome]", "error", { userId, requestId, refusalReason });
         return { outcome: "ambiguous" };
     }
   } catch (cause) {
     // eslint-disable-next-line no-console
     console.error(`${REFUSAL_CHARGE_AMBIGUOUS}: ${refusalReason} for ${userId}/${requestId}:`, cause);
+    captureEvent("[charge-ambiguous:rejected]", "error", { userId, requestId, refusalReason });
     return { outcome: "ambiguous" };
   }
 }
@@ -376,6 +383,10 @@ export async function lookupRefusalReplay(
     if (error) {
       // eslint-disable-next-line no-console
       console.error(`get_refusal_replay failed for ${userId}/${requestId}: ${error.message}`);
+      // Forwarded (S-13) because `null` fails OPEN: the caller reads it as "no replay exists", so the
+      // retry of an already-charged refusal can be charged a second time. Reconciliation family — the
+      // identifiers name the key an operator has to check (`reporting.ts`, PERSONAL DATA).
+      captureEvent("[replay-read:rpc-error]", "error", { userId, requestId });
       return null;
     }
 
@@ -395,6 +406,7 @@ export async function lookupRefusalReplay(
   } catch (cause) {
     // eslint-disable-next-line no-console
     console.error(`get_refusal_replay failed for ${userId}/${requestId}:`, cause);
+    captureEvent("[replay-read:threw]", "error", { userId, requestId });
     return null;
   }
 }
@@ -403,6 +415,11 @@ export async function lookupRefusalReplay(
  * Log marker for a debit that could not be resolved. Unlike the previous bare-refund design this is
  * no longer the only trace — the reservation row stays `reserved` in the ledger, so the debt is
  * recoverable by the reconciliation query even if this log line is lost.
+ *
+ * Since S-13 it also reaches the operator, under one key per failure shape and carrying the
+ * `userId`/`reservationId` pair — the reconciliation family's granted exception (`reporting.ts`),
+ * because that pair is the only thing that identifies which reservation to close. Until then, the
+ * message's own "recoverable via the reconciliation query" told only the log.
  */
 const CREDIT_LEAK = "CREDIT_LEAK";
 
@@ -438,6 +455,7 @@ export async function refundReservation(
       console.error(
         `${CREDIT_LEAK}: failed to refund reservation ${reservationId} for ${userId}: ${error.message} — ${recoverable}`,
       );
+      captureEvent("[credit-leak:refund-failed]", "error", { userId, reservationId });
       return false;
     }
 
@@ -448,6 +466,7 @@ export async function refundReservation(
       `${CREDIT_LEAK}: failed to refund reservation ${reservationId} for ${userId} — ${recoverable}:`,
       cause,
     );
+    captureEvent("[credit-leak:refund-threw]", "error", { userId, reservationId });
     return false;
   }
 }
