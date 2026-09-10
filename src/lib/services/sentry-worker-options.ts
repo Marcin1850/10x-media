@@ -1,6 +1,7 @@
 import {
   httpServerIntegration,
   requestDataIntegration,
+  type Breadcrumb,
   type CloudflareOptions,
   type ErrorEvent,
 } from "@sentry/cloudflare";
@@ -38,6 +39,9 @@ import {
  *     the URL's query and fragment. With it in place, weakening either layer above still leaves the
  *     envelope clean (Stryker, 2026-09-10) — so those two are defence in depth for the envelope, kept
  *     because they stop the data being captured in the first place.
+ *
+ * BREADCRUMBS are a separate channel into the same events, which none of the three layers touches;
+ * `scrubBreadcrumb` (below) covers them.
  *
  * Headers and query strings are dropped outright rather than filtered by name: D8's "keep the rest,
  * minus PII" was never enforced by the SDK on events, and on this app the query carries the auth
@@ -103,6 +107,7 @@ export function sentryWorkerOptions(env: SentryWorkerEnv): CloudflareOptions {
       frameContextLines: 5,
     },
     beforeSend: scrubRequestData,
+    beforeBreadcrumb: scrubBreadcrumb,
   };
 }
 
@@ -120,6 +125,26 @@ export function scrubRequestData(event: ErrorEvent): ErrorEvent {
     event.request = request;
   }
   return event;
+}
+
+/**
+ * Breadcrumbs ride along on every event, and neither `dataCollection` nor `scrubRequestData` sees them
+ * (impl-review follow-up #1 — found on a stored production event's Supabase fetch breadcrumb):
+ *
+ *  - CONSOLE breadcrumbs are dropped. App `console.*` lines interpolate user ids (`credits.ts`,
+ *    `generation-lock.ts`, `generate.ts`), and the console integration would attach them to any later
+ *    event in the request — including families that must never carry one. Workers Logs keeps every line,
+ *    and every promoted event already carries its own structured payload.
+ *  - Any breadcrumb URL loses its query and fragment. Supabase's PostgREST client puts filters such as
+ *    `user_id=eq.<uuid>` in the query string, so an outbound `fetch` breadcrumb would carry the account id.
+ */
+export function scrubBreadcrumb(breadcrumb: Breadcrumb): Breadcrumb | null {
+  if (breadcrumb.category === "console") return null;
+  const url: unknown = breadcrumb.data?.url;
+  if (typeof url === "string") {
+    breadcrumb.data = { ...breadcrumb.data, url: withoutQueryOrFragment(url) };
+  }
+  return breadcrumb;
 }
 
 function withoutQueryOrFragment(url: string): string {
