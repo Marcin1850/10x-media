@@ -1106,15 +1106,15 @@ undefined DSN, and the app returns to console-only reporting with no code change
 
 #### Automated
 
-- [ ] 6.1 All three CI jobs pass on the PR: `ci`, `integration`, `e2e`
+- [x] 6.1 All three CI jobs pass on the PR: `ci`, `integration`, `e2e`
 - [x] 6.2 Build succeeds locally without either DSN: `npm run build` — dfbc372
 - [x] 6.3 No DSN in a non-deploy build's output: `grep -r "ingest.*sentry.io" dist/` returns nothing — dfbc372
 
 #### Manual
 
-- [ ] 6.4 The browser smoke event (a top-up click in production) arrives in Sentry under its own fingerprinted issue
-- [ ] 6.5 The Worker smoke event arrives under its own fingerprinted issue, and its temporary trigger is gone from production afterwards — re-checked, not assumed
-- [ ] 6.6 The alert rule delivers exactly one notification per issue, not one per event
-- [ ] 6.7 Each of the four negative checks above is recorded with its observed result, not asserted from absence of noticing
-- [ ] 6.8 The verification record contains no account identifiers
-- [ ] 6.9 The roadmap and Linear reflect the closed slice
+- [x] 6.4 The browser smoke event (a top-up click in production) arrives in Sentry under its own fingerprinted issue
+- [x] 6.5 The Worker smoke event arrives under its own fingerprinted issue, and its temporary trigger is gone from production afterwards — re-checked, not assumed
+- [x] 6.6 The alert rule delivers exactly one notification per issue, not one per event
+- [x] 6.7 Each of the four negative checks above is recorded with its observed result, not asserted from absence of noticing
+- [x] 6.8 The verification record contains no account identifiers
+- [x] 6.9 The roadmap and Linear reflect the closed slice
