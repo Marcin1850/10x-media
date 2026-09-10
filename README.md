@@ -319,7 +319,7 @@ The two initialise independently: a Worker that reports proves nothing about the
 
 **Why neither DSN is set anywhere else.** An unset DSN leaves the SDK uninitialised, and that absence is the whole guarantee: local development, both Vitest suites, the e2e run and the `ci`/`integration`/`e2e` CI jobs send nothing because they have no DSN, not because a flag is switched off. Keep both keys commented out in `.env` and `.dev.vars` — a local DSN files real issues against the operator's project, mixed in with production incidents. Three guards back this up: the e2e runner **refuses to start** if either DSN — or the source-map upload token — is set (`playwright.config.ts`), its browser fixture fails any test whose page attempts a Sentry request (`tests/e2e/fixtures/no-sentry.ts`), and the integration suite's `fetch` firewall throws on any non-loopback request.
 
-**Source maps.** Production stack traces are de-minified by uploading source maps at build time. The upload runs only when `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` **and** `PUBLIC_SENTRY_DSN` are all present in the build environment (`astro.config.mjs`) — in this workflow, the `deploy` job's build alone. Every other build emits no maps and never runs Sentry's upload plugin. Keep these three out of `.env` just like the DSNs.
+**Source maps.** Production stack traces are de-minified by uploading source maps at build time. The upload runs only when `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` **and** `PUBLIC_SENTRY_DSN` are all present in the build environment (`astro.config.mjs`) — in this workflow, the `deploy` job's build alone. Every other build emits no maps and never runs Sentry's upload plugin. Keep these three out of `.env` just like the DSNs. The maps are deleted from `dist/` right after the upload (`@sentry/astro`'s default), so they never ship to Cloudflare. A failed upload does **not** fail the build: the plugin logs `An error occurred. Couldn't finish all operations` and the deploy still goes green, with minified stack traces. So after setting or rotating the token, confirm the upload in the `deploy` job log (`Successfully uploaded source maps to Sentry`) or under **Project Settings → Source Maps → Artifact Bundles** in Sentry. Setting the three secrets is described under [CI](#ci).
 
 **What notifies.** Every event reaches the Sentry dashboard — except that Sentry's default `Dedupe` drops an exact repeat of the previous event from the same client, so identical browser events within one page session count once — but the alert rule notifies only when an issue is **first seen or regresses** — never once per event. That is what makes alerting on `warn` survivable: the budget near-miss re-fires roughly once per budget reading for as long as the budget stays high, and it produces one notification, then accumulates quietly on its issue. The rule is configured in the Sentry UI, not in this repository, so recreating the project means recreating it by hand. The families that report:
 
@@ -399,6 +399,24 @@ Required repository secrets:
 The build does not need the Supadata or OpenRouter keys — every variable in the `astro:env` schema is declared `optional`, so the build succeeds without them. Neither the `integration` nor the `e2e` job needs any of these repository secrets.
 
 `PUBLIC_SENTRY_DSN` reaches the **`deploy` job's build step and nothing else**, and that narrowness is the point: the `ci` and `e2e` jobs build without it, so the browser bundles they produce physically cannot carry a DSN and cannot report. The Worker's own `SENTRY_DSN` never appears here at all — it is a Cloudflare secret, set once with `wrangler secret put` (see [Deployment](#deployment)), not something the pipeline injects. The three source-map upload secrets follow the same deploy-only rule; until they exist the upload simply stays off, and the deploy still succeeds with minified production stack traces.
+
+**Setting the source-map upload secrets.** A one-time step for the operator:
+
+1. In Sentry, create an **organization token** under **Settings → Developer Settings → Organization Tokens**. It carries the `org:ci` scope, which covers uploading source maps and creating releases. Sentry shows the token only once, and emails the organization's owners that it was created.
+2. Store it and the two slugs as repository secrets. Run this in your own terminal, so the token is typed into a prompt rather than into shell history or a chat transcript:
+
+   ```bash
+   gh secret set SENTRY_AUTH_TOKEN               # paste the token at the prompt
+   gh secret set SENTRY_ORG --body <org-slug>
+   gh secret set SENTRY_PROJECT --body <project-slug>
+   gh secret list                                # shows names, never values
+   ```
+
+   The slugs are the ones in the organization's and the project's Sentry URLs. They live in secrets rather than in this public repository on purpose.
+
+3. Secrets are read when a job runs, so re-run the latest `master` workflow (`gh run rerun <run-id>`) or push. Then check the `deploy` job log for `Successfully uploaded source maps to Sentry` — a green deploy alone does not prove the upload worked (see [Error monitoring](#error-monitoring)).
+
+To rotate the token, create a new one, overwrite `SENTRY_AUTH_TOKEN` with `gh secret set`, and revoke the old token in Sentry (only organization owners and managers can revoke). To switch the upload off, delete `SENTRY_AUTH_TOKEN`; the four-value gate in `astro.config.mjs` then closes on the next deploy.
 
 ## Project status
 
