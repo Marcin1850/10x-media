@@ -104,7 +104,10 @@ a local generation logs its console lines with nothing sent.
 
 As of 2026-09-10, before the push: **neither exists.** GitHub repository secrets list `SUPABASE_URL`,
 `SUPABASE_KEY`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`; Worker secrets list the five app keys.
-_Pending: `SENTRY_DSN` as a Worker secret, `PUBLIC_SENTRY_DSN` as a repository secret._
+Set by the operator the same day, then confirmed **by name only** (no value was read back):
+`gh secret list` now includes `PUBLIC_SENTRY_DSN`, and `npx wrangler secret list` now includes
+`SENTRY_DSN`. The `ci`, `integration` and `e2e` jobs still set neither (`ci.yml` parsed: `SENTRY`
+appears only in the `deploy` job's build env).
 
 ## Alert rule and spend cap (§3) — _pending_
 
