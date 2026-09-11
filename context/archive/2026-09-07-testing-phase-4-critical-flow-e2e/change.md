@@ -1,10 +1,10 @@
 ---
 change_id: testing-phase-4-critical-flow-e2e
 title: Critical-flow e2e — test-plan Phase 4
-status: implemented
+status: archived
 created: 2026-09-07
-updated: 2026-09-09
-archived_at: null
+updated: 2026-09-11
+archived_at: 2026-09-11T00:09:16Z
 ---
 
 ## Notes
