@@ -34,7 +34,7 @@ Watching YouTube videos is time-consuming — when regularly following informati
 | S-01 | generate-and-save-summary | paste URL + pick character → get and save a Polish summary   | F-01, F-02    | US-01, FR-003, FR-004, FR-005 | done        |
 | S-02 | browse-summary-list       | browse the list of saved summaries                           | S-01, S-08    | FR-006                        | done — live in production 2026-08-10, 27/27 verified |
 | S-03 | delete-summary            | delete a summary                                             | S-01          | FR-007                        | done — live in production 2026-09-07, 34/34 verified |
-| S-04 | delete-account            | delete their account and all associated data (GDPR)          | F-01          | Access Control, NFR (privacy) | done        |
+| S-04 | delete-account            | delete their account and all associated data (GDPR)          | F-01          | Access Control, NFR (privacy) | done |
 | S-05 | summary-credits           | start with 5 credits; each generation spends one             | F-01          | — (cost guardrail)            | done        |
 | S-06 | app-design-system         | use the app through a coherent, production-like UI           | S-02          | — (product polish)            | **done 2026-08-16** — steps 1–3 (wireframe, visual direction, design system) closed outside the repo; step-4 plan grew to 10 phases (Phase 10 added as a freeform QA sweep), all 10 landed by 2026-08-15 (`1c75118`), manual verification confirmed for every phase; Phase 10 impl-review (`a4c00b0`) NEEDS ATTENTION, all 7 findings triaged and fixed 2026-08-16 — nothing left to implement, pending `/10x-archive` |
 | S-07 | persist-time-and-cost | (observability) each summary records how long it took, what it cost on both providers, and keeps its transcript | S-01 | — (F-02 follow-ups F4/F5)  | done — live in production 2026-07-30, 5/5 phases verified |
@@ -158,7 +158,7 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
   - ~~Hard delete vs. soft-delete + purge window?~~ → **hard delete** (immediate, irreversible; no scheduler).
   - ~~How to remove the Supabase `auth.users` record from an SSR endpoint (service-role key vs. client)?~~ → **service-role admin client** calling `auth.admin.deleteUser`; domain rows purge via existing cascade FKs.
 - **Risk:** Low-to-medium risk. Depends on F-01 so the domain tables exist to cascade from; the auth account itself already exists in the baseline. Sequenced independently of the summary CRUD — it's a compliance guardrail, not part of the core loop. The main care point is completeness (no orphaned rows) rather than complexity.
-- **Status:** done — merged to `master` 2026-07-13 (merge commit `78bca68`, pushed to origin), Linear MAR-10 → Done; pending `/10x-archive`. Both phases implemented + committed 2026-07-12 — Phase 1 `2ebeaaf`, Phase 2 `2b0c78e`, epilogue `2710a3c`; `SUPABASE_SERVICE_ROLE_KEY` set as a Cloudflare Workers Secret. Manual E2E verification **passed** (commit `546e8f0`). Impl-review ran 2026-07-12 — verdict **NEEDS ATTENTION** (0 critical, 2 warnings, 3 observations). Triage complete 2026-07-13 (commit `57851b0`): F1/F3/F4 fixed (server-side delete confirmation, masked error contract, shadcn Dialog a11y), F2 skipped (pre-existing baseline lint drift owned by a parallel branch), F5 = tracker sync; lint + build green on the feature files.
+- **Status:** done
 
 ### S-05: New users start with a credit budget
 
@@ -434,3 +434,4 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
 
 - **F-01: (foundation) `videos` and `summaries` tables exist in Supabase with per-user RLS policies; multi-tenant privacy enforced at the database level.** — Archived 2026-09-11 → `context/archive/2026-06-13-video-summary-schema/`. Lesson: —.
 - **F-02: (foundation) AI provider wired in (key as a Workers Secret), and the "fetch YouTube transcript → call LLM" path is verified on a live, deployed Worker; confirmed whether the free Cloudflare plan is sufficient or a paid plan / workaround is needed.** — Archived 2026-09-11 → `context/archive/2026-07-04-transcript-llm-probe/`. Lesson: —.
+- **S-04: the user permanently deletes their account, and all associated data (videos, summaries, credits) is removed — satisfying the GDPR right to erasure.** — Archived 2026-09-11 → `context/archive/2026-07-11-delete-account/`. Lesson: —.

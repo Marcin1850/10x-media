@@ -1,10 +1,10 @@
 ---
 change_id: delete-account
 title: Delete account + all data (GDPR)
-status: impl_reviewed
+status: archived
 created: 2026-07-11
-updated: 2026-07-12
-archived_at: null
+updated: 2026-09-11
+archived_at: 2026-09-11T00:06:36Z
 ---
 
 ## Notes
