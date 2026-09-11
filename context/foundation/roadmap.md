@@ -3,7 +3,7 @@ project: "10xMedia"
 version: 1
 status: draft
 created: 2026-06-11
-updated: 2026-09-10
+updated: 2026-09-11
 prd_version: 1
 main_goal: speed
 top_blocker: external
@@ -29,7 +29,7 @@ Watching YouTube videos is time-consuming — when regularly following informati
 
 | ID   | Change ID                 | Outcome (user can …)                                         | Prerequisites | PRD refs                      | Status   |
 | ---- | ------------------------- | ------------------------------------------------------------ | ------------- | ----------------------------- | -------- |
-| F-01 | video-summary-schema      | (foundation) video/summary tables with per-user RLS          | —             | Access Control, NFR, FR-006   | done        |
+| F-01 | video-summary-schema      | (foundation) video/summary tables with per-user RLS          | —             | Access Control, NFR, FR-006   | done |
 | F-02 | transcript-llm-probe      | (foundation) transcript→LLM path verified on the Worker      | —             | FR-005, NFR                   | done        |
 | S-01 | generate-and-save-summary | paste URL + pick character → get and save a Polish summary   | F-01, F-02    | US-01, FR-003, FR-004, FR-005 | done        |
 | S-02 | browse-summary-list       | browse the list of saved summaries                           | S-01, S-08    | FR-006                        | done — live in production 2026-08-10, 27/27 verified |
@@ -88,7 +88,7 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
 - **Blockers:** —
 - **Unknowns:** —
 - **Risk:** Low risk. Sequenced early because every data slice assumes these tables, and skipping RLS here would break the privacy guarantee. Scope capped to two tables + policies — it does not build "the whole data layer"; S-01 still integrates this layer through real summary writes.
-- **Status:** done (implemented + reviewed; change `video-summary-schema`, Linear MAR-5). Not yet archived.
+- **Status:** done
 
 ### F-02: Transcript→LLM path verified on the deployed Worker
 
@@ -431,3 +431,5 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
 ## Done
 
 (Empty on first generation. `/10x-archive` appends an entry here — and flips that item's `Status` to `done` — when a change whose `Change ID` matches is archived. Do NOT pre-populate.)
+
+- **F-01: (foundation) `videos` and `summaries` tables exist in Supabase with per-user RLS policies; multi-tenant privacy enforced at the database level.** — Archived 2026-09-11 → `context/archive/2026-06-13-video-summary-schema/`. Lesson: —.
