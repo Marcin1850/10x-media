@@ -1,10 +1,10 @@
 ---
 change_id: testing-phase-1-bootstrap
 title: Test bootstrap + unit tests for the cost and credit decision rules
-status: impl_reviewed
+status: archived
 created: 2026-08-18
-updated: 2026-09-02
-archived_at: null
+updated: 2026-09-11
+archived_at: 2026-09-11T00:08:23Z
 ---
 
 ## Notes
