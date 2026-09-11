@@ -1,10 +1,10 @@
 ---
 change_id: summary-credits
 title: Summary credits
-status: impl_reviewed
+status: archived
 created: 2026-07-11
-updated: 2026-07-14
-archived_at: null
+updated: 2026-09-11
+archived_at: 2026-09-11T00:06:49Z
 ---
 
 ## Notes
