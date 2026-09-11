@@ -30,7 +30,7 @@ Watching YouTube videos is time-consuming — when regularly following informati
 | ID   | Change ID                 | Outcome (user can …)                                         | Prerequisites | PRD refs                      | Status   |
 | ---- | ------------------------- | ------------------------------------------------------------ | ------------- | ----------------------------- | -------- |
 | F-01 | video-summary-schema      | (foundation) video/summary tables with per-user RLS          | —             | Access Control, NFR, FR-006   | done |
-| F-02 | transcript-llm-probe      | (foundation) transcript→LLM path verified on the Worker      | —             | FR-005, NFR                   | done        |
+| F-02 | transcript-llm-probe      | (foundation) transcript→LLM path verified on the Worker      | —             | FR-005, NFR                   | done |
 | S-01 | generate-and-save-summary | paste URL + pick character → get and save a Polish summary   | F-01, F-02    | US-01, FR-003, FR-004, FR-005 | done        |
 | S-02 | browse-summary-list       | browse the list of saved summaries                           | S-01, S-08    | FR-006                        | done — live in production 2026-08-10, 27/27 verified |
 | S-03 | delete-summary            | delete a summary                                             | S-01          | FR-007                        | done — live in production 2026-09-07, 34/34 verified |
@@ -103,7 +103,7 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
   - Can the YouTube transcript be fetched from Cloudflare datacenter IPs (not just the dev machine)? — Owner: user/team. Block: no (this spike is what resolves it).
   - Will the free Cloudflare plan (~10ms CPU limit) handle transcript parsing, or is a paid plan / Railway escape-hatch required? — Owner: user. Block: no.
 - **Risk:** The riskiest element of the whole roadmap (top risk = external). Sequenced as the first de-risk: with the hard deadline of 2026-07-31 and after-hours work, any blocker on the live Worker must be discovered while schedule slack still exists. `infrastructure.md` names Railway (`@astrojs/node`) as the documented workaround if workerd / IP-blocking fail.
-- **Status:** done (implemented + impl-reviewed; change `transcript-llm-probe`, Linear MAR-6 Done 2026-07-10). De-risk verdict: free Cloudflare plan sufficient — Railway escape hatch not needed. Not yet archived. Follow-ups carried to S-01: LLM prompt-engineering, transcript-length guard, upstream-error handling.
+- **Status:** done
 
 ## Slices
 
@@ -433,3 +433,4 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
 (Empty on first generation. `/10x-archive` appends an entry here — and flips that item's `Status` to `done` — when a change whose `Change ID` matches is archived. Do NOT pre-populate.)
 
 - **F-01: (foundation) `videos` and `summaries` tables exist in Supabase with per-user RLS policies; multi-tenant privacy enforced at the database level.** — Archived 2026-09-11 → `context/archive/2026-06-13-video-summary-schema/`. Lesson: —.
+- **F-02: (foundation) AI provider wired in (key as a Workers Secret), and the "fetch YouTube transcript → call LLM" path is verified on a live, deployed Worker; confirmed whether the free Cloudflare plan is sufficient or a paid plan / workaround is needed.** — Archived 2026-09-11 → `context/archive/2026-07-04-transcript-llm-probe/`. Lesson: —.
