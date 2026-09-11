@@ -1,10 +1,10 @@
 ---
 change_id: persist-video-metadata
 title: "Persist video metadata: thumbnail, title, channel, length, date, language"
-status: impl_reviewed
+status: archived
 created: 2026-07-25
-updated: 2026-07-27
-archived_at: null
+updated: 2026-09-11
+archived_at: 2026-09-11T00:07:16Z
 ---
 
 ## Notes
