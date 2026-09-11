@@ -1,10 +1,10 @@
 ---
 change_id: bootstrap-verification
 title: Scaffold the project with 10x-astro-starter
-status: implemented
+status: archived
 created: 2026-05-30
-updated: 2026-05-30
-archived_at: null
+updated: 2026-09-11
+archived_at: 2026-09-11T00:06:08Z
 ---
 
 ## Notes
