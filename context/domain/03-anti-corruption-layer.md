@@ -97,9 +97,49 @@ nazwę:
 | **Testy** | `src/lib/services/__fixtures__/supadata-responses.ts`; `generate.int.test.ts:15`, `:26`; `supadata-budget.int.test.ts:9`; `supadata-ledger.int.test.ts:10` | fixture’y odpowiedzi HTTP vendora |
 | Testy e2e | `tests/e2e/fixtures/ledger.ts:62-65`, `test.ts:17`, `account.ts:33`, `seed-cache.ts:5-21` | tabela `supadata_calls` |
 
-Skala: Supadatę wspominają 44 pliki produkcyjne, migracje i fixture’y e2e, a łącznie z testami Vitest 62 (`grep -rli supadata`). Najwięcej trafień mają
-`20260731150000_supadata_budget.sql` (110), `transcript.ts` (45), `generate.ts` (30),
-`supadata-budget.ts` (26), `supadata-ledger.ts` (25), `metadata.ts` (24) i `src/types.ts` (11).
+Skala: Supadatę wspominają 44 pliki produkcyjne, migracje i fixture’y e2e, a łącznie z testami Vitest 62 (`grep -rli supadata`).
+
+**Weryfikacja ast-grep (0.45.3, 2026-09-13).** `grep -ci` liczy **linie** ze wzmianką, łącznie z
+komentarzami. ast-grep liczy tylko tokeny kodu: identyfikatory, właściwości, typy i fragmenty
+stringów pasujące do `(?i)supadata`, bez komentarzy.
+
+| Plik | `grep -ci` (linie, z komentarzami) | ast-grep (tokeny kodu) |
+| --- | --- | --- |
+| `supabase/migrations/20260731150000_supadata_budget.sql` | 110 | — (ast-grep nie ma gramatyki SQL) |
+| `src/lib/services/transcript.ts` | 45 | 26 |
+| `src/pages/api/summaries/generate.ts` | 30 | 18 |
+| `src/lib/services/supadata-budget.ts` | 26 | 14 |
+| `src/lib/services/supadata-ledger.ts` | 25 | 19 |
+| `src/lib/services/metadata.ts` | 24 | 16 |
+| `src/types.ts` | 11 | **0** |
+
+Referencję w kodzie ma **23** pliki z `src/` i `tests/` (6 produkcyjnych: `transcript.ts`, `metadata.ts`, `supadata-budget.ts`, `supadata-ledger.ts`, `generate.ts`, `config-status.ts`; reszta to testy i
+fixture’y), a nie 44. Pozostałe pliki wspominają Supadatę tylko w komentarzach. Dotyczy to
+`src/types.ts`, `VideoThumbnail.tsx`, `summaries.ts`, `transcript-cache.ts` i `transcript-guard.ts`.
+Przeciek w typach wspólnych i w UI jest więc **strukturalny, a nie leksykalny**. Tworzą go nazwa
+pola `thumbnailUrl` / `thumbnailUrlReported`, wartości `"inline"/"job"` i reguły quirku vendora.
+Grep po nazwie go nie wykryje, dlatego kryterium z §6.1 trzeba uzupełnić o kształt DTO (§5.3).
+
+Wywołania i konstrukcje z tego dokumentu, sprawdzone ast-grep na kodzie produkcyjnym (bez `*.test.ts`,
+`__fixtures__`, `src/test`):
+
+| Teza | Wynik |
+| --- | --- |
+| ``fetch(`${SUPADATA_BASE_URL}…`)`` ×3 | 3: `supadata-budget.ts:353`, `metadata.ts:62`, `transcript.ts:166` ✓ |
+| `const SUPADATA_BASE_URL` ×3, `{ "x-api-key": … }` ×3 | 3 / 3 ✓ |
+| `function isErrorBody` ×2 | 2: `transcript.ts:106`, `metadata.ts:41` ✓ |
+| import z `@supadata/js` | 2: `transcript.ts:1`, `metadata.ts:1` ✓ |
+| `SupadataError` jako wartość | `new` ×4 (`metadata.ts:79`, `:80`, `:89`, `:102`), `instanceof` ×2 (`metadata.ts:129`, `transcript.ts:333`), `extends` ×1 (`transcript.ts:253`) ✓ |
+| `reserveBudget` w route ×2 | 2: `generate.ts:654`, `:977` ✓ |
+| `settleBudget` w route | **3**, a nie 2: `generate.ts:675` (zwolnienie na 0), `:723`, `:999` |
+| `checkpoint()` / `billedSince()` ×2 | 2 / 2 ✓ |
+| stałe cennika w route | import `generate.ts:14-15` + użycie `:654`, `:977` ✓ |
+| `supadataKey` w route | 7 referencji (`generate.ts:227`, `:256`, `:495`, `:654`, `:711`, `:977`, `:989`); `SUPADATA_API_KEY` 5 (`config-status.ts:4`, `:30`; `generate.ts:3`, `:144`, `:227`) |
+| punkty wywołań vendora | `fetchTranscript` 1 (`generate.ts:711`), `fetchVideoMetadata` 1 (`:989`), `supadataGet` 2, `requestMetadata` 2 (retry), `pollTranscriptJob` 1, `readVendorBudget` 1 |
+| zapisy metera `meter?.record(…)` | 15: `transcript.ts` 10, `metadata.ts` 5 |
+| `RETRY_DELAY_MS` | 4: `metadata.ts:14`, `:183`, `supadata-budget.ts:2`, `:495` |
+| mapowanie `p_thumbnail_url_reported` ×2 | 2: `metadata-cache.ts:127`, `summaries.ts:322` ✓ |
+| `trim().length === 0` ×2 | 2: `generate.ts:796`, `:823` ✓ |
 
 ### 1.2 Pozostali kandydaci (dla porównania)
 
@@ -191,7 +231,8 @@ if (transcriptBudget.outcome === "reserved") {
 }
 ```
 
-Ten sam wzór powtarza się dla metadanych (`generate.ts:977`, `:987-1000`). Route musi wiedzieć, że:
+Ten sam wzór powtarza się dla metadanych (`generate.ts:977`, `:987-1000`). Trzecie `settleBudget`
+zwalnia rezerwację na 0 przed fetchem (`generate.ts:675`). Route musi wiedzieć, że:
 transkrypcja kosztuje ≤ 1 kredyt, bo `mode=native` (`supadata-budget.ts:48-52`); metadane ≤ 2,
 bo `metadata.ts` robi retry (`supadata-budget.ts:54-61`); koszt jest w nagłówku, a nie w wyniku
 (`generate.ts:704-707`); nazwy operacji to `"transcript"` i `"metadata"`
@@ -631,6 +672,10 @@ rg -il "supadata" src tests --glob '!src/lib/acl/video-source/supadata/**'
 rg '"@supadata/js"' package.json          # → pusto
 rg "cross-fetch" astro.config.mjs src     # → pusto (shim usunięty)
 ```
+
+Grep po nazwie nie złapie przecieku strukturalnego (patrz weryfikacja ast-grep w §1.1). Drugie
+kryterium: `rg "thumbnailUrl\b|thumbnailUrlReported|\"inline\" \| \"job\"" src --glob '!src/lib/domain/video-source/persistence.ts'`
+zwraca pusto, bo DTO i UI używają `thumbnail.src` / `fallbackSrc` oraz `TranscriptProvenance`.
 
 Świadome wyjątki: `astro.config.mjs` (jedna linia schematu env, nazwa sekretu),
 **zastosowane** migracje sprzed zmiany nazw (historii się nie edytuje, tak jak w 02 §5.1) oraz
