@@ -29,7 +29,7 @@ const validOutput = {
 const expectedMeta = { costUsd: 0.0123, durationMs: 4200, sessionId: "session-abc", numTurns: 1 };
 
 function success(overrides: Partial<Extract<ResultInput, { subtype: "success" }>>): ResultInput {
-  return { ...common, subtype: "success", is_error: false, terminal_reason: "completed", ...overrides };
+  return { ...common, subtype: "success", is_error: false, terminal_reason: "completed", result: "", ...overrides };
 }
 
 describe("interpretResult", () => {
@@ -73,9 +73,20 @@ describe("interpretResult", () => {
 
   it("returns agent-error for a success whose final API call failed, even with valid-looking output", () => {
     const outcome = interpretResult(
-      success({ is_error: true, terminal_reason: "api_error", structured_output: validOutput }),
+      success({
+        is_error: true,
+        terminal_reason: "api_error",
+        result: "API Error: 400 invalid request",
+        structured_output: validOutput,
+      }),
     );
-    expect(outcome).toMatchObject({ kind: "agent-error", subtype: "success", terminalReason: "api_error" });
+    // The failure text lives only in `result` for this shape; dropping it leaves the operator an empty error line.
+    expect(outcome).toMatchObject({
+      kind: "agent-error",
+      subtype: "success",
+      terminalReason: "api_error",
+      errors: ["API Error: 400 invalid request"],
+    });
     expect(outcome.meta.costUsd).toBe(0.0123);
   });
 });

@@ -18,7 +18,7 @@ type ResultCommon =
  * narrowing to a `Pick` keeps test fixtures honest about which fields the outcome depends on.
  */
 export type ResultInput =
-  | Pick<SDKResultSuccess, ResultCommon | "structured_output">
+  | Pick<SDKResultSuccess, ResultCommon | "structured_output" | "result">
   | Pick<SDKResultError, ResultCommon | "errors">;
 
 export interface ResultMeta {
@@ -63,7 +63,9 @@ export function interpretResult(message: ResultInput): ReviewOutcome {
   }
 
   if (message.is_error) {
-    return { kind: "agent-error", subtype: message.subtype, terminalReason: message.terminal_reason, errors: [], meta };
+    // This shape has no `errors` array; the API failure text (e.g. "API Error: 400 …") is only in `result`.
+    const errors = message.result ? [message.result] : [];
+    return { kind: "agent-error", subtype: message.subtype, terminalReason: message.terminal_reason, errors, meta };
   }
 
   const parsed = ReviewOutput.safeParse(message.structured_output);

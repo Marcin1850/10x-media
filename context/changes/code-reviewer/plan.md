@@ -319,25 +319,25 @@ None. The only edits outside the package are two ignore entries in root `tsconfi
 
 #### Automated
 
-- [x] 2.1 Package typechecks: `npm run typecheck` in `packages/code_reviewer`
-- [x] 2.2 Package unit tests pass: `npm test` in `packages/code_reviewer`
-- [x] 2.3 Missing key fails fast with exit 1 and no SDK call
-- [x] 2.4 Root gates still pass: `npm run typecheck` and `npm run lint` (root)
+- [x] 2.1 Package typechecks: `npm run typecheck` in `packages/code_reviewer` — 0ff637e
+- [x] 2.2 Package unit tests pass: `npm test` in `packages/code_reviewer` — 0ff637e
+- [x] 2.3 Missing key fails fast with exit 1 and no SDK call — 0ff637e
+- [x] 2.4 Root gates still pass: `npm run typecheck` and `npm run lint` (root) — 0ff637e
 
 #### Manual
 
-- [x] 2.5 Code review of `review.ts` confirms the lockdown options and failure-channel mapping
+- [x] 2.5 Code review of `review.ts` confirms the lockdown options and failure-channel mapping — 0ff637e
 
 ### Phase 3: Fixture Diff and First Real Run
 
 #### Automated
 
-- [ ] 3.1 The run exits 0: `npm run review -- fixtures/planted-bug.diff`
-- [ ] 3.2 The saved report re-validates against the schema and its `meta.tools` contains only `StructuredOutput`
-- [ ] 3.3 Package tests and typecheck still pass
+- [x] 3.1 The run exits 0: `npm run review -- fixtures/planted-bug.diff`
+- [x] 3.2 The saved report re-validates against the schema and its `meta.tools` contains only `StructuredOutput`
+- [x] 3.3 Package tests and typecheck still pass
 
 #### Manual
 
-- [ ] 3.4 The planted bug from `planted-bug.expected.md` appears in `findings`
-- [ ] 3.5 Cost per run is recorded and acceptable
-- [ ] 3.6 `first-run.md` contains no secrets or account identifiers
+- [x] 3.4 The planted bug from `planted-bug.expected.md` appears in `findings`
+- [x] 3.5 Cost per run is recorded and acceptable
+- [x] 3.6 `first-run.md` contains no secrets or account identifiers
