@@ -31,6 +31,7 @@ Verification: the Progress section below — automated gates per phase, plus a h
 - A single-shot `query()` **throws after yielding** an error result; a connection/process failure yields no result at all. The result message carries `total_cost_usd`, `session_id`.
 - In TypeScript, the `env` option *replaces* the subprocess environment — so don't pass it; rely on `process.env` populated by `--env-file`.
 - Root `.gitignore` already ignores `.env` / `.env.*` with `!.env.example` at any depth, and `.claude/` at any depth.
+- *(Found in Phase 2, 2026-09-14.)* With `tools: []` + `outputFormat`, the init message lists exactly one tool, `StructuredOutput` — the SDK's delivery channel for structured output. It is the expected tool list, not a lockdown leak; anything beyond it is.
 - Model attribution must come from what the run reports, never a hard-coded string — the opportunity map found two drifting spellings of the Codex model in 43 commits.
 
 ## What We're NOT Doing
@@ -184,7 +185,7 @@ Implement the review as pure, testable modules plus one `query()` call site and 
 
 **Intent**: `npm run review -- <diff-file>` entry point.
 
-**Contract**: loads config → reads diff → `runReview` → prints the init tool list and model, the report, and cost to stdout; writes `output/<ISO-timestamp>-<diff-basename>.json` containing `{ verdict, summary, findings, meta: { model, costUsd, durationMs, sessionId, numTurns, tools } }`. Exit codes: `0` ok; `1` config/input error (no SDK call made); `2` agent error, invalid output, or no result. Warns loudly (non-zero exit is not required) if `initTools` is non-empty.
+**Contract**: loads config → reads diff → `runReview` → prints the init tool list and model, the report, and cost to stdout; writes `output/<ISO-timestamp>-<diff-basename>.json` containing `{ verdict, summary, findings, meta: { model, costUsd, durationMs, sessionId, numTurns, tools } }`. Exit codes: `0` ok; `1` config/input error (no SDK call made); `2` agent error, invalid output, or no result. Warns loudly (non-zero exit is not required) if `initTools` contains anything other than `StructuredOutput`.
 
 #### 7. Unit tests
 
@@ -246,7 +247,7 @@ Create a known-answer input, spend one run on it, and record the evidence.
 #### Automated Verification:
 
 - The run exits 0: `npm run review -- fixtures/planted-bug.diff` in `packages/code_reviewer`
-- The saved report re-validates against the schema (the run's own `safeParse`, reflected in exit 0) and its `meta.tools` is empty
+- The saved report re-validates against the schema (the run's own `safeParse`, reflected in exit 0) and its `meta.tools` contains only `StructuredOutput`
 - Package tests and typecheck still pass: `npm test`, `npm run typecheck`
 
 #### Manual Verification:
@@ -275,7 +276,7 @@ Create a known-answer input, spend one run on it, and record the evidence.
 ### Manual Testing Steps:
 
 1. `cd packages/code_reviewer && npm ci && cp .env.example .env`, fill `ANTHROPIC_API_KEY`.
-2. `npm run review -- fixtures/planted-bug.diff`; confirm stdout shows an empty tool list and the model.
+2. `npm run review -- fixtures/planted-bug.diff`; confirm stdout shows a tool list of only `StructuredOutput` and the model.
 3. Open the saved `output/*.json`; compare `findings` with `fixtures/planted-bug.expected.md`.
 4. Unset the key and re-run; confirm exit 1 and that no cost line is printed.
 
@@ -303,36 +304,36 @@ None. The only edits outside the package are two ignore entries in root `tsconfi
 
 #### Automated
 
-- [x] 1.1 Package installs cleanly: `npm ci` in `packages/code_reviewer`
-- [x] 1.2 Root typecheck still passes and does not see the package: `npm run typecheck` (root)
-- [x] 1.3 Root lint still passes and does not lint the package: `npm run lint` (root)
-- [x] 1.4 Root Astro check still passes: `npm run typecheck:astro` (root)
-- [x] 1.5 Root lockfile unchanged: `git diff --exit-code package-lock.json` (root)
+- [x] 1.1 Package installs cleanly: `npm ci` in `packages/code_reviewer` — b170839
+- [x] 1.2 Root typecheck still passes and does not see the package: `npm run typecheck` (root) — b170839
+- [x] 1.3 Root lint still passes and does not lint the package: `npm run lint` (root) — b170839
+- [x] 1.4 Root Astro check still passes: `npm run typecheck:astro` (root) — b170839
+- [x] 1.5 Root lockfile unchanged: `git diff --exit-code package-lock.json` (root) — b170839
 
 #### Manual
 
-- [x] 1.6 Docs in `packages/code_reviewer/docs/` are readable and cover the five topics with source URLs
-- [x] 1.7 README setup steps make sense to someone who hasn't seen this plan
+- [x] 1.6 Docs in `packages/code_reviewer/docs/` are readable and cover the five topics with source URLs — b170839
+- [x] 1.7 README setup steps make sense to someone who hasn't seen this plan — b170839
 
 ### Phase 2: Reviewer Agent
 
 #### Automated
 
-- [ ] 2.1 Package typechecks: `npm run typecheck` in `packages/code_reviewer`
-- [ ] 2.2 Package unit tests pass: `npm test` in `packages/code_reviewer`
-- [ ] 2.3 Missing key fails fast with exit 1 and no SDK call
-- [ ] 2.4 Root gates still pass: `npm run typecheck` and `npm run lint` (root)
+- [x] 2.1 Package typechecks: `npm run typecheck` in `packages/code_reviewer`
+- [x] 2.2 Package unit tests pass: `npm test` in `packages/code_reviewer`
+- [x] 2.3 Missing key fails fast with exit 1 and no SDK call
+- [x] 2.4 Root gates still pass: `npm run typecheck` and `npm run lint` (root)
 
 #### Manual
 
-- [ ] 2.5 Code review of `review.ts` confirms the lockdown options and failure-channel mapping
+- [x] 2.5 Code review of `review.ts` confirms the lockdown options and failure-channel mapping
 
 ### Phase 3: Fixture Diff and First Real Run
 
 #### Automated
 
 - [ ] 3.1 The run exits 0: `npm run review -- fixtures/planted-bug.diff`
-- [ ] 3.2 The saved report re-validates against the schema and its `meta.tools` is empty
+- [ ] 3.2 The saved report re-validates against the schema and its `meta.tools` contains only `StructuredOutput`
 - [ ] 3.3 Package tests and typecheck still pass
 
 #### Manual

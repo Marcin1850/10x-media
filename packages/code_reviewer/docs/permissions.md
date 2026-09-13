@@ -71,5 +71,7 @@ available to Claude** and falls through to the permission mode.
 - `allowedTools: []` removes nothing, because it only approves.
 - `tools: []` restricts the built-in set to nothing. `permissionMode: "dontAsk"` makes any tool that still
   exists (MCP, injected) get denied instead of prompting.
-- Belt and braces: `disallowedTools: ["*"]` removes every tool definition from the request.
+- Belt and braces: `disallowedTools: ["*"]` removes every tool definition from the request. Not used here: with
+  `outputFormat` the session carries an internal `StructuredOutput` tool that `"*"` may also remove
+  (see `structured-outputs.md`).
 - Settings-borne rules (settings.json allow/ask) only load through `settingSources`, which should be `[]` here.

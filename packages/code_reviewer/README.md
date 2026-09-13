@@ -44,7 +44,7 @@ git itself.
 
 What the run does:
 
-1. Prints the session's tool list and model, taken from the SDK's init message. The tool list should be empty.
+1. Prints the session's tool list and model, taken from the SDK's init message. It should contain only `StructuredOutput`, the SDK's internal tool for delivering JSON-schema output. The CLI warns if any other tool appears.
 2. Prints the report and the run's cost in USD.
 3. Writes the report to `output/<ISO-timestamp>-<diff-basename>.json`. `output/` is gitignored.
 
@@ -84,7 +84,7 @@ Other scripts:
     "durationMs": 4200,
     "sessionId": "…",
     "numTurns": 1,
-    "tools": []                        // tool list from the init message; should be empty
+    "tools": ["StructuredOutput"]      // tool list from the init message; nothing else expected
   }
 }
 ```

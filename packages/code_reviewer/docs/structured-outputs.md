@@ -94,3 +94,7 @@ try {
 The docs do not say whether structured output relies on an internal tool that `tools: []` or
 `disallowedTools: ["*"]` would remove. Check it empirically: the run ends in
 `error_max_structured_output_retries`, or finishes `success` without `structured_output`, when that is the case.
+
+**Observed (SDK 0.3.270, 2026-09-14):** with `tools: []` plus `outputFormat`, the `system`/`init` message lists
+exactly one tool, `StructuredOutput`. It is the delivery channel for `outputFormat`, and `tools: []` keeps it. A
+`disallowedTools: ["*"]` deny list may remove it and break structured output, so this package does not use one.

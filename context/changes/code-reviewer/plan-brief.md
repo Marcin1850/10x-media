@@ -59,12 +59,12 @@ A first, runnable code-review agent built on `@anthropic-ai/claude-agent-sdk`, l
 
 ## Open Risks & Assumptions
 
-- Assumes `tools: []` + `outputFormat` coexist; verified on the first real run via the init message.
+- `tools: []` + `outputFormat` coexist: a free invalid-key run in Phase 2 showed the init message listing only `StructuredOutput`, the SDK's structured-output channel. The first real run confirms that the output actually arrives.
 - One diff with one bug says nothing about general recall — this is a feasibility proof, not a quality benchmark.
 - SDK is pre-1.0 (`0.3.x`); option names may change — the saved docs pin the version they describe.
 
 ## Success Criteria (Summary)
 
-- `npm run review -- fixtures/planted-bug.diff` exits 0 with an empty tool list and a schema-valid report that contains the planted bug.
+- `npm run review -- fixtures/planted-bug.diff` exits 0 with a tool list of only `StructuredOutput` and a schema-valid report that contains the planted bug.
 - Root `typecheck`, `typecheck:astro` and `lint` pass unchanged; root lockfile untouched.
 - The next session can build on the package using only `docs/` and the README.
