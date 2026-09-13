@@ -332,12 +332,12 @@ None. The only edits outside the package are two ignore entries in root `tsconfi
 
 #### Automated
 
-- [x] 3.1 The run exits 0: `npm run review -- fixtures/planted-bug.diff`
-- [x] 3.2 The saved report re-validates against the schema and its `meta.tools` contains only `StructuredOutput`
-- [x] 3.3 Package tests and typecheck still pass
+- [x] 3.1 The run exits 0: `npm run review -- fixtures/planted-bug.diff` — 366996a
+- [x] 3.2 The saved report re-validates against the schema and its `meta.tools` contains only `StructuredOutput` — 366996a
+- [x] 3.3 Package tests and typecheck still pass — 366996a
 
 #### Manual
 
-- [x] 3.4 The planted bug from `planted-bug.expected.md` appears in `findings`
-- [x] 3.5 Cost per run is recorded and acceptable
-- [x] 3.6 `first-run.md` contains no secrets or account identifiers
+- [x] 3.4 The planted bug from `planted-bug.expected.md` appears in `findings` — 366996a
+- [x] 3.5 Cost per run is recorded and acceptable — 366996a
+- [x] 3.6 `first-run.md` contains no secrets or account identifiers — 366996a
