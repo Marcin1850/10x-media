@@ -303,16 +303,16 @@ None. The only edits outside the package are two ignore entries in root `tsconfi
 
 #### Automated
 
-- [ ] 1.1 Package installs cleanly: `npm ci` in `packages/code_reviewer`
-- [ ] 1.2 Root typecheck still passes and does not see the package: `npm run typecheck` (root)
-- [ ] 1.3 Root lint still passes and does not lint the package: `npm run lint` (root)
-- [ ] 1.4 Root Astro check still passes: `npm run typecheck:astro` (root)
-- [ ] 1.5 Root lockfile unchanged: `git diff --exit-code package-lock.json` (root)
+- [x] 1.1 Package installs cleanly: `npm ci` in `packages/code_reviewer`
+- [x] 1.2 Root typecheck still passes and does not see the package: `npm run typecheck` (root)
+- [x] 1.3 Root lint still passes and does not lint the package: `npm run lint` (root)
+- [x] 1.4 Root Astro check still passes: `npm run typecheck:astro` (root)
+- [x] 1.5 Root lockfile unchanged: `git diff --exit-code package-lock.json` (root)
 
 #### Manual
 
-- [ ] 1.6 Docs in `packages/code_reviewer/docs/` are readable and cover the five topics with source URLs
-- [ ] 1.7 README setup steps make sense to someone who hasn't seen this plan
+- [x] 1.6 Docs in `packages/code_reviewer/docs/` are readable and cover the five topics with source URLs
+- [x] 1.7 README setup steps make sense to someone who hasn't seen this plan
 
 ### Phase 2: Reviewer Agent
 
