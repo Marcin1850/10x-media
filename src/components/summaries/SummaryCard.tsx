@@ -266,12 +266,26 @@ export function SummaryCard({
             aria-label={copy.summaries.card.verdictGroup(item.title ?? item.url)}
             className="relative z-10 flex-wrap pt-1"
           >
-            <ToggleGroupItem value={VERDICT_VALUE.worth} className="rounded-full text-xs">
-              <ThumbsUp aria-hidden="true" className="size-3.5" />
+            {/* Pressed = filled thumb in the verdict hue on a faint tint of it. The fill is the cue that
+                survives without colour vision; the label stays neutral so the pill reads as a quiet mark. */}
+            <ToggleGroupItem
+              value={VERDICT_VALUE.worth}
+              className="group/verdict data-[state=on]:border-verdict-worth/40 data-[state=on]:bg-verdict-worth/10 data-[state=on]:text-foreground rounded-full text-xs"
+            >
+              <ThumbsUp
+                aria-hidden="true"
+                className="text-muted-foreground group-data-[state=on]/verdict:fill-verdict-worth group-data-[state=on]/verdict:text-verdict-worth size-3.5"
+              />
               {copy.summaries.card.worthWatching}
             </ToggleGroupItem>
-            <ToggleGroupItem value={VERDICT_VALUE.notWorth} className="rounded-full text-xs">
-              <ThumbsDown aria-hidden="true" className="size-3.5" />
+            <ToggleGroupItem
+              value={VERDICT_VALUE.notWorth}
+              className="group/verdict data-[state=on]:border-verdict-skip/40 data-[state=on]:bg-verdict-skip/10 data-[state=on]:text-foreground rounded-full text-xs"
+            >
+              <ThumbsDown
+                aria-hidden="true"
+                className="text-muted-foreground group-data-[state=on]/verdict:fill-verdict-skip group-data-[state=on]/verdict:text-verdict-skip size-3.5"
+              />
               {copy.summaries.card.notWorthWatching}
             </ToggleGroupItem>
           </ToggleGroup>

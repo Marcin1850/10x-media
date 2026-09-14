@@ -46,6 +46,10 @@
   /* Gate text on the 12% attention tint. Dark uses a lightened variant; light has no
      darkened counterpart yet and lands at 4.25:1, below AA — fix before shipping light. */
   --attention-text: #9a6512;
+  /* outside the shadcn contract — the watch/skip verdict pills (S-14) only. Icon colour and a ~10%
+     tint of the pressed pill; the filled icon, not the hue, is what tells the two states apart. */
+  --verdict-worth: #3f7f6b;
+  --verdict-skip: #c62a2f;
   --sidebar: #efeff1;
   --sidebar-foreground: #131316;
   --sidebar-primary: #2e5fd0;
@@ -87,6 +91,9 @@
   --attention-foreground: #1a1305;
   /* Gate text on the 12% attention tint — the lightened variant, 8.75:1. */
   --attention-text: #ebc489;
+  /* outside the shadcn contract — the watch/skip verdict pills (S-14) only */
+  --verdict-worth: #4fbf9b;
+  --verdict-skip: #e5484d;
   --sidebar: #141518;
   --sidebar-foreground: #ededef;
   --sidebar-primary: #4c7df0;
@@ -133,6 +140,8 @@
   --color-attention: var(--attention);
   --color-attention-foreground: var(--attention-foreground);
   --color-attention-text: var(--attention-text);
+  --color-verdict-worth: var(--verdict-worth);
+  --color-verdict-skip: var(--verdict-skip);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
