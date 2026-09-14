@@ -285,10 +285,10 @@ Additive and nullable, so existing rows read as unmarked and there is no backfil
 
 #### Automated
 
-- [x] 2.1 Unit suite passes: `npm test`
-- [x] 2.2 Integration suite passes: `npm run test:integration`
-- [x] 2.3 Typecheck passes: `npm run typecheck`
-- [x] 2.4 Lint passes: `npm run lint`
+- [x] 2.1 Unit suite passes: `npm test` — 21ce611
+- [x] 2.2 Integration suite passes: `npm run test:integration` — 21ce611
+- [x] 2.3 Typecheck passes: `npm run typecheck` — 21ce611
+- [x] 2.4 Lint passes: `npm run lint` — 21ce611
 
 #### Manual
 
@@ -298,11 +298,11 @@ Additive and nullable, so existing rows read as unmarked and there is no backfil
 
 #### Automated
 
-- [ ] 3.1 Typecheck passes: `npm run typecheck`
-- [ ] 3.2 Astro typecheck passes: `npm run typecheck:astro`
-- [ ] 3.3 Lint passes: `npm run lint`
-- [ ] 3.4 Unit suite passes: `npm test`
-- [ ] 3.5 Build succeeds: `npm run build`
+- [x] 3.1 Typecheck passes: `npm run typecheck`
+- [x] 3.2 Astro typecheck passes: `npm run typecheck:astro`
+- [x] 3.3 Lint passes: `npm run lint`
+- [x] 3.4 Unit suite passes: `npm test`
+- [x] 3.5 Build succeeds: `npm run build`
 
 #### Manual
 

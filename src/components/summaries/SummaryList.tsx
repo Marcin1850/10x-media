@@ -40,6 +40,12 @@ interface Props {
   /** Per-id message from a deletion that failed and restored its row. Absent for every other id. */
   deleteErrors: Record<string, string | undefined>;
   onClearDeleteError: (id: string) => void;
+  /** The user set, switched or cleared a card's watch/skip verdict (S-14). Owned by the caller. */
+  onSetVerdict: (id: string, value: boolean | null) => void;
+  /** Ids whose verdict request is in flight — their toggle is disabled. */
+  verdictSaving: Record<string, boolean | undefined>;
+  /** Per-id message from a verdict save that failed and rolled back. */
+  verdictErrors: Record<string, string | undefined>;
 }
 
 /**
@@ -90,6 +96,9 @@ export function SummaryList({
   onDeleteSummary,
   deleteErrors,
   onClearDeleteError,
+  onSetVerdict,
+  verdictSaving,
+  verdictErrors,
 }: Props) {
   const [filter, setFilter] = useState<Filter>("all");
 
@@ -97,8 +106,8 @@ export function SummaryList({
 
   // The filter never applies to the pending card. A pending generation does have a character, but
   // hiding the thing the user just started — in the one place they can watch it — is the wrong
-  // default; the filter is for browsing what is saved. It also carries no delete control: a
-  // generation in flight is not a saved summary, and there is no row to delete.
+  // default; the filter is for browsing what is saved. It also carries no delete or verdict control: a
+  // generation in flight is not a saved summary, and there is no row to delete or mark.
   const pendingCard =
     pending === null ? null : (
       <PendingSummaryCard
@@ -212,6 +221,9 @@ export function SummaryList({
                 onDelete={onDeleteSummary}
                 deleteError={deleteErrors[item.id]}
                 onClearDeleteError={onClearDeleteError}
+                onSetVerdict={onSetVerdict}
+                verdictSaving={verdictSaving[item.id] === true}
+                verdictError={verdictErrors[item.id]}
               />
             </li>
           ))}

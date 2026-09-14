@@ -158,6 +158,11 @@ export const pl = {
       deleteQuestion: "Usunąć?",
       deleteConfirm: "Usuń",
       deleteCancel: "Anuluj",
+      // The watch/skip verdict (S-14). The group label names the video for the same reason
+      // `deleteSummary` does: every card carries the same two options.
+      verdictGroup: (title: string) => `Czy warto obejrzeć: ${title}`,
+      worthWatching: "Warto obejrzeć",
+      notWorthWatching: "Nie warto",
     },
   },
   generate: {
@@ -247,6 +252,7 @@ export const pl = {
     summaryDeleteFailed: "Nie udało się usunąć podsumowania. Spróbuj ponownie.",
     summaryDeleteNetwork: "Błąd sieci. Podsumowanie nie zostało usunięte.",
     summaryDeleteUnknown: "Nie wiemy, czy podsumowanie zostało usunięte. Odśwież stronę, aby sprawdzić.",
+    summaryVerdictFailed: "Nie udało się zapisać oceny. Spróbuj ponownie.",
     alreadyGenerating: "Podsumowanie jest już generowane. Poczekaj, aż się zakończy, zanim rozpoczniesz kolejne.",
     tooLong: "Ten film jest zbyt długi, aby go podsumować.",
     noTranscript: "Brak dostępnego transkryptu dla tego filmu.",

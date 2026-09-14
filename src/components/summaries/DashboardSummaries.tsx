@@ -76,6 +76,14 @@ export function SummariesSurface({ initialSummaries, initialCredits, listUnavail
   // "ids in flight" state alongside it: an id being deleted is exactly an id in `deletedIds` with
   // no card rendered, and tracking that twice would be two sources of truth for one fact.
   const [deleteErrors, setDeleteErrors] = useState<Record<string, string | undefined>>({});
+  /**
+   * The verdict lock (S-14): ids whose PATCH is in flight. A ref for the same reason `deletedIds` is one —
+   * two clicks inside one render would both read a stale state copy and both pass the "already saving"
+   * check. `verdictSaving` mirrors it for rendering (the disabled toggle); the ref is the authority.
+   */
+  const verdictInFlight = useRef<Set<string>>(new Set());
+  const [verdictSaving, setVerdictSaving] = useState<Record<string, boolean | undefined>>({});
+  const [verdictErrors, setVerdictErrors] = useState<Record<string, string | undefined>>({});
   // Seeded from the server read, but not frozen to it: a re-read that succeeds proves the corpus is
   // readable again, and continuing to show "we couldn't load your summaries" over a list we are
   // holding would be the same wrong statement about their data, just in the other direction.
@@ -286,6 +294,60 @@ export function SummariesSurface({ initialSummaries, initialCredits, listUnavail
     setDeleteErrors((current) => ({ ...current, [id]: message }));
   }
 
+  /** Put one card's mark to `value` without touching anything else about the list. */
+  function applyVerdict(id: string, value: boolean | null) {
+    setSummaries((current) => current.map((item) => (item.id === id ? { ...item, worthWatching: value } : item)));
+  }
+
+  /**
+   * Set, switch or clear one summary's watch/skip verdict, optimistically (S-14).
+   *
+   * **Lock ordering.** The previous value is captured at click time, then the lock, the optimistic value
+   * and the cleared error are set together. The lock is released only once the response has settled
+   * (kept, rolled back, or removed). Capturing `previous` at click time is correct *because* of the lock:
+   * no second click on this card can land in between and change what "previous" means. Clicks during a
+   * save are ignored rather than queued — setting a mark is idempotent and free, so the user re-clicks.
+   *
+   * **Outcomes.** `200` keeps the value. `404` means the summary is gone (deleted in another tab — under
+   * RLS "not yours" and "already gone" are one observation), so the card is removed through the same
+   * tombstone a delete uses, and a concurrent re-read cannot put it back. Any other status, or a thrown
+   * fetch, restores the previous mark with an inline error. Unlike a delete there is no reconcile step on a
+   * network failure: a retry of an idempotent mark converges on its own.
+   */
+  async function handleSetVerdict(id: string, next: boolean | null) {
+    if (verdictInFlight.current.has(id)) return;
+    const previous = summaries.find((item) => item.id === id)?.worthWatching ?? null;
+
+    verdictInFlight.current.add(id);
+    setVerdictSaving((current) => ({ ...current, [id]: true }));
+    applyVerdict(id, next);
+    setVerdictErrors((current) =>
+      current[id] === undefined ? current : Object.fromEntries(Object.entries(current).filter(([key]) => key !== id)),
+    );
+
+    try {
+      const response = await fetch(`/api/summaries/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ worth_watching: next }),
+      });
+      if (response.status === 404) {
+        deletedIds.current.add(id);
+        setSummaries((current) => current.filter((item) => item.id !== id));
+        setUnlisted((current) => (current !== null && current.summaryId === id ? null : current));
+      } else if (!response.ok) {
+        applyVerdict(id, previous);
+        setVerdictErrors((current) => ({ ...current, [id]: copy.errors.summaryVerdictFailed }));
+      }
+    } catch {
+      applyVerdict(id, previous);
+      setVerdictErrors((current) => ({ ...current, [id]: copy.errors.summaryVerdictFailed }));
+    } finally {
+      verdictInFlight.current.delete(id);
+      setVerdictSaving((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== id)));
+    }
+  }
+
   const attempt = generation.attempt;
   const lastSuccess = generation.lastSuccess;
   // Whether the attempt on screen is the one the last success settled. `attemptId` is what makes
@@ -376,6 +438,11 @@ export function SummariesSurface({ initialSummaries, initialCredits, listUnavail
         }}
         deleteErrors={deleteErrors}
         onClearDeleteError={clearDeleteError}
+        onSetVerdict={(id, value) => {
+          void handleSetVerdict(id, value);
+        }}
+        verdictSaving={verdictSaving}
+        verdictErrors={verdictErrors}
       />
     </div>
   );

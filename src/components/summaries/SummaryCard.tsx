@@ -1,7 +1,8 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import { Calendar, ChevronDown, CircleAlert, Clock, Trash2 } from "lucide-react";
+import { Calendar, ChevronDown, CircleAlert, Clock, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
 import { VideoThumbnail } from "@/components/summaries/VideoThumbnail";
 import { SummaryMarkdown } from "@/components/summaries/SummaryMarkdown";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useHasMounted } from "@/components/hooks/useHasMounted";
 import {
   daysSince,
@@ -26,6 +27,30 @@ interface Props {
    */
   deleteError?: string;
   onClearDeleteError: (id: string) => void;
+  /**
+   * The user chose, switched or cleared the watch/skip verdict (S-14). The parent applies it
+   * optimistically and owns the request, its rollback and its error — the value shown is always
+   * `item.worthWatching`.
+   */
+  onSetVerdict: (id: string, value: boolean | null) => void;
+  /** A verdict request for this card is in flight: the group is disabled, so a second click is ignored. */
+  verdictSaving?: boolean;
+  /** The message from a verdict save that failed and restored the previous mark. */
+  verdictError?: string;
+}
+
+/** Radix's single-select group speaks strings, with `""` for "nothing pressed"; the mark is tri-state. */
+const VERDICT_VALUE = { worth: "worth", notWorth: "not-worth" } as const;
+
+function verdictToValue(worthWatching: boolean | null): string {
+  if (worthWatching === null) return "";
+  return worthWatching ? VERDICT_VALUE.worth : VERDICT_VALUE.notWorth;
+}
+
+function valueToVerdict(value: string): boolean | null {
+  if (value === VERDICT_VALUE.worth) return true;
+  if (value === VERDICT_VALUE.notWorth) return false;
+  return null;
 }
 
 /**
@@ -88,7 +113,15 @@ function previewText(content: string): string {
  * distinguishes two otherwise near-identical cards. `created_at` is read regardless — it is the
  * newest-first sort key.
  */
-export function SummaryCard({ item, onDelete, deleteError, onClearDeleteError }: Props) {
+export function SummaryCard({
+  item,
+  onDelete,
+  deleteError,
+  onClearDeleteError,
+  onSetVerdict,
+  verdictSaving = false,
+  verdictError,
+}: Props) {
   const [expanded, setExpanded] = useState(false);
   // Which of the delete control's two steps is showing, and the card's *only* delete state. There is
   // deliberately no `deleting` flag: the parent drops the card the moment deletion starts, so an
@@ -217,6 +250,32 @@ export function SummaryCard({ item, onDelete, deleteError, onClearDeleteError }:
             {copy.summaries.card.generatedOn(formatCreatedDate(item.createdAt))}
           </p>
 
+          {/* The verdict (S-14). `relative z-10` lifts it above the expand button's stretched `::after`,
+              like the links and the delete control, so choosing a verdict never toggles the card.
+              Single-select with deselection: clicking the pressed option yields "", which is a clear. */}
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            spacing={1}
+            value={verdictToValue(item.worthWatching)}
+            onValueChange={(value) => {
+              onSetVerdict(item.id, valueToVerdict(value));
+            }}
+            disabled={verdictSaving}
+            aria-label={copy.summaries.card.verdictGroup(item.title ?? item.url)}
+            className="relative z-10 flex-wrap pt-1"
+          >
+            <ToggleGroupItem value={VERDICT_VALUE.worth} className="rounded-full text-xs">
+              <ThumbsUp aria-hidden="true" className="size-3.5" />
+              {copy.summaries.card.worthWatching}
+            </ToggleGroupItem>
+            <ToggleGroupItem value={VERDICT_VALUE.notWorth} className="rounded-full text-xs">
+              <ThumbsDown aria-hidden="true" className="size-3.5" />
+              {copy.summaries.card.notWorthWatching}
+            </ToggleGroupItem>
+          </ToggleGroup>
+
           {expanded ? null : <p className="text-muted-foreground line-clamp-2 text-sm">{previewText(item.content)}</p>}
         </div>
 
@@ -293,6 +352,18 @@ export function SummaryCard({ item, onDelete, deleteError, onClearDeleteError }:
         >
           <CircleAlert aria-hidden="true" className="size-4 shrink-0" />
           {deleteError}
+        </p>
+      ) : null}
+
+      {/* A verdict save that failed and rolled back. Same treatment as the delete error above. */}
+      {verdictError ? (
+        <p
+          role="alert"
+          aria-atomic="true"
+          className="border-destructive bg-destructive/10 text-destructive mx-4 mb-4 flex items-center gap-2 rounded-lg border-2 px-3 py-2 text-sm"
+        >
+          <CircleAlert aria-hidden="true" className="size-4 shrink-0" />
+          {verdictError}
         </p>
       ) : null}
 
