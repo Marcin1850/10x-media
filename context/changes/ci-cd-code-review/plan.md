@@ -442,7 +442,7 @@ Write down the scoped exception to the "no paid keys in CI" and "no LLM judge in
 
 #### Manual
 
-- [ ] 4.4 Operator sets `ANTHROPIC_API_KEY` repository secret
+- [x] 4.4 Operator sets `ANTHROPIC_API_KEY` repository secret
 - [ ] 4.5 Opening the PR triggers a review with sticky comment and one outcome label
 - [ ] 4.6 Push removes the outcome label and marks the comment outdated without a paid run
 - [ ] 4.7 Adding `ai-cr:review` re-runs and the label is removed afterward
