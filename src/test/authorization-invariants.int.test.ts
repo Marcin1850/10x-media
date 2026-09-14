@@ -83,6 +83,8 @@ import { getDbOwnerConnection } from "./db-owner";
  * Each is additionally gated by an owner-scoped `auth.uid() = user_id` policy (invariants 6 and 7).
  * The INSERT/UPDATE halves were dropped deliberately — for provenance, not isolation
  * (`20260726120000_videos_single_writer.sql:11`, `20260731130000_summaries_single_writer.sql:9`).
+ * UPDATE is re-opened on `summaries` for exactly one column, and that is NOT a table verb: it lives in
+ * `CLIENT_COLUMN_UPDATABLE` below, so `summaries` here correctly still holds no table-wide UPDATE.
  */
 const CLIENT_READABLE: Record<string, readonly string[]> = {
   // `20260613145120_videos_and_summaries.sql:4`; narrowed to select+delete by `20260726120000:25-37`.
@@ -110,6 +112,19 @@ const INTERNAL: readonly string[] = [
   "supadata_budget", // 20260731150000_supadata_budget.sql:140,141
   "supadata_reservations", // 20260731150000_supadata_budget.sql:217,218
 ];
+
+/**
+ * Column-scoped UPDATE: the `(table, column)` pairs `authenticated` may update, and nothing else. A
+ * column grant is invisible to `has_table_privilege`, so invariant 4 cannot see it; invariant 10 reads it
+ * through `has_column_privilege`, which ALSO reports every column of a table-wide grant — so widening the
+ * grant to the whole table goes red there, not silently green. Each table listed here contributes an
+ * `UPDATE` verb to invariant 6's expected policies.
+ */
+const CLIENT_COLUMN_UPDATABLE: Record<string, readonly string[]> = {
+  // `20260914120000_summaries_worth_watching.sql` — the user's watch/skip mark (roadmap S-14). Every other
+  // column stays single-writer through `persist_summary` (20260731130000).
+  summaries: ["worth_watching"],
+};
 
 const ROSTER = [...Object.keys(CLIENT_READABLE), ...INTERNAL].sort();
 
@@ -200,6 +215,7 @@ interface PolicyRow {
   polcmd: string;
   roles: string[];
   qual: string | null;
+  with_check: string | null;
 }
 
 function publicPolicies() {
@@ -211,7 +227,8 @@ function publicPolicies() {
              (select array_agg(r.rolname order by r.rolname) from pg_roles r where r.oid = any(p.polroles)),
              array['PUBLIC']
            ) as roles,
-           pg_get_expr(p.polqual, p.polrelid) as qual
+           pg_get_expr(p.polqual, p.polrelid) as qual,
+           pg_get_expr(p.polwithcheck, p.polrelid) as with_check
     from pg_policy p
       join pg_class c on c.oid = p.polrelid
       join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
@@ -322,9 +339,10 @@ describe("public schema authorization invariants", () => {
   it("6. every verb granted to authenticated has exactly one matching policy, and no policy exists beyond them", async () => {
     const policies = await publicPolicies();
 
-    const expected = Object.entries(CLIENT_READABLE)
-      .flatMap(([table, privileges]) => privileges.map((verb) => `${table}:${verb}`))
-      .sort();
+    const expected = [
+      ...Object.entries(CLIENT_READABLE).flatMap(([table, privileges]) => privileges.map((verb) => `${table}:${verb}`)),
+      ...Object.keys(CLIENT_COLUMN_UPDATABLE).map((table) => `${table}:UPDATE`),
+    ].sort();
 
     const actual = policies
       .map((policy) => {
@@ -341,7 +359,8 @@ describe("public schema authorization invariants", () => {
         "unfiltered, and a policy for a verb nobody holds is dead weight that hides intent. An entry " +
         "carrying `@<roles>` is a policy targeted at something other than `authenticated` alone; an " +
         "`ALL` entry is a `for all` policy, which must be split per command so this roster can express " +
-        "it. Fix the migration, or update CLIENT_READABLE if the grant itself changed.",
+        "it. Fix the migration, or update CLIENT_READABLE / CLIENT_COLUMN_UPDATABLE if the grant itself " +
+        "changed.",
     ).toEqual(expected);
   });
 
@@ -359,6 +378,30 @@ describe("public schema authorization invariants", () => {
         "guardrail (prd.md:37, prd.md:73, prd.md:92) — it is what makes one account's rows invisible to " +
         "another. Anything broader (`true`, a subquery, a join) opens cross-account reads. Comparison " +
         "ignores whitespace and outer parentheses only.",
+    ).toEqual(expected);
+  });
+
+  it("7b. every UPDATE policy's with check clause is owner-scoped", async () => {
+    const policies = await publicPolicies();
+    const updatePolicies = policies.filter((policy) => policy.polcmd === "w");
+    const checks = Object.fromEntries(
+      updatePolicies.map((policy) => [`${policy.relname}.${policy.polname}`, normalizeQual(policy.with_check)]),
+    );
+
+    const expected = Object.fromEntries(
+      Object.keys(CLIENT_COLUMN_UPDATABLE).map((table) => [
+        `${table}.${table}_update_authenticated`,
+        OWNER_SCOPED_QUAL,
+      ]),
+    );
+
+    expect(
+      checks,
+      "An UPDATE policy's `with check` is not `auth.uid() = user_id` (or the UPDATE policy set diverged " +
+        "from CLIENT_COLUMN_UPDATABLE). `using` decides which rows a user may target; `with check` decides " +
+        "what the row may look like afterwards. `with check (true)` — or an omitted one on a policy whose " +
+        "`using` is later changed — lets a row be re-owned the moment a migration widens the column grant " +
+        "to `user_id`. Comparison ignores whitespace and outer parentheses only.",
     ).toEqual(expected);
   });
 
@@ -453,5 +496,37 @@ describe("public schema authorization invariants", () => {
         "entry point, which is EXECUTE-able by `anon`/`authenticated` by design and resolves through " +
         "the same `public` grants and RLS asserted above. Anything else is a new door.",
     ).toEqual([{ signature: 'graphql("operationName" text, query text, variables jsonb, extensions jsonb)' }]);
+  });
+
+  it("10. the columns authenticated can UPDATE equal the column roster exactly", async () => {
+    const rows = await sql<{ relname: string; attname: string }[]>`
+      select c.relname, a.attname
+      from pg_class c
+        join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
+        join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+      where c.relkind in ('r', 'p', 'v', 'm', 'f')
+        and has_column_privilege('authenticated', c.oid, a.attnum, 'UPDATE')
+    `;
+
+    const actual: Record<string, string[]> = {};
+    for (const row of rows) {
+      (actual[row.relname] ??= []).push(row.attname);
+    }
+    for (const columns of Object.values(actual)) columns.sort();
+
+    const expected: Record<string, string[]> = {};
+    for (const [table, columns] of Object.entries(CLIENT_COLUMN_UPDATABLE)) {
+      expected[table] = [...columns].sort();
+    }
+
+    expect(
+      actual,
+      "`authenticated` can UPDATE a column the roster does not list. `has_column_privilege` also reports " +
+        "every column of a TABLE-WIDE grant, so a `grant update on public.summaries` shows up here as " +
+        "`content`, `reservation_id`, `metadata_via` and the telemetry columns — exactly the paid-path " +
+        "claims 20260731130000 made single-writer through `persist_summary`. Scope the grant to the column " +
+        "(`grant update (<column>) on public.<table> to authenticated;`), or, if a new column is genuinely " +
+        "user-editable, add it to CLIENT_COLUMN_UPDATABLE with its migration cited.",
+    ).toEqual(expected);
   });
 });

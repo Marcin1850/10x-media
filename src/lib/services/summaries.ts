@@ -53,6 +53,8 @@ type SummaryRow = {
   completion_tokens: number | null;
   /** How the metadata was obtained (S-09). Null on rows predating the column. */
   metadata_via: MetadataVia | null;
+  /** The user's watch/skip mark (S-14): null unmarked, true worth watching, false not worth watching. */
+  worth_watching: boolean | null;
   created_at: string;
 };
 
@@ -64,6 +66,14 @@ type SummaryInsert = {
   model: string | null;
   resolved_via: TranscriptResolvedVia | null;
   reservation_id: string | null;
+};
+
+/**
+ * The only column `authenticated` may UPDATE (20260914120000 grants it column-scoped). Every other column
+ * is written by `persist_summary` alone, so the type refuses them too.
+ */
+type SummaryUpdate = {
+  worth_watching?: boolean | null;
 };
 
 type UserCreditsRow = {
@@ -83,7 +93,7 @@ export interface AppDatabase {
   public: {
     Tables: {
       videos: { Row: VideoRow; Insert: VideoInsert; Update: Partial<VideoInsert>; Relationships: [] };
-      summaries: { Row: SummaryRow; Insert: SummaryInsert; Update: Partial<SummaryInsert>; Relationships: [] };
+      summaries: { Row: SummaryRow; Insert: SummaryInsert; Update: SummaryUpdate; Relationships: [] };
       user_credits: {
         Row: UserCreditsRow;
         Insert: UserCreditsInsert;

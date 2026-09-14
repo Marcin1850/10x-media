@@ -38,8 +38,10 @@ import { getDbOwnerConnection } from "@/test/db-owner";
  *
  * Oracle: the PRD privacy guardrail (`prd.md:37`, `prd.md:73`, `prd.md:92`) and each policy's own
  * migration — `20260613145120_videos_and_summaries.sql:19-20,31-32,50-51,62-63` (videos/summaries
- * SELECT+DELETE) and `20260712175240_user_credits.sql:17-19` (user_credits SELECT). Five policies,
- * five owner-scoped verbs; every one of them is exercised below.
+ * SELECT+DELETE), `20260712175240_user_credits.sql:17-19` (user_credits SELECT) and
+ * `20260914120000_summaries_worth_watching.sql` (summaries UPDATE, column-scoped to `worth_watching`).
+ * Six policies, six owner-scoped verbs; every one of them is exercised below — and the UPDATE grant's
+ * narrowness is probed from the owner's own session, where no policy can be what refuses it.
  */
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -264,6 +266,87 @@ describe("cross-account data boundary (test-plan risk #4)", () => {
       });
     },
   );
+
+  it("updating another account's summary mark affects no rows and leaves the mark unset", async () => {
+    await withTwoSeededAccounts(async (a, b) => {
+      const asB = sessionClient(b.account.cookieHeader);
+
+      const { data, error } = (await asB
+        .from("summaries")
+        .update({ worth_watching: true })
+        .eq("id", a.summaryId)
+        .select("id")) as unknown as { data: { id: string }[] | null; error: { message: string } | null };
+
+      expect(error, "Issuing an UPDATE of worth_watching as a signed-in account failed outright.").toBeNull();
+      expect(
+        data,
+        "Account B's UPDATE of worth_watching on account A's summary reported updated rows. authenticated " +
+          "genuinely holds UPDATE on that column (20260914120000), so the owner-scoped UPDATE policy's " +
+          "`using` clause is the only thing keeping B off A's row.",
+      ).toEqual([]);
+
+      const [row] = await dbOwner<{ worth_watching: boolean | null }[]>`
+        select worth_watching from summaries where id = ${a.summaryId}
+      `;
+      expect(row.worth_watching, "Account A's mark changed after account B issued an UPDATE against it.").toBeNull();
+    });
+  });
+
+  it("an account can set the mark on its own summary (positive control for the column probes)", async () => {
+    await withTwoSeededAccounts(async (a) => {
+      const asA = sessionClient(a.account.cookieHeader);
+
+      const { data, error } = (await asA
+        .from("summaries")
+        .update({ worth_watching: false })
+        .eq("id", a.summaryId)
+        .select("id")) as unknown as { data: { id: string }[] | null; error: { message: string } | null };
+
+      expect(error, "The owner could not update worth_watching on its own summary.").toBeNull();
+      expect(
+        data,
+        "The owner's UPDATE of worth_watching reported no updated row. Without this positive control the " +
+          "refusals below could pass merely because no client UPDATE works at all.",
+      ).toEqual([{ id: a.summaryId }]);
+
+      const [row] = await dbOwner<{ worth_watching: boolean | null }[]>`
+        select worth_watching from summaries where id = ${a.summaryId}
+      `;
+      expect(row.worth_watching).toBe(false);
+    });
+  });
+
+  it.each([
+    ["content", "forged content"],
+    ["reservation_id", "00000000-0000-4000-8000-000000000000"],
+  ] as const)("an account cannot update %s on its own summary", async (column, value) => {
+    await withTwoSeededAccounts(async (a) => {
+      const asA = sessionClient(a.account.cookieHeader);
+      const [before] = await dbOwner<{ content: string; reservation_id: string | null }[]>`
+        select content, reservation_id from summaries where id = ${a.summaryId}
+      `;
+
+      // AppDatabase's Update type already refuses these columns; this probe proves the database does too.
+      const forbidden = { [column]: value } as unknown as { worth_watching?: boolean | null };
+      const { error } = await asA.from("summaries").update(forbidden).eq("id", a.summaryId).select("id");
+
+      expect(
+        error,
+        `The owner's UPDATE of ${column} on its own summary was not refused. authenticated must hold ` +
+          `UPDATE on worth_watching ONLY (20260914120000): ${column} is written by persist_summary alone ` +
+          `(20260731130000), and a table-wide grant would let a client rewrite paid content or detach a ` +
+          `summary from its credit reservation.`,
+      ).not.toBeNull();
+      // The refusal must come from the privilege layer, not from a side constraint — a fake
+      // reservation_id would also fail its foreign key under a table-wide grant and pass vacuously.
+      expect(error?.message).toMatch(/permission denied/i);
+
+      const [after] = await dbOwner<{ content: string; reservation_id: string | null }[]>`
+        select content, reservation_id from summaries where id = ${a.summaryId}
+      `;
+      expect(after, `The summary's paid-path columns changed after a refused UPDATE of ${column}.`).toEqual(before);
+    });
+  });
 
   it("the production embed shape returns only the caller's summary and the caller's own video", async () => {
     await withTwoSeededAccounts(async (a, b) => {
