@@ -10,7 +10,7 @@ name: AI code review
 # `max-budget-usd`, and is only incurred on opened / reopened / ready_for_review and an explicit `ai-cr:review`.
 on:
   pull_request:
-    branches: [master]
+    branches: [master, code-reviewer]
     types: [opened, reopened, ready_for_review, synchronize, labeled]
 
 permissions:
