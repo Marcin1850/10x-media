@@ -282,8 +282,8 @@ Additive and nullable, so existing rows read as unmarked and there is no backfil
 
 #### Manual
 
-- [ ] 1.5 Deliberate break: table-wide grant turns roster invariant and `content` probe red; reverted
-- [ ] 1.6 Existing local summaries still list normally in the dashboard
+- [x] 1.5 Deliberate break: table-wide grant turns roster invariant and `content` probe red; reverted
+- [x] 1.6 Existing local summaries still list normally in the dashboard
 
 ### Phase 2: Service, Read Path and Endpoint
 
@@ -296,7 +296,7 @@ Additive and nullable, so existing rows read as unmarked and there is no backfil
 
 #### Manual
 
-- [ ] 2.5 Devtools PATCH round-trip returns 200 and `GET /api/summaries` shows the mark
+- [x] 2.5 Devtools PATCH round-trip returns 200 and `GET /api/summaries` shows the mark
 
 ### Phase 3: Card Toggle
 
@@ -310,10 +310,11 @@ Additive and nullable, so existing rows read as unmarked and there is no backfil
 
 #### Manual
 
-- [ ] 3.6 Mark / switch / clear each survive reload
-- [ ] 3.7 New summary appears unmarked
-- [ ] 3.8 Verdict click never toggles expansion; keyboard operates the group
-- [ ] 3.9 Rapid double-click ignored while saving; reload matches screen
-- [ ] 3.10 Network failure rolls back with inline error; later success clears it
-- [ ] 3.11 Summary deleted in another tab → card disappears on mark
-- [ ] 3.12 Layout holds at ~400px, light and dark
+- [x] 3.6 Mark / switch / clear each survive reload
+- [x] 3.7 New summary appears unmarked
+- [x] 3.8 Verdict click never toggles expansion; keyboard operates the group
+- [x] 3.9 Rapid double-click ignored while saving; reload matches screen
+- [x] 3.10 Network failure rolls back with inline error; later success clears it
+- [x] 3.11 Summary deleted in another tab → card disappears on mark
+- [x] 3.12 Layout holds at ~400px, light and dark
+  > Verified in dark only: `Layout.astro` pins `class="dark"` and light is not shipped (`global.css` header).
