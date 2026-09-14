@@ -1,8 +1,10 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 
 import { loadConfig } from "./config.js";
-import { EXPECTED_SESSION_TOOLS, runReview } from "./review.js";
+import { checkDiffFile, checkDiffText } from "./diff-input.js";
+import { verifyLockdown } from "./lockdown.js";
+import { runReview } from "./review.js";
 
 const EXIT_OK = 0;
 const EXIT_CONFIG = 1;
@@ -10,8 +12,13 @@ const EXIT_AGENT = 2;
 
 async function readDiff(path: string): Promise<string | { error: string }> {
   try {
+    const stats = await stat(path);
+    const fileCheck = checkDiffFile({ isFile: stats.isFile(), size: stats.size });
+    if (!fileCheck.ok) return { error: `${fileCheck.message} (${path})` };
+
     const diff = await readFile(path, "utf8");
-    return diff.trim() ? diff : { error: `Diff file is empty: ${path}` };
+    const textCheck = checkDiffText(diff);
+    return textCheck.ok ? diff : { error: `${textCheck.message} (${path})` };
   } catch (error) {
     return { error: `Cannot read diff file ${path}: ${error instanceof Error ? error.message : String(error)}` };
   }
@@ -33,17 +40,12 @@ async function main(): Promise<number> {
   console.log(`Reviewing ${config.diffPath}${config.model ? ` with model override ${config.model}` : ""}…`);
   const run = await runReview({ diff, model: config.model });
 
-  if (run.initTools === undefined) {
-    console.warn("⚠ [lockdown] No init message received — the session's tool list could not be verified.");
+  const lockdown = verifyLockdown(run);
+  if (lockdown.ok) {
+    console.log(`Session model: ${lockdown.init.model}`);
+    console.log(`Session tools: ${JSON.stringify(lockdown.init.initTools)}`);
   } else {
-    console.log(`Session model: ${run.model}`);
-    console.log(`Session tools: ${JSON.stringify(run.initTools)}`);
-    const unexpected = run.initTools.filter((tool) => !EXPECTED_SESSION_TOOLS.includes(tool));
-    if (unexpected.length > 0) {
-      console.warn(
-        `⚠ [lockdown] Expected only ${EXPECTED_SESSION_TOOLS.join(", ")}, but the session also exposed: ${unexpected.join(", ")}`,
-      );
-    }
+    console.error(`[lockdown] ${lockdown.reason}`);
   }
 
   if (run.kind === "no-result") {
@@ -66,15 +68,21 @@ async function main(): Promise<number> {
     return EXIT_AGENT;
   }
 
+  // A schema-valid review from an unverified session is not reported or saved: the lockdown is part of the contract.
+  if (!lockdown.ok) {
+    console.error("[agent] Refusing to report a review whose session lockdown was not verified.");
+    return EXIT_AGENT;
+  }
+
   const report = {
     ...run.output,
     meta: {
-      model: run.model ?? null,
+      model: lockdown.init.model,
       costUsd: run.meta.costUsd,
       durationMs: run.meta.durationMs,
       sessionId: run.meta.sessionId,
       numTurns: run.meta.numTurns,
-      tools: run.initTools ?? null,
+      tools: lockdown.init.initTools,
     },
   };
   const json = JSON.stringify(report, null, 2);

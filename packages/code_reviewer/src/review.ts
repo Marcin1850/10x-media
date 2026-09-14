@@ -1,5 +1,6 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
+import type { SessionInit } from "./lockdown.js";
 import { buildReviewPrompt, SYSTEM_PROMPT } from "./prompt.js";
 import { interpretResult, type ReviewOutcome } from "./result.js";
 import { reviewOutputJsonSchema } from "./schema.js";
@@ -7,18 +8,7 @@ import { reviewOutputJsonSchema } from "./schema.js";
 /** Small on purpose: a tool-less review is one model turn plus room for structured-output retries. */
 const MAX_TURNS = 3;
 
-/**
- * Tools the session may expose despite `tools: []`. `StructuredOutput` is how the SDK delivers `outputFormat`
- * (observed in the init message on SDK 0.3.270); it gives the model no access to anything outside the prompt.
- */
-export const EXPECTED_SESSION_TOOLS: readonly string[] = ["StructuredOutput"];
-
-/** What the session reported about itself in its `system`/`init` message — the proof of the lockdown. */
-export interface SessionInit {
-  initTools: string[];
-  model: string;
-}
-
+/** `init` stays partial here: whether it proves the lockdown is decided by `verifyLockdown`, not by the stream. */
 export type ReviewRun =
   | (ReviewOutcome & Partial<SessionInit>)
   | ({ kind: "no-result"; error: unknown } & Partial<SessionInit>);

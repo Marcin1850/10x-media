@@ -42,23 +42,33 @@ npm run review -- fixtures/planted-bug.diff
 The input is a unified diff in a file, for example one written by `git diff > my.diff`. The CLI does not run
 git itself.
 
+Input limits, all checked before any API call:
+
+- The path must be a regular file of at most **200,000 bytes** (`MAX_DIFF_BYTES` in `src/diff-input.ts`). The
+  size is checked before the file is read.
+- The content must look like a unified diff: a `---`/`+++` file header pair and at least one `@@` hunk. A file
+  that isn't a diff (a mistyped `.env`, a config file) is refused, and so is a diff with only binary, rename or
+  mode changes.
+- The check cannot see secrets **inside** a valid diff. Everything in the file is sent to the Anthropic API, so
+  look at the diff before you review it.
+
 What the run does:
 
-1. Prints the session's tool list and model, taken from the SDK's init message. It should contain only `StructuredOutput`, the SDK's internal tool for delivering JSON-schema output. The CLI warns if any other tool appears.
+1. Prints the session's tool list and model, taken from the SDK's init message. It must be exactly `StructuredOutput`, the SDK's internal tool for delivering JSON-schema output. If the init message is missing or lists anything else, the CLI exits `2` and does not print or save the review.
 2. Prints the report and the run's cost in USD.
 3. Writes the report to `output/<ISO-timestamp>-<diff-basename>.json`. `output/` is gitignored.
 
 Exit codes:
 
-| Code | Meaning                                                                                                                                  |
-| ---- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `0`  | Review completed and the output matched the schema                                                                                       |
-| `1`  | Configuration or input error, such as a missing diff argument, missing API key, or missing or empty diff file. **No API call was made.** |
-| `2`  | The agent failed: an error result, output that doesn't match the schema, or no result at all                                             |
+| Code | Meaning                                                                                                                                                                                     |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | Review completed and the output matched the schema                                                                                                                                          |
+| `1`  | Configuration or input error, such as a missing diff argument, missing API key, or a diff file that is missing, empty, over the size limit or not a unified diff. **No API call was made.** |
+| `2`  | The agent failed: an error result, output that doesn't match the schema, no result at all, or a session whose tool list could not be verified as exactly `StructuredOutput`                 |
 
 Other scripts:
 
-- `npm test`: unit tests for the schema, prompt, config and result interpretation. Hermetic, with no network
+- `npm test`: unit tests for the schema, prompt, config, input checks, lockdown check and result interpretation. Hermetic, with no network
   and no credit spent.
 - `npm run typecheck`: `tsc --noEmit` for this package only.
 
@@ -113,8 +123,8 @@ What this means in practice:
   it.
 - `settingSources: []` does not cover everything the SDK reads. Managed policy settings and `~/.claude.json`
   are still read, and so is auto memory. See [docs/query-options.md](docs/query-options.md#what-settingsources-does-not-control).
-- The init message's tool list is logged on every run and saved in `meta.tools`, so the lockdown can be
-  checked after the fact.
+- The init message's tool list is logged on every run and saved in `meta.tools`. A run whose tool list is
+  missing or differs from `["StructuredOutput"]` fails with exit `2` rather than producing a report.
 
 ## Reference docs
 

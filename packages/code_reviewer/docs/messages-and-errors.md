@@ -82,8 +82,8 @@ type SDKResultMessage =
 - `permission_denials`: tool calls that were denied. Useful to see whether a tool-less agent tried to use one.
 
 > When the final request fails, such as on an API error, Claude Code reports subtype `"success"` with the cause
-> in `terminal_reason`, for example `"api_error"`. When a limit you set ends the run, such as max*turns or
-> max_budget_usd, it reports an `error*\*`subtype. **Check`terminal_reason`before`subtype`.\*\*
+> in `terminal_reason`, for example `"api_error"`. When a limit you set ends the run, such as `max_turns` or
+> `max_budget_usd`, it reports an `error_*` subtype. **Check `terminal_reason` before `subtype`.**
 
 ## Throw-after-error and no-result failures
 

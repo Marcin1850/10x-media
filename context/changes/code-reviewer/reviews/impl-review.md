@@ -46,7 +46,7 @@
   - Tradeoff: `env` replaces rather than merges, so required process variables must be copied deliberately and the temporary config directory needs lifecycle handling.
   - Confidence: HIGH — the SDK behavior and disabling controls are already documented in `docs/query-options.md`.
   - Blind spot: Server/endpoint-managed policy cannot be disabled from the SDK and must remain disclosed.
-- **Decision**: PENDING
+- **Decision**: SKIPPED
 
 ### F2 — Lockdown attestation is fail-open and init metadata is optional
 
@@ -60,7 +60,7 @@
   - Tradeoff: A benign SDK protocol change will fail closed until the package is updated.
   - Confidence: HIGH — the current successful evidence already demonstrates the expected init shape.
   - Blind spot: The current architecture has no unit seam around the CLI/session stream, so a small extraction may be needed for hermetic coverage.
-- **Decision**: PENDING
+- **Decision**: FIXED — extracted pure `verifyLockdown` (`src/lockdown.ts`, with `EXPECTED_SESSION_TOOLS`/`SessionInit` moved there); `cli.ts` refuses to report/save an `ok` review without an exact `["StructuredOutput"]` init (exit 2); `src/lockdown.test.ts` covers missing/partial init and extra/empty/different tool lists. Typecheck + 28 tests pass.
 
 ### F3 — Any readable file can be sent to the paid API without a size cap
 
@@ -74,7 +74,7 @@
   - Tradeoff: Minimal diff validation must allow legitimate variants such as new/deleted/binary-file diffs or explicitly reject them with a clear message.
   - Confidence: HIGH — the current code has no size/type/content guard.
   - Blind spot: A syntactically valid diff can still contain secrets, so documentation and an explicit warning remain necessary.
-- **Decision**: PENDING
+- **Decision**: FIXED — new pure `src/diff-input.ts`: `checkDiffFile` (regular file, non-empty, ≤ `MAX_DIFF_BYTES` = 200,000, checked on `stat` before reading) and `checkDiffText` (`---`/`+++` header pair + ≥1 `@@` hunk; non-diff files such as `.env` refused by content rather than by filename blocklist). `cli.ts` `readDiff` applies both, exit 1. `src/diff-input.test.ts` added; README documents the limits and that secrets inside a valid diff are not detected. Manual probe: `.env.example` → exit 1, no API call.
 
 ### F4 — Schema accepts contradictory verdicts and findings
 
@@ -88,7 +88,7 @@
   - Tradeoff: Refinements may not be represented in generated Draft-07 JSON Schema, so enforcement may occur only in the local validation step.
   - Confidence: HIGH — the contradictory objects currently pass the exported Zod schema.
   - Blind spot: The intended behavior for an empty `comment` or minor findings with `request_changes` is not explicitly stated and should be decided before encoding the rule.
-- **Decision**: PENDING
+- **Decision**: FIXED — `schema.ts` adds `expectedVerdict(findings)` (the SYSTEM_PROMPT rule as a function: any critical/major → `request_changes`, else any finding → `comment`, else `approve`; exact equality, which resolves the blind spot) and `ReviewOutput` = unrefined shape + `superRefine`; `reviewOutputJsonSchema` is generated from the unrefined shape. A contradiction now surfaces as `invalid-output` (exit 2). `schema.test.ts` gains contradictory-verdict rows and a JSON-Schema-unchanged test; one existing accept row (`comment` + major) corrected to `request_changes`. 47 tests pass.
 
 ### F5 — Error-handling documentation has malformed Markdown
 
@@ -98,4 +98,13 @@
 - **Location**: `packages/code_reviewer/docs/messages-and-errors.md:85`
 - **Detail**: The manual documentation criterion is marked complete, but a key rule renders as `max*turns`, ``error*\*`subtype`` and `**Check`terminal_reason`before`subtype`.\*\*`, obscuring the distinction between terminal reasons and error subtypes.
 - **Fix**: Correct the text to `max_turns`, an `error_*` subtype, and “Check `terminal_reason` before `subtype`.”
-- **Decision**: PENDING
+- **Decision**: FIXED — lines 85-86 rewritten with proper code spans and bold; verified it survived the Prettier hook.
+
+## Triage summary (2026-09-14)
+
+| Decision | Findings |
+|----------|----------|
+| Fixed | F2, F3, F4, F5 |
+| Skipped | F1 |
+
+Post-triage verification in `packages/code_reviewer`: `npm run typecheck` PASS; `npm test` PASS — 6 files, 47 tests. No paid run was made.
