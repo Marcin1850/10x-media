@@ -36,7 +36,7 @@ The code reads like the rest of the repository — it uses the project's existin
 
 ### 4. Test/risk coverage
 
-A change touching a risk from `test-plan.md` is covered at the cheapest layer that still gives a signal, with the oracle taken from sources rather than from the implementation.
+A change touching a risk area (the paid path and credit ledger, the data-access boundary, the charge-versus-delivery UI) is covered at the cheapest layer that still gives a signal, with the oracle taken from sources rather than from the implementation.
 
 - **(1)** No tests for a change to the paid path or the data boundary; tests that recompute the expected value the way the code does; UI-only assertions without the ledger in e2e; `waitForTimeout`, CSS selectors, or visibility probes through an RLS-bypassing connection.
 - **(10)** Every touched risk has a test at the right layer (pure/hermetic, integration with a real balance, or e2e with a two-sided oracle), each `it.each` row catches a different regression, and the tests are shaped so a deliberate break would turn them red.
@@ -45,8 +45,8 @@ A change touching a risk from `test-plan.md` is covered at the cheapest layer th
 
 The solution is the simplest one that meets the requirements, the diff's scope matches the task, and load-bearing documentation keeps pace with the code.
 
-- **(1)** Speculative abstractions, duplicated logic, unrelated changes bundled into the PR, functions that cannot be followed without a debugger, or README / CLAUDE.md / header comments left contradicting the new behavior.
-- **(10)** The diff is small and focused, every new layer is justified by a concrete need, the code reads linearly, and README, CLAUDE.md, `test-plan.md`, and header comments are updated exactly where the change altered behavior.
+- **(1)** Speculative abstractions, duplicated logic, unrelated changes bundled into the PR, functions that cannot be followed without a debugger, or README / header comments left contradicting the new behavior.
+- **(10)** The diff is small and focused, every new layer is justified by a concrete need, the code reads linearly, and README and header comments are updated exactly where the change altered behavior.
 
 ## Parked for later
 
