@@ -111,3 +111,42 @@ export function stubDeleteFailing(message = "boom"): QueryStub {
 export function stubDeleteRejecting(cause: unknown = new TypeError("fetch failed")): QueryStub {
   return queryStubFrom(vi.fn<(columns?: string) => Promise<unknown>>().mockRejectedValue(cause));
 }
+
+/**
+ * The UPDATE sibling of the query-builder seam: `.from(table).update(payload).eq(column, value).select(columns)`
+ * — `setWorthWatching` (S-14). `update` is its own mock so a test can assert the payload is exactly
+ * `{ worth_watching }`: the column grant (20260914120000) refuses any other column, and a service that
+ * sent one would turn every mark into a 500.
+ */
+export interface UpdateQueryStub {
+  /** Pass where production expects an RLS-scoped `AppSupabaseClient`. */
+  client: AppSupabaseClient;
+  from: Mock<(table: string) => unknown>;
+  update: Mock<(payload: Record<string, unknown>) => unknown>;
+  eq: Mock<(column: string, value: unknown) => unknown>;
+  select: Mock<(columns?: string) => Promise<unknown>>;
+}
+
+function updateStubFrom(select: Mock<(columns?: string) => Promise<unknown>>): UpdateQueryStub {
+  const eq = vi.fn<(column: string, value: unknown) => unknown>().mockReturnValue({ select });
+  const update = vi.fn<(payload: Record<string, unknown>) => unknown>().mockReturnValue({ eq });
+  const from = vi.fn<(table: string) => unknown>().mockReturnValue({ update });
+  return { client: { from } as unknown as AppSupabaseClient, from, update, eq, select };
+}
+
+/** PostgREST answered successfully — `rows` is what `.select()` reported as updated (`null`: no representation). */
+export function stubUpdating(rows: { id: string }[] | null): UpdateQueryStub {
+  return updateStubFrom(vi.fn<(columns?: string) => Promise<unknown>>().mockResolvedValue({ data: rows, error: null }));
+}
+
+/** PostgREST returned a structured error — the UPDATE rolled back. */
+export function stubUpdateFailing(message = "boom"): UpdateQueryStub {
+  return updateStubFrom(
+    vi.fn<(columns?: string) => Promise<unknown>>().mockResolvedValue({ data: null, error: { message } }),
+  );
+}
+
+/** The request itself failed in transport — the UPDATE may or may not have committed. */
+export function stubUpdateRejecting(cause: unknown = new TypeError("fetch failed")): UpdateQueryStub {
+  return updateStubFrom(vi.fn<(columns?: string) => Promise<unknown>>().mockRejectedValue(cause));
+}

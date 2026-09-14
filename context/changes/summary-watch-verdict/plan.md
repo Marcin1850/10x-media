@@ -271,10 +271,10 @@ Additive and nullable, so existing rows read as unmarked and there is no backfil
 
 #### Automated
 
-- [x] 1.1 Migration applies on the local stack without reset: `npx supabase migration up`
-- [x] 1.2 Integration suite passes including roster and new probes: `npm run test:integration`
-- [x] 1.3 Typecheck passes: `npm run typecheck`
-- [x] 1.4 Lint passes: `npm run lint`
+- [x] 1.1 Migration applies on the local stack without reset: `npx supabase migration up` — 8e586e7
+- [x] 1.2 Integration suite passes including roster and new probes: `npm run test:integration` — 8e586e7
+- [x] 1.3 Typecheck passes: `npm run typecheck` — 8e586e7
+- [x] 1.4 Lint passes: `npm run lint` — 8e586e7
 
 #### Manual
 
@@ -285,10 +285,10 @@ Additive and nullable, so existing rows read as unmarked and there is no backfil
 
 #### Automated
 
-- [ ] 2.1 Unit suite passes: `npm test`
-- [ ] 2.2 Integration suite passes: `npm run test:integration`
-- [ ] 2.3 Typecheck passes: `npm run typecheck`
-- [ ] 2.4 Lint passes: `npm run lint`
+- [x] 2.1 Unit suite passes: `npm test`
+- [x] 2.2 Integration suite passes: `npm run test:integration`
+- [x] 2.3 Typecheck passes: `npm run typecheck`
+- [x] 2.4 Lint passes: `npm run lint`
 
 #### Manual
 

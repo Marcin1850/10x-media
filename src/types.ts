@@ -108,6 +108,8 @@ export interface SummaryListItem {
   channelId: string | null;
   durationSeconds: number | null;
   publishedAt: string | null;
+  /** The user's watch/skip mark (S-14): `null` unmarked, `true` worth watching, `false` not worth watching. */
+  worthWatching: boolean | null;
 }
 
 export interface Summary {

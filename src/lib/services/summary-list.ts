@@ -23,6 +23,7 @@ interface SummaryListRow {
   character: ChannelCharacter;
   content: string;
   created_at: string;
+  worth_watching: boolean | null;
   videos: {
     youtube_id: string;
     url: string;
@@ -43,7 +44,7 @@ interface SummaryListRow {
  * and is applied client-side anyway, so that does not bite here.
  */
 const LIST_SELECT =
-  "id, character, content, created_at, " +
+  "id, character, content, created_at, worth_watching, " +
   "videos ( youtube_id, url, title, thumbnail_url_reported, channel_name, channel_id, duration_seconds, published_at )";
 
 /**
@@ -83,6 +84,7 @@ function toListItem(row: SummaryListRow): SummaryListItem {
     character: row.character,
     content: row.content,
     createdAt: row.created_at,
+    worthWatching: row.worth_watching,
     youtubeId: video.youtube_id,
     url: video.url,
     title: video.title,
