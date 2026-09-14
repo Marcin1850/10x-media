@@ -407,10 +407,10 @@ Write down the scoped exception to the "no paid keys in CI" and "no LLM judge in
 
 #### Automated
 
-- [x] 2.1 Package unit tests pass: `cd packages/code_reviewer && npm test`
-- [x] 2.2 Package typecheck passes: `cd packages/code_reviewer && npm run typecheck`
-- [x] 2.3 Skip path exits 3 with no spend and writes sticky-marker markdown
-- [x] 2.4 Missing key exits 1
+- [x] 2.1 Package unit tests pass: `cd packages/code_reviewer && npm test` — 6778ac4
+- [x] 2.2 Package typecheck passes: `cd packages/code_reviewer && npm run typecheck` — 6778ac4
+- [x] 2.3 Skip path exits 3 with no spend and writes sticky-marker markdown — 6778ac4
+- [x] 2.4 Missing key exits 1 — 6778ac4
 
 #### Manual
 
@@ -422,10 +422,10 @@ Write down the scoped exception to the "no paid keys in CI" and "no LLM judge in
 
 #### Automated
 
-- [ ] 3.1 Workflow and action lint clean with actionlint
-- [ ] 3.2 No `${{ github.event.* }}` / `${{ inputs.* }}` inside any `run:` block
-- [ ] 3.3 `ANTHROPIC_API_KEY` referenced exactly once across `.github/`
-- [ ] 3.4 Package tests still pass
+- [x] 3.1 Workflow and action lint clean with actionlint
+- [x] 3.2 No `${{ github.event.* }}` / `${{ inputs.* }}` inside any `run:` block
+- [x] 3.3 `ANTHROPIC_API_KEY` referenced exactly once across `.github/`
+- [x] 3.4 Package tests still pass
 
 #### Manual
 

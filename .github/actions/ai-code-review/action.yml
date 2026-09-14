@@ -1,0 +1,145 @@
+name: AI code review
+description: >-
+  Installs, self-tests and runs packages/code_reviewer on a diff and PR text already on disk, and reports one
+  outcome (passed | failed | skipped | error) plus the path of a sticky-comment markdown body. Publishing the
+  comment and labels is the calling workflow's job.
+
+inputs:
+  anthropic-api-key:
+    description: Anthropic API key. Reaches exactly one step's environment (the review step).
+    required: true
+  diff-path:
+    description: Unified diff of the pull request.
+    required: true
+  title:
+    description: Pull request title (untrusted text).
+    required: false
+    default: ""
+  body-path:
+    description: File holding the pull request description (untrusted text).
+    required: true
+  reviewed-sha:
+    description: Head commit the diff was taken from, shown in the comment footer.
+    required: false
+    default: ""
+  model:
+    description: Pinned review model.
+    required: false
+    default: claude-sonnet-5
+  max-budget-usd:
+    description: Spend cap per run in USD. Hitting it ends the run as `error`, never as a review.
+    required: false
+    default: "1.00"
+  max-turns:
+    description: Maximum agent turns per run.
+    required: false
+    default: "5"
+
+outputs:
+  result:
+    description: passed | failed | skipped | error
+    value: ${{ steps.review.outputs.result || steps.fallback.outputs.result }}
+  markdown-path:
+    description: Sticky-comment markdown body, present in every outcome.
+    value: ${{ steps.review.outputs.markdown-path || steps.fallback.outputs.markdown-path }}
+  report-path:
+    description: Report JSON; only written when result is passed or failed.
+    value: ${{ steps.review.outputs.report-path }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v5
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: packages/code_reviewer/package-lock.json
+
+    # Never `--omit=optional`: the Agent SDK ships its native binary as an optional dependency, and without it
+    # every run would fail at the paid step instead of here.
+    - name: Install the reviewer
+      shell: bash
+      working-directory: ${{ github.workspace }}/packages/code_reviewer
+      run: npm ci
+
+    # Tests before spend: the reviewer comes from the PR's own merge commit, so a PR that breaks the package
+    # fails here (surfacing as `error` via the fallback step) before any API call is made.
+    - name: Self-test the reviewer
+      shell: bash
+      working-directory: ${{ github.workspace }}/packages/code_reviewer
+      run: |
+        npm run typecheck
+        npm test
+
+    # Every input goes through `env:` and is used as a quoted shell variable. `${{ inputs.* }}` inside `run:` is
+    # interpolated into the script text itself, so a PR title like `"; curl … #` would become code.
+    #
+    # Exit-code mapping (packages/code_reviewer/src/cli.ts): 0 → the report's `result` (passed | failed);
+    # 3 → skipped (nothing reviewable, no spend); anything else → error. A missing key is exit 1, so a
+    # misconfigured repository can never read as "skipped".
+    - name: Run the review
+      id: review
+      shell: bash
+      working-directory: ${{ github.workspace }}/packages/code_reviewer
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        DIFF_PATH: ${{ inputs.diff-path }}
+        BODY_PATH: ${{ inputs.body-path }}
+        PR_TITLE: ${{ inputs.title }}
+        REVIEWED_SHA: ${{ inputs.reviewed-sha }}
+        REVIEW_MODEL: ${{ inputs.model }}
+        REVIEW_MAX_BUDGET_USD: ${{ inputs.max-budget-usd }}
+        REVIEW_MAX_TURNS: ${{ inputs.max-turns }}
+        # The CLI passes no `env` to the SDK, so its subprocess inherits this: no auto memory on a shared runner.
+        CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1"
+      run: |
+        out_dir="$RUNNER_TEMP/ai-cr"
+        report="$out_dir/report.json"
+        markdown="$out_dir/comment.md"
+        mkdir -p "$out_dir"
+        rm -f "$report" "$markdown"
+
+        args=("$DIFF_PATH" --title "$PR_TITLE" --body-file "$BODY_PATH" --report "$report" --markdown "$markdown")
+        if [ -n "$REVIEWED_SHA" ]; then args+=(--reviewed-sha "$REVIEWED_SHA"); fi
+
+        code=0
+        npm run --silent review -- "${args[@]}" > /dev/null || code=$?
+        echo "Reviewer exit code: $code"
+
+        case "$code" in
+          0) result=$(node -e 'const r = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).result; process.stdout.write(r === "passed" || r === "failed" ? r : "error")' "$report" || echo error) ;;
+          3) result=skipped ;;
+          *) result=error ;;
+        esac
+
+        # The CLI writes the markdown in every outcome; this only covers a failure to write it.
+        if [ ! -f "$markdown" ]; then
+          # shellcheck disable=SC2016 # the backticks are literal markdown, not command substitution
+          printf '%s\n\n%s\n\n%s\n' '<!-- ai-cr:sticky -->' '## ⚠️ AI code review: error' \
+            'The reviewer produced no comment (see the workflow run log). Add the `ai-cr:review` label to re-run.' > "$markdown"
+          result=error
+        fi
+
+        {
+          echo "result=$result"
+          echo "markdown-path=$markdown"
+          echo "report-path=$report"
+        } >> "$GITHUB_OUTPUT"
+        cat "$markdown" >> "$GITHUB_STEP_SUMMARY"
+
+    # Install, self-test or the review step itself failed before an outcome was written.
+    - name: Report a setup failure
+      id: fallback
+      if: failure()
+      shell: bash
+      run: |
+        markdown="$RUNNER_TEMP/ai-cr/comment.md"
+        mkdir -p "$(dirname "$markdown")"
+        # shellcheck disable=SC2016 # the backticks are literal markdown, not command substitution
+        printf '%s\n\n%s\n\n%s\n' '<!-- ai-cr:sticky -->' '## ⚠️ AI code review: error' \
+          'The reviewer could not be installed or failed its own tests, so no review was run (see the workflow run log). Add the `ai-cr:review` label to re-run.' > "$markdown"
+        {
+          echo "result=error"
+          echo "markdown-path=$markdown"
+        } >> "$GITHUB_OUTPUT"
+        cat "$markdown" >> "$GITHUB_STEP_SUMMARY"
