@@ -436,9 +436,9 @@ Write down the scoped exception to the "no paid keys in CI" and "no LLM judge in
 
 #### Automated
 
-- [ ] 4.1 Root gates pass: `npm run lint`, `npm run typecheck`, `npm test`
-- [ ] 4.2 Package gates pass
-- [ ] 4.3 `ci.yml` unchanged against `master`
+- [x] 4.1 Root gates pass: `npm run lint`, `npm run typecheck`, `npm test`
+- [x] 4.2 Package gates pass
+- [x] 4.3 `ci.yml` unchanged against `master`
 
 #### Manual
 

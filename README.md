@@ -103,6 +103,10 @@ The app is served at **http://localhost:4321**.
 │ # not colocated, because they drive a server, not a module
 ├── supabase/migrations/ # Database migrations
 ├── scripts/ # Offline operator scripts
+├── packages/code_reviewer/ # Standalone AI PR reviewer (own package.json, tests and lockfile;
+│ # ignored by the root lint/typecheck) — run in CI by the `ai-code-review` workflow
+├── .github/workflows/ # `ci.yml` (required gates + deploy) and `ai-code-review.yml` (advisory)
+├── .github/actions/ # Composite actions — `ai-code-review` installs, self-tests and runs the reviewer
 ├── public/ # Public assets
 ├── worker.ts # Worker entry: the adapter's handler wrapped with Sentry's `withSentry`
 ├── sentry.client.config.ts # Browser Sentry init, injected into every page by `@sentry/astro`
@@ -377,6 +381,10 @@ GitHub Actions (`.github/workflows/ci.yml`) runs three jobs in parallel on every
 - **`integration`** — starts a throwaway local Supabase stack (`npx supabase start`, non-essential services excluded) and runs the integration suite (`npm run test:integration`) against it. This job never touches `secrets.SUPABASE_URL` (that's production); it uses the Supabase CLI's fixed, publicly documented local-dev demo keys instead, plus literal placeholder values for the Supadata/OpenRouter keys — safe because every paid vendor call in that suite is faked at the `fetch`/module boundary. The suite covers two things: the paid path's charge-versus-delivery contract and its budget breaker, and the data-access boundary — that one account cannot read or delete another's rows, and that the schema's grants, policies and RLS flags still match a committed roster (so a migration that forgets to tighten a new table fails CI). See [Summary credits](#summary-credits) and `context/foundation/test-plan.md` §6.2–§6.3 for what the suite covers.
 - **`e2e`** — the same throwaway Supabase stack plus Chromium, running the browser suite (`npm run test:e2e`) against a real build of the app. It holds **no vendor keys and no build step of its own**: Playwright's `webServer` does the build itself, and the app takes its five values from the committed `.dev.vars.e2e` (selected by `CLOUDFLARE_ENV=e2e`), which is the only channel that actually reaches it — so vendor keys in the job env would be ignored. Three specs cover the flows where a mistake costs a user money: generate-and-see-it, both charged refusals, and the long-video confirmation. Each asserts the card **and** the ledger. A failing run uploads its Playwright HTML report, trace included, as an artifact. See [End-to-end tests](#end-to-end-tests) and `context/foundation/test-plan.md` §6.4.
 
+A fourth, **advisory** workflow lives in its own file and is not part of that set:
+
+- **`ai-code-review`** (`.github/workflows/ai-code-review.yml`) — an AI second reader on pull requests to `master`, running `packages/code_reviewer` through the composite action in `.github/actions/ai-code-review`. It scores the PR's diff on five criteria (correctness, security, idiomaticity, test coverage, maintainability), posts **one** sticky comment (summary, score table, findings, model, cost, reviewed commit) and applies exactly one outcome label. The verdict is decided in code, not by the model: `ai-cr:passed` when every score is ≥ 6 and there is no critical or major finding, otherwise `ai-cr:failed`. `ai-cr:skipped` means there was nothing reviewable (an empty diff, one over 200 KB, or binary/rename/mode-only changes) and no API call was made; `ai-cr:error` means the review could not complete (missing key, agent or output error, budget or turn cap hit) — the **only** outcome that turns the job red. A review runs on **opened / reopened / ready-for-review** (drafts are skipped), and again whenever a human adds the **`ai-cr:review`** label (drafts included) — that label is removed at the end of every run. **Pushing new commits never re-reviews:** it removes the outcome label, marks the comment outdated, and cancels a review still running for the previous head. Fork PRs, Dependabot PRs and every other label event run nothing and spend nothing. It is **not** a required check and is **not** in `deploy`'s `needs`, so a `failed` or `error` label never blocks a merge or a deploy. Each run costs well under a dollar and is hard-capped by the pinned model, a 5-turn limit and a $1.00 `max-budget-usd`. It is the one place CI holds a paid LLM key — a scoped exception recorded in `context/foundation/test-plan.md` §7.
+
 `deploy` (Cloudflare Workers, on pushes to `master`) needs **all three** jobs to pass. Its build step sets neither `E2E_FAKE_LLM` nor `CLOUDFLARE_ENV`, and both omissions are load-bearing: the first keeps the e2e fake summarizer out of the bundle entirely, the second keeps `.dev.vars.e2e`'s non-credentials from displacing the real Worker secrets.
 
 The two Vitest suites are separate **projects** (`vitest.config.ts`), and every script names the one it means: `test`, `test:watch` and `test:coverage` all pass `--project unit`, `test:integration` passes `--project integration`. Keep that flag when editing these scripts — a bare `vitest` selects **both** projects, which would quietly make the unit watch and the coverage report require Docker and create real synthetic `auth.users` rows on every run. The e2e suite is not a Vitest project at all — it runs under Playwright (`playwright.config.ts`) from `tests/e2e/`, and its specs are named `*.spec.ts` precisely so the `unit` project's `src/**/*.test.ts` glob can never collect them.
@@ -385,16 +393,19 @@ Locally, git hooks catch most of the `ci` job's checks earlier: **pre-commit** r
 
 Required repository secrets:
 
-| Secret                  | Used by                            |
-| ----------------------- | ---------------------------------- |
-| `SUPABASE_URL`          | Build step                         |
-| `SUPABASE_KEY`          | Build step                         |
-| `PUBLIC_SENTRY_DSN`     | Build step (`deploy` job **only**) |
-| `SENTRY_AUTH_TOKEN`     | Build step (`deploy` job **only**) |
-| `SENTRY_ORG`            | Build step (`deploy` job **only**) |
-| `SENTRY_PROJECT`        | Build step (`deploy` job **only**) |
-| `CLOUDFLARE_API_TOKEN`  | Deploy step                        |
-| `CLOUDFLARE_ACCOUNT_ID` | Deploy step                        |
+| Secret                  | Used by                                                  |
+| ----------------------- | -------------------------------------------------------- |
+| `SUPABASE_URL`          | Build step                                               |
+| `SUPABASE_KEY`          | Build step                                               |
+| `PUBLIC_SENTRY_DSN`     | Build step (`deploy` job **only**)                       |
+| `SENTRY_AUTH_TOKEN`     | Build step (`deploy` job **only**)                       |
+| `SENTRY_ORG`            | Build step (`deploy` job **only**)                       |
+| `SENTRY_PROJECT`        | Build step (`deploy` job **only**)                       |
+| `CLOUDFLARE_API_TOKEN`  | Deploy step                                              |
+| `CLOUDFLARE_ACCOUNT_ID` | Deploy step                                              |
+| `ANTHROPIC_API_KEY`     | AI code review step (`ai-code-review` workflow) **only** |
+
+`ANTHROPIC_API_KEY` reaches one step's `env:` in one workflow and nothing else — no product build, test or deploy reads it. Use a key from a dedicated Anthropic workspace with a **spend limit** set in the Anthropic console, so the per-run cap is backed by an account-level one. Set it in your own terminal, so the key is typed into a prompt rather than into shell history: `gh secret set ANTHROPIC_API_KEY`. To roll back, either delete the secret (`gh secret delete ANTHROPIC_API_KEY` — reviews then end as `ai-cr:error` without spending anything) or disable the workflow (`gh workflow disable ai-code-review.yml`); the `ai-cr:*` labels can be deleted from the repository afterwards.
 
 The build does not need the Supadata or OpenRouter keys — every variable in the `astro:env` schema is declared `optional`, so the build succeeds without them. Neither the `integration` nor the `e2e` job needs any of these repository secrets.
 
