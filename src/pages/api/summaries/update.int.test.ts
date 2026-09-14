@@ -14,6 +14,23 @@ import { readJson } from "./__fixtures__/generation-harness";
  * (masked) · `200 { ok: true, worthWatching }` — and the body contract
  * `z.object({ worth_watching: z.boolean().nullable() }).strict()`, under which a missing key is a 400,
  * never a clear.
+ *
+ * **Mutation check** (2026-09-14, `--mutate "src/pages/api/summaries/[[]id].ts:101-144"`). Stryker's
+ * configured entry point (`vitest.unit.config.ts`) cannot load this integration-project file, so the run
+ * used a throwaway config including only this file plus `fetch-firewall.ts` (no `globalSetup` — nothing
+ * here touches a database); the config was deleted afterwards, not committed. 48 mutants, 41 killed,
+ * 7 survived, 0 not covered. Each survivor was put to the standing question — would it hurt a user or the
+ * business? — and all seven are **ignored**:
+ *
+ * - The `error` text of the three 400 exits emptied or blanked (`:108`, `:115` ×2, `:120`). The island's
+ *   `handleSetVerdict` reads only the status of a PATCH, never its body, and the English `error` never
+ *   reaches the interface (README → Summary credits). Asserting prettified zod copy would pin log text.
+ * - The JSON-parse `catch` emptied (`:114`). `rawBody` stays `undefined`, which the strict schema then
+ *   refuses — still a 400 without reaching the service, so the observable contract holds; only the body
+ *   text differs, as above.
+ * - `{ status: 200 }` emptied (`:137`). `Response.json` defaults to 200: an equivalent mutant.
+ * - The `console.error` marker blanked (`:141`). Log copy, not a contract (test-plan.md §6.1); that the
+ *   500 exit logs at all is asserted.
  */
 
 const SYNTHETIC_USER_ID = "00000000-0000-4000-8000-000000000001";

@@ -12,6 +12,9 @@ import { stubUpdateFailing, stubUpdateRejecting, stubUpdating } from "@/lib/serv
  * **Not authorization coverage.** A stub answers whatever it is told to, so every case below stays green
  * against a broadened policy. That another account cannot mark your summary is proved by
  * `cross-account-policy.int.test.ts` and `update.db.int.test.ts`, against a real database.
+ *
+ * **Mutation check** (`npx stryker run --mutate "src/lib/services/summary-update.ts"`, 2026-09-14):
+ * 11 mutants, 11 killed, 0 survived, 0 not covered. Nothing is ignored in this file today.
  */
 
 const SUMMARY_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
