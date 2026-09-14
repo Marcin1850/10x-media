@@ -4,6 +4,7 @@ import { SummaryList, type UnlistedSummary } from "@/components/summaries/Summar
 import type { PendingSummary } from "@/components/summaries/PendingSummaryCard";
 import { useGenerateSummary, type LastSuccess } from "@/components/hooks/useGenerateSummary";
 import { copy } from "@/lib/copy";
+import { overlayLocalVerdicts, type LocalVerdict } from "@/lib/summary-verdicts";
 import type { ChannelCharacter, SummaryListItem } from "@/types";
 
 interface Props {
@@ -84,6 +85,14 @@ export function SummariesSurface({ initialSummaries, initialCredits, listUnavail
   const verdictInFlight = useRef<Set<string>>(new Set());
   const [verdictSaving, setVerdictSaving] = useState<Record<string, boolean | undefined>>({});
   const [verdictErrors, setVerdictErrors] = useState<Record<string, string | undefined>>({});
+  /**
+   * The verdict half of `deletedIds`: the mark this session last put on each card, and the
+   * `verdictClock` tick at which the server accepted it (`null` while its PATCH is in flight). A re-read
+   * that started before that tick may carry the old row, so `commitSummaries` puts the local mark back
+   * over it — see `overlayLocalVerdicts`. Refs for the same across-an-await reason as the tombstones.
+   */
+  const localVerdicts = useRef<Map<string, LocalVerdict>>(new Map());
+  const verdictClock = useRef(0);
   // Seeded from the server read, but not frozen to it: a re-read that succeeds proves the corpus is
   // readable again, and continuing to show "we couldn't load your summaries" over a list we are
   // holding would be the same wrong statement about their data, just in the other direction.
@@ -132,10 +141,11 @@ export function SummariesSurface({ initialSummaries, initialCredits, listUnavail
    * The one way a list becomes `summaries`. Filtering lives here rather than at each call site so a
    * future third writer cannot forget it, and it reads `deletedIds.current` at commit time — which
    * is what makes the outcome independent of when the list was fetched. `refreshSeq` orders re-reads
-   * against each other and knows nothing about deletions; this is the other half.
+   * against each other and knows nothing about deletions or verdicts; this is the other half.
+   * `readStartedAt` is the `verdictClock` value when the read that produced `list` began.
    */
-  function commitSummaries(list: SummaryListItem[]) {
-    setSummaries(keepUndeleted(list));
+  function commitSummaries(list: SummaryListItem[], readStartedAt: number) {
+    setSummaries(overlayLocalVerdicts(keepUndeleted(list), localVerdicts.current, readStartedAt));
   }
 
   /** One read of the saved list. Throws on anything that isn't a usable list. */
@@ -167,15 +177,18 @@ export function SummariesSurface({ initialSummaries, initialCredits, listUnavail
   async function refreshSummaries(success: LastSuccess) {
     const seq = (refreshSeq.current += 1);
     let list: SummaryListItem[] | null = null;
+    let listReadStartedAt = 0;
     let landed = false;
 
     for (let attempt = 0; attempt <= REFRESH_RETRY_DELAYS_MS.length; attempt += 1) {
       try {
+        const readStartedAt = verdictClock.current;
         const read = await readSummaries();
         // A response that is no longer the latest is dropped before it touches state — including its
         // success, since a newer re-read is by definition closer to the truth.
         if (seq !== refreshSeq.current) return;
         list = read;
+        listReadStartedAt = readStartedAt;
         landed = read.some((item) => item.id === success.summaryId);
       } catch {
         if (seq !== refreshSeq.current) return;
@@ -191,7 +204,7 @@ export function SummariesSurface({ initialSummaries, initialCredits, listUnavail
     if (list !== null) {
       // Committed here, after the last `await` above, so a deletion that happened while this read
       // was in flight still suppresses its row.
-      commitSummaries(list);
+      commitSummaries(list, listReadStartedAt);
       setUnavailable(false);
     }
     setUnlisted((current) => {
@@ -313,12 +326,25 @@ export function SummariesSurface({ initialSummaries, initialCredits, listUnavail
    * tombstone a delete uses, and a concurrent re-read cannot put it back. Any other status, or a thrown
    * fetch, restores the previous mark with an inline error. Unlike a delete there is no reconcile step on a
    * network failure: a retry of an idempotent mark converges on its own.
+   *
+   * **Racing re-reads.** Every outcome also updates `localVerdicts`, so a post-generation re-read that
+   * started before the server answered cannot land afterwards and put the old mark back: in flight → the
+   * optimistic mark is protected; `200` → stamped with a fresh `verdictClock` tick, after which only reads
+   * started later speak for this card; `404` → dropped, the tombstone covers it; a failure → the entry
+   * from before this click is restored, since the rolled-back mark is what it protected.
    */
   async function handleSetVerdict(id: string, next: boolean | null) {
     if (verdictInFlight.current.has(id)) return;
     const previous = summaries.find((item) => item.id === id)?.worthWatching ?? null;
+    const previousLocal = localVerdicts.current.get(id);
+
+    function restoreLocal() {
+      if (previousLocal === undefined) localVerdicts.current.delete(id);
+      else localVerdicts.current.set(id, previousLocal);
+    }
 
     verdictInFlight.current.add(id);
+    localVerdicts.current.set(id, { value: next, settledAt: null });
     setVerdictSaving((current) => ({ ...current, [id]: true }));
     applyVerdict(id, next);
     setVerdictErrors((current) =>
@@ -333,13 +359,18 @@ export function SummariesSurface({ initialSummaries, initialCredits, listUnavail
       });
       if (response.status === 404) {
         deletedIds.current.add(id);
+        localVerdicts.current.delete(id);
         setSummaries((current) => current.filter((item) => item.id !== id));
         setUnlisted((current) => (current !== null && current.summaryId === id ? null : current));
-      } else if (!response.ok) {
+      } else if (response.ok) {
+        localVerdicts.current.set(id, { value: next, settledAt: (verdictClock.current += 1) });
+      } else {
+        restoreLocal();
         applyVerdict(id, previous);
         setVerdictErrors((current) => ({ ...current, [id]: copy.errors.summaryVerdictFailed }));
       }
     } catch {
+      restoreLocal();
       applyVerdict(id, previous);
       setVerdictErrors((current) => ({ ...current, [id]: copy.errors.summaryVerdictFailed }));
     } finally {
