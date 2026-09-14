@@ -97,6 +97,9 @@ const e2eConfig = tseslint.config({
 
 export default tseslint.config(
   includeIgnoreFile(gitignorePath),
+  // Standalone packages (`packages/*`) carry their own package.json, tsconfig and dependency tree;
+  // the app's type-aware config cannot resolve their imports, so the root does not lint them.
+  { ignores: ["packages/**"] },
   baseConfig,
   reactConfig,
   eslintPluginAstro.configs["flat/recommended"],

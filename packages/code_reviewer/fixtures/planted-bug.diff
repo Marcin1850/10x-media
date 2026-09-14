@@ -1,0 +1,18 @@
+diff --git a/src/lib/rate-limit.ts b/src/lib/rate-limit.ts
+new file mode 100644
+index 0000000..3f1c2ab
+--- /dev/null
++++ b/src/lib/rate-limit.ts
+@@ -0,0 +1,12 @@
++/** Maximum number of requests a single account may make within one window. */
++export const REQUESTS_PER_WINDOW = 20;
++
++/** How many more requests the account may make in the current window, given `used` already made. */
++export function remainingRequests(used: number): number {
++  return Math.max(REQUESTS_PER_WINDOW - used, 0);
++}
++
++/** Whether one more request may be made in the current window, given `used` already made. */
++export function canMakeRequest(used: number): boolean {
++  return used <= REQUESTS_PER_WINDOW;
++}
