@@ -1,10 +1,10 @@
 ---
 change_id: summary-watch-verdict
 title: Summary watch verdict
-status: impl_reviewed
+status: archived
 created: 2026-09-14
 updated: 2026-09-14
-archived_at: null
+archived_at: 2026-09-14T16:47:45Z
 ---
 
 ## Notes
