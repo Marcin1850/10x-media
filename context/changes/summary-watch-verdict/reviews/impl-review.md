@@ -32,7 +32,7 @@
   - Tradeoff: Adds a small amount of mutation-version state plus a focused delayed-GET/delayed-PATCH regression test.
   - Confidence: HIGH — the conflicting writers and their ordering are explicit in this component.
   - Blind spot: The component has no current unit harness, so the most suitable focused test seam still needs to be chosen.
-- **Decision**: PENDING
+- **Decision**: FIXED — rule extracted to `src/lib/summary-verdicts.ts` (`overlayLocalVerdicts`, keyed on PATCH *settle* tick rather than click, since a GET started mid-flight is also stale); `DashboardSummaries.tsx` keeps `localVerdicts` + `verdictClock` refs, `commitSummaries` overlays them, `handleSetVerdict` stamps/restores/drops entries per outcome. Covered by `src/lib/summary-verdicts.test.ts` (9 tests); two deliberate mutations of the staleness rule went red. Unit suite 244/244, typecheck and lint pass.
 
 ### F2 — Ten manual acceptance checks remain pending
 
@@ -46,7 +46,7 @@
   - Tradeoff: Requires a human browser pass and a deliberate temporary database-policy break/revert.
   - Confidence: HIGH — the canonical Progress section marks all ten rows pending.
   - Blind spot: Some checks may already have been performed but were not recorded; no evidence is present in the change folder.
-- **Decision**: PENDING
+- **Decision**: DEFERRED — the user will run the manual pass after the full review is complete. Run the Phase 3 browser checks against the post-F1 code (the toggle path changed).
 
 ### F3 — The planned verdict-error clearing prop was omitted
 
@@ -56,7 +56,7 @@
 - **Location**: `src/components/summaries/SummaryCard.tsx:19`
 - **Detail**: Phase 3 specified `onClearVerdictError(id)` on `SummaryCard` and forwarding through `SummaryList`, but neither interface includes it. The user-visible behavior is still present because `handleSetVerdict` clears that card's error atomically before starting the next PATCH (`DashboardSummaries.tsx:321-326`), so this is documentation/interface drift rather than a functional defect.
 - **Fix**: Add an implementation note to the plan documenting that error clearing is owned atomically by `handleSetVerdict`, and that the redundant prop was intentionally omitted.
-- **Decision**: PENDING
+- **Decision**: FIXED — implementation note added under Phase 3 §3 in `plan.md` (plus an F1 addendum under §4 so the plan stays the source of truth).
 
 ## Verification
 

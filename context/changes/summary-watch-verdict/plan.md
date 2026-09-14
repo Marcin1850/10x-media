@@ -197,6 +197,8 @@ Render the verdict control on each saved card, wired to the endpoint with lock, 
 
 **Contract**: New props `onSetVerdict(id, value: boolean | null)`, `verdictSaving?: boolean`, `verdictError?: string`, `onClearVerdictError(id)`. The value is `item.worthWatching`. Group `aria-label` from copy; items expose pressed state via the primitive. The inline error uses the same `role="alert"` treatment as `deleteError`.
 
+> **Implementation note (impl-review F3):** `onClearVerdictError(id)` was intentionally omitted from `SummaryCard` and `SummaryList`. Clearing a card's verdict error is owned by `handleSetVerdict`, which clears it atomically with the lock and optimistic value before starting the next `PATCH`; a separate card-driven clear would be a second writer of the same state with no user-visible effect.
+
 #### 4. List state and handler
 
 **File**: `src/components/summaries/DashboardSummaries.tsx`, `src/components/summaries/SummaryList.tsx`
@@ -204,6 +206,8 @@ Render the verdict control on each saved card, wired to the endpoint with lock, 
 **Intent**: Own the optimistic update and its failure paths, next to `handleDelete`.
 
 **Contract**: `handleSetVerdict(id, next)`: ignore if that id is already saving → capture previous → mark saving, set `worthWatching = next`, clear that card's verdict error → `PATCH`. `200` keeps the value. `404` removes the card (reuse the tombstone so a concurrent re-read can't re-add it). Non-OK or rejected fetch restores the previous value and sets `copy.errors.summaryVerdictFailed`. Saving flag cleared in all branches. `SummaryList` passes the new props through; the pending card gets no verdict control.
+
+> **Addendum (impl-review F1):** a post-generation re-read could land after a verdict change and restore the old mark. `commitSummaries` now overlays `localVerdicts` via `overlayLocalVerdicts` (`src/lib/summary-verdicts.ts`): a local mark wins while its `PATCH` is in flight or when it settled after the read began (`verdictClock` tick); `404` drops the entry, failures restore the pre-click entry.
 
 ### Success Criteria:
 
