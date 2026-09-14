@@ -1,48 +1,100 @@
+/**
+ * CLI entry point. Exit codes are the contract with the composite action (.github/actions/ai-code-review):
+ *
+ * - 0 `EXIT_OK`      review completed; the report's `result` says `passed` or `failed`
+ * - 1 `EXIT_CONFIG`  configuration error (flags, API key, limits, unreadable file) — no API call was made
+ * - 2 `EXIT_AGENT`   agent error, invalid output, unverified lockdown, budget or turn cap hit
+ * - 3 `EXIT_SKIPPED` nothing reviewable (empty, oversize, not a diff, no hunks) — no API call was made
+ *
+ * stdout carries only the report JSON on exit 0; every progress and diagnostic line goes to stderr.
+ */
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { basename, extname, join } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
 
 import { loadConfig } from "./config.js";
 import { decideResult } from "./decision.js";
 import { checkDiffFile, checkDiffText } from "./diff-input.js";
 import { verifyLockdown } from "./lockdown.js";
+import { renderError, renderReview, renderSkipped } from "./render.js";
 import { runReview } from "./review.js";
 
 const EXIT_OK = 0;
 const EXIT_CONFIG = 1;
 const EXIT_AGENT = 2;
+const EXIT_SKIPPED = 3;
 
-async function readDiff(path: string): Promise<string | { error: string }> {
+/** Known once flags are parsed; lets the last-resort handler still leave an error comment. */
+let markdownPath: string | undefined;
+
+type DiffRead =
+  | { ok: true; diff: string }
+  | { ok: false; exit: typeof EXIT_CONFIG | typeof EXIT_SKIPPED; message: string };
+
+async function readDiff(path: string): Promise<DiffRead> {
+  let stats;
   try {
-    const stats = await stat(path);
-    const fileCheck = checkDiffFile({ isFile: stats.isFile(), size: stats.size });
-    if (!fileCheck.ok) return { error: `${fileCheck.message} (${path})` };
-
-    const diff = await readFile(path, "utf8");
-    const textCheck = checkDiffText(diff);
-    return textCheck.ok ? diff : { error: `${textCheck.message} (${path})` };
+    stats = await stat(path);
   } catch (error) {
-    return { error: `Cannot read diff file ${path}: ${error instanceof Error ? error.message : String(error)}` };
+    // A missing path is a wiring mistake, not an empty PR: it must never read as "skipped".
+    return { ok: false, exit: EXIT_CONFIG, message: `Cannot read diff file ${path}: ${errorText(error)}` };
   }
+  const fileCheck = checkDiffFile({ isFile: stats.isFile(), size: stats.size });
+  if (!fileCheck.ok) return { ok: false, exit: EXIT_SKIPPED, message: fileCheck.message };
+
+  const diff = await readFile(path, "utf8");
+  const textCheck = checkDiffText(diff);
+  return textCheck.ok ? { ok: true, diff } : { ok: false, exit: EXIT_SKIPPED, message: textCheck.message };
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Best effort: a failure to write the comment body is logged and never replaces the original exit code. */
+async function writeMarkdown(content: string): Promise<void> {
+  if (!markdownPath) return;
+  try {
+    await mkdir(dirname(markdownPath), { recursive: true });
+    await writeFile(markdownPath, `${content}\n`, "utf8");
+  } catch (error) {
+    console.error(`[output] Could not write markdown to ${markdownPath}: ${errorText(error)}`);
+  }
+}
+
+async function fail(exit: number, tag: string, message: string, commentReason = message): Promise<number> {
+  console.error(`[${tag}] ${message}`);
+  await writeMarkdown(exit === EXIT_SKIPPED ? renderSkipped(commentReason) : renderError(commentReason));
+  return exit;
 }
 
 async function main(): Promise<number> {
   const config = loadConfig(process.argv.slice(2), process.env);
-  if (!config.ok) {
-    console.error(`[config] ${config.message}`);
-    return EXIT_CONFIG;
+  markdownPath = config.markdownPath;
+  if (!config.ok) return fail(EXIT_CONFIG, "config", config.message);
+
+  const read = await readDiff(config.diffPath);
+  if (!read.ok) {
+    return fail(read.exit, "input", `${read.message} No API call was made.`);
   }
 
-  const diff = await readDiff(config.diffPath);
-  if (typeof diff !== "string") {
-    console.error(`[input] ${diff.error} No API call was made.`);
-    return EXIT_CONFIG;
+  let body = "";
+  if (config.bodyPath) {
+    try {
+      body = await readFile(config.bodyPath, "utf8");
+    } catch (error) {
+      return fail(
+        EXIT_CONFIG,
+        "config",
+        `Cannot read body file ${config.bodyPath}: ${errorText(error)}. No API call was made.`,
+      );
+    }
   }
 
-  console.log(`Reviewing ${config.diffPath}${config.model ? ` with model override ${config.model}` : ""}…`);
+  console.error(`Reviewing ${config.diffPath}${config.model ? ` with model override ${config.model}` : ""}…`);
   const run = await runReview({
-    diff,
-    title: "",
-    body: "",
+    diff: read.diff,
+    title: config.title,
+    body,
     model: config.model,
     maxTurns: config.maxTurns,
     maxBudgetUsd: config.maxBudgetUsd,
@@ -50,41 +102,58 @@ async function main(): Promise<number> {
 
   const lockdown = verifyLockdown(run);
   if (lockdown.ok) {
-    console.log(`Session model: ${lockdown.init.model}`);
-    console.log(`Session tools: ${JSON.stringify(lockdown.init.initTools)}`);
+    console.error(`Session model: ${lockdown.init.model}`);
+    console.error(`Session tools: ${JSON.stringify(lockdown.init.initTools)}`);
   } else {
     console.error(`[lockdown] ${lockdown.reason}`);
   }
 
   if (run.kind === "no-result") {
-    console.error("[agent] The run ended without a result message:", run.error);
-    return EXIT_AGENT;
+    return fail(
+      EXIT_AGENT,
+      "agent",
+      `The run ended without a result message: ${errorText(run.error)}`,
+      "The review run ended without a result.",
+    );
   }
 
-  console.log(`Cost: $${run.meta.costUsd.toFixed(4)} · ${run.meta.durationMs} ms · ${run.meta.numTurns} turn(s)`);
+  console.error(`Cost: $${run.meta.costUsd.toFixed(4)} · ${run.meta.durationMs} ms · ${run.meta.numTurns} turn(s)`);
+  const spent = `(cost $${run.meta.costUsd.toFixed(4)}, ${run.meta.numTurns} turn(s))`;
 
   if (run.kind === "agent-error") {
-    console.error(
-      `[agent] Run failed: subtype=${run.subtype}, terminal_reason=${run.terminalReason ?? "n/a"}`,
-      run.errors.length > 0 ? run.errors : "",
+    const errors = run.errors.length > 0 ? ` ${JSON.stringify(run.errors)}` : "";
+    return fail(
+      EXIT_AGENT,
+      "agent",
+      `Run failed: subtype=${run.subtype}, terminal_reason=${run.terminalReason ?? "n/a"}${errors}`,
+      // The SDK's error strings stay in the job log; the comment names only the documented subtype.
+      `The review run failed: \`${run.subtype}\` ${spent}.`,
     );
-    return EXIT_AGENT;
   }
 
   if (run.kind === "invalid-output") {
-    console.error("[agent] Structured output did not match the schema:", JSON.stringify(run.issues, null, 2));
-    return EXIT_AGENT;
+    return fail(
+      EXIT_AGENT,
+      "agent",
+      `Structured output did not match the schema: ${JSON.stringify(run.issues, null, 2)}`,
+      `The model's output did not match the review schema ${spent}.`,
+    );
   }
 
   // A schema-valid review from an unverified session is not reported or saved: the lockdown is part of the contract.
   if (!lockdown.ok) {
-    console.error("[agent] Refusing to report a review whose session lockdown was not verified.");
-    return EXIT_AGENT;
+    return fail(
+      EXIT_AGENT,
+      "agent",
+      "Refusing to report a review whose session lockdown was not verified.",
+      `The review session's tool lockdown could not be verified, so its output was discarded ${spent}.`,
+    );
   }
 
+  const decision = decideResult(run.output);
   const report = {
     ...run.output,
-    ...decideResult(run.output),
+    ...decision,
     meta: {
       model: lockdown.init.model,
       costUsd: run.meta.costUsd,
@@ -95,19 +164,25 @@ async function main(): Promise<number> {
     },
   };
   const json = JSON.stringify(report, null, 2);
-  console.log(json);
+  process.stdout.write(`${json}\n`);
 
-  await mkdir(config.outDir, { recursive: true });
   const stamp = new Date().toISOString().replaceAll(":", "-");
-  const outPath = join(config.outDir, `${stamp}-${basename(config.diffPath, extname(config.diffPath))}.json`);
-  await writeFile(outPath, `${json}\n`, "utf8");
-  console.log(`Saved report to ${outPath}`);
+  const reportPath =
+    config.reportPath ?? join(config.outDir, `${stamp}-${basename(config.diffPath, extname(config.diffPath))}.json`);
+  await mkdir(dirname(reportPath), { recursive: true });
+  await writeFile(reportPath, `${json}\n`, "utf8");
+  console.error(`Saved report to ${reportPath}`);
 
+  await writeMarkdown(renderReview(report, decision, { reviewedSha: config.reviewedSha }));
   return EXIT_OK;
 }
 
-// Every config/input failure returns EXIT_CONFIG before the SDK call, so anything that escapes happened after it.
-process.exitCode = await main().catch((error: unknown) => {
-  console.error("[agent] Unexpected failure:", error);
-  return EXIT_AGENT;
-});
+// Every config/input failure returns before the SDK call, so anything that escapes happened after it.
+process.exitCode = await main().catch(async (error: unknown) =>
+  fail(
+    EXIT_AGENT,
+    "agent",
+    `Unexpected failure: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
+    "The review failed unexpectedly; see the workflow log.",
+  ),
+);

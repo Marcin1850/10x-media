@@ -394,9 +394,9 @@ Write down the scoped exception to the "no paid keys in CI" and "no LLM judge in
 
 #### Automated
 
-- [x] 1.1 Package unit tests pass: `cd packages/code_reviewer && npm test`
-- [x] 1.2 Package typecheck passes: `cd packages/code_reviewer && npm run typecheck`
-- [x] 1.3 Root gates unaffected: `npm run lint` and `npm run typecheck` (root)
+- [x] 1.1 Package unit tests pass: `cd packages/code_reviewer && npm test` — 98ffc57
+- [x] 1.2 Package typecheck passes: `cd packages/code_reviewer && npm run typecheck` — 98ffc57
+- [x] 1.3 Root gates unaffected: `npm run lint` and `npm run typecheck` (root) — 98ffc57
 
 #### Manual
 
@@ -407,10 +407,10 @@ Write down the scoped exception to the "no paid keys in CI" and "no LLM judge in
 
 #### Automated
 
-- [ ] 2.1 Package unit tests pass: `cd packages/code_reviewer && npm test`
-- [ ] 2.2 Package typecheck passes: `cd packages/code_reviewer && npm run typecheck`
-- [ ] 2.3 Skip path exits 3 with no spend and writes sticky-marker markdown
-- [ ] 2.4 Missing key exits 1
+- [x] 2.1 Package unit tests pass: `cd packages/code_reviewer && npm test`
+- [x] 2.2 Package typecheck passes: `cd packages/code_reviewer && npm run typecheck`
+- [x] 2.3 Skip path exits 3 with no spend and writes sticky-marker markdown
+- [x] 2.4 Missing key exits 1
 
 #### Manual
 

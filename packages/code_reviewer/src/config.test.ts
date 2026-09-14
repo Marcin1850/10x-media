@@ -30,6 +30,59 @@ describe("loadConfig", () => {
     expect(config.ok && config.model).toBeUndefined();
   });
 
+  // Oracle: plan.md Phase 2 §1 — positional diff path plus optional named flags; strict parsing.
+  it("keeps a positional-only invocation valid with local defaults", () => {
+    expect(loadConfig(["change.diff"], KEY)).toMatchObject({
+      ok: true,
+      diffPath: "change.diff",
+      title: "",
+      bodyPath: undefined,
+      reportPath: undefined,
+      markdownPath: undefined,
+      reviewedSha: undefined,
+    });
+  });
+
+  it.each([
+    ["--title", "Fix: refund on failure", { title: "Fix: refund on failure" }],
+    ["--body-file", "/tmp/pr-body.md", { bodyPath: "/tmp/pr-body.md" }],
+    ["--report", "/tmp/ai-cr/report.json", { reportPath: "/tmp/ai-cr/report.json" }],
+    ["--markdown", "/tmp/ai-cr/comment.md", { markdownPath: "/tmp/ai-cr/comment.md" }],
+    ["--reviewed-sha", "0123abc", { reviewedSha: "0123abc" }],
+  ])("parses %s", (flag, value, expected) => {
+    expect(loadConfig(["change.diff", flag, value], KEY)).toMatchObject({
+      ok: true,
+      diffPath: "change.diff",
+      ...expected,
+    });
+  });
+
+  it("accepts flags before the diff path", () => {
+    expect(loadConfig(["--title", "T", "change.diff"], KEY)).toMatchObject({
+      ok: true,
+      diffPath: "change.diff",
+      title: "T",
+    });
+  });
+
+  it.each([
+    ["an unknown flag", ["change.diff", "--verbose"], /verbose/],
+    ["a flag without its value", ["change.diff", "--title"], /title/],
+    ["a second positional", ["a.diff", "b.diff"], /one diff file/],
+    ["flags but no diff path", ["--title", "T"], /diff file argument/],
+  ])("rejects %s", (_label, argv, message) => {
+    const config = loadConfig(argv, KEY);
+    expect(config.ok).toBe(false);
+    if (!config.ok) expect(config.message).toMatch(message);
+  });
+
+  it("keeps the markdown path on a config error, so an error comment can still be written", () => {
+    expect(loadConfig(["change.diff", "--markdown", "comment.md"], {})).toMatchObject({
+      ok: false,
+      markdownPath: "comment.md",
+    });
+  });
+
   // Oracle: plan.md Phase 1 §4 — turns default 5, budget optional, invalid values are config errors.
   it("defaults to 5 turns and no budget cap", () => {
     expect(loadConfig(["change.diff"], KEY)).toMatchObject({ ok: true, maxTurns: 5, maxBudgetUsd: undefined });
