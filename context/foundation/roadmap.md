@@ -3,7 +3,7 @@ project: "10xMedia"
 version: 1
 status: draft
 created: 2026-06-11
-updated: 2026-09-11
+updated: 2026-09-14
 prd_version: 1
 main_goal: speed
 top_blocker: external
@@ -44,6 +44,7 @@ Watching YouTube videos is time-consuming — when regularly following informati
 | S-11 | concurrent-generation | start generating a second video while an earlier generation is still in progress | S-01          | — (throughput nice-to-have)   | proposed — deferred past MVP |
 | S-12 | share-summary-link | share a summary via a time-limited link; free for whoever opens it, and a saved copy appears in their own list marked "added via link" | S-01, S-02    | — (nice-to-have; conflicts with PRD Non-Goal "sharing summaries between users" — see Risk) | proposed — nice-to-have, deferred past MVP |
 | S-13 | error-monitoring | (observability) an operator finds out that something broke — or that a budget is about to run out — without going looking for it | S-06, S-09 | — (roadmap-originated; discharges S-09 decision D5b) | done |
+| S-14 | summary-watch-verdict | mark a saved summary "worth watching" / "not worth watching", or clear the mark | S-02 | Vision recap (the watch/skip decision); closes the Update half of CRUD on summaries | proposed |
 
 > **The test rollout is tracked elsewhere — this table is product slices only.**
 > Testing work has its own register in `context/foundation/test-plan.md` §3: five phases
@@ -143,7 +144,7 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
 - **Parallel with:** S-02
 - **Blockers:** —
 - **Unknowns:** —
-- **Risk:** Lowest priority (FR-007 = nice-to-have). With the "speed" goal it's the first candidate to defer if the 2026-07-31 deadline presses; kept as a small slice (not in Parked) because it's cheap and closes the CRUD on summaries.
+- **Risk:** Lowest priority (FR-007 = nice-to-have). With the "speed" goal it's the first candidate to defer if the 2026-07-31 deadline presses; kept as a small slice (not in Parked) because it's cheap and adds the Delete half of CRUD on summaries. **Corrected 2026-09-14:** this line originally said delete "closes the CRUD on summaries", which was never true — `summaries` grants `authenticated` only `select, delete` (`20260731130000_summaries_single_writer.sql:31`), so there is no user-initiated Update. That gap is S-14's job.
 - **Status:** done
 
 ### S-04: User deletes their account (GDPR)
@@ -393,6 +394,40 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
 - **Not in scope:** uptime/synthetic monitoring; performance tracing or real-user monitoring; replacing or duplicating the per-summary cost and latency ledger (S-07 owns that, and it is a record, not an alert); any user-facing status or incident surface; alerting on product metrics (e.g. the PRD's 75% "good enough" criterion — that is the roadmap-wide open question, and a different kind of measurement).
 - **Status:** done
 
+### S-14: User marks a summary as worth / not worth watching (MAR-25)
+
+- **Outcome:** on each saved summary the user records their watch/skip decision with a two-option toggle — "worth watching" or "not worth watching". The options are mutually exclusive, clicking the active option clears it, and a new summary starts unmarked. The mark is saved, so it survives a reload and shows up wherever the summary is listed.
+- **Change ID:** summary-watch-verdict
+- **Linear:** MAR-25
+- **PRD refs:** — (no direct PRD ref; roadmap-originated, raised by the user 2026-09-14). It records the decision the product exists to serve (§Vision recap: *"on the basis of which the user decides whether to watch or skip it"*). **Second motive, stated openly:** this is the first user-initiated **Update** on a persisted summary. S-03's Risk note says delete "closes the CRUD on summaries", but it doesn't — `20260731130000_summaries_single_writer.sql:31` grants `authenticated` only `select, delete`, so the app has Create/Read/Delete and no Update. The 10xBuilder MVP check (2026-09-14) flagged exactly this gap.
+- **Prerequisites:** S-02 (the list and card this toggle lives on)
+- **Parallel with:** S-10, S-11, S-12 — none of them touch the summary card's persisted state or the `summaries` grants
+- **Blockers:** —
+
+**Decisions already made (user, 2026-09-14) — settled inputs to planning:**
+
+1. **Three states, not two.** `null` (unmarked, the starting state) · `true` (worth watching) · `false` (not worth watching). A plain checkbox has two states and can't get back to "unmarked", so it's rejected.
+2. **Mutually exclusive and clearable.** Choosing one option deselects the other, and clicking the active option returns the summary to `null`. That's the shape of a single-select toggle group with deselection allowed (shadcn `ToggleGroup type="single"`), not two independent checkboxes.
+
+- **Scope notes:**
+  - **Schema:** one additive nullable column, e.g. `summaries.worth_watching boolean` (default `null`, no backfill), in one idempotent migration.
+  - **Privilege — column-scoped, not table-wide.** `grant update (worth_watching) on public.summaries to authenticated;` — **not** `grant update on public.summaries`. The single-writer migration exists so the service-role `persist_summary` RPC is the only writer of `content`, `reservation_id` and the cost/telemetry columns. A table-wide grant would let a client rewrite a paid summary's content or detach it from its reservation. Confirm the owner-scoped `for update … using (auth.uid() = user_id) with check (auth.uid() = user_id)` policy from `20260613145120_videos_and_summaries.sql:59` is still in place, and re-create it if a later migration dropped it.
+  - **Endpoint:** `PATCH /api/summaries/[id]` next to the existing `DELETE` in `src/pages/api/summaries/[id].ts`, following its shape: `401` unauthenticated, then zod on the id (`z.uuid()`) and body (`worth_watching: z.boolean().nullable()`), then the anon SSR client (never `createAdminClient`, because RLS is the enforcement point), then `404` for zero rows and a masked `500`. CSRF is covered by Astro's `checkOrigin`, as for `DELETE`.
+  - **Service:** `src/lib/services/summary-update.ts` with an injected client, mirroring `summary-delete.ts`. No `user_id` filter, for the same reason.
+  - **Read path:** `listSummaries` (`src/lib/services/summary-list.ts`) must select the new column, or the mark vanishes on reload. That would be a transient UI edit, which is exactly what doesn't count as Update.
+  - **UI:** the toggle on the summary card, with an optimistic update and rollback on failure. Copy goes through `src/lib/copy/pl.ts`.
+  - **Not touched:** the paid path, credits, the Supadata budget and `persist_summary`. Setting a mark is free and never a generation.
+- **Tests (per `test-plan.md` §6.1–§6.3):**
+  - A hermetic unit test for the service (`stubReturning` / `stubFailing`): one row updated → `true`, zero rows → `false`, an error propagates.
+  - **Risk #4:** a case in `src/test/cross-account-policy.int.test.ts` — account B updating account A's summary by id changes nothing, and A's value is unchanged when read back through A's own session.
+  - A column-privilege probe: an authenticated client trying to update `content` (or `reservation_id`) on its **own** row is refused. This is the regression a table-wide grant would introduce.
+  - Update the grant roster in `src/test/authorization-invariants.int.test.ts`, which will otherwise fail on the new `update` privilege — by design.
+- **Unknowns:**
+  - Should the list's client-side filter gain a worth / not worth / unmarked facet? — Owner: user. Block: no (can ship without it).
+  - Does the mark feed Open Roadmap Question 1 (the 75% "good enough" criterion)? — Owner: user. Block: no. **It should not be read as a quality signal by default:** "not worth watching" judges the *video*, and a summary that correctly talks the user out of a bad video is a *good* summary. At most a weak proxy; a real quality measure stays T-5's job.
+- **Risk:** Low implementation risk — one column, one route, one card control, and the route and service have a direct precedent in S-03. The one real care point is the **privilege shape**: the easy migration (`grant update on public.summaries`) quietly undoes the single-writer guarantee on paid content, and nothing in the UI would show it. That's why the column-scoped grant and its probe test belong in the slice, not in a follow-up. Priority is higher than its size suggests, because it clears the last unmet 10xBuilder technical criterion.
+- **Status:** proposed
+
 ## Backlog Handoff
 
 | Roadmap ID | Change ID                 | Suggested issue title                          | Ready for `/10x-plan` | Notes                                       |
@@ -412,6 +447,7 @@ Foundations below assume these layers exist and do NOT re-scaffold them.
 | S-11       | concurrent-generation      | Allow a second generation to start while one is already in progress | no — deferred past MVP | **Deferred past MVP (user decision 2026-08-14), nice-to-have.** Raised during `app-design-system` Phase 10 QA, not a defect. Feasibility assessed the same day (subagent survey): sized **Medium**. Server-side `generation_locks`/lease is a deliberate guardrail (without it, concurrent requests would each pay for a Supadata transcript fetch before the atomic credit debit rejects the excess ones) — not a free toggle. The credit ledger already supports multiple open per-user reservations (keyed `user_id, request_id`), so most of the real work is client-side: `useGenerateSummary.ts`'s single-attempt state model needs to become a keyed collection with the same staleness/idempotency guarantees, plus a list of pending cards instead of one slot. See the S-11 Slice entry for the full risk breakdown. |
 | S-12       | share-summary-link        | Share a summary via a time-limited link, free for the recipient | no — deferred past MVP | **Deferred past MVP (user decision 2026-08-16), nice-to-have.** Raised by the user 2026-08-16: a shareable, time-limited link lets anyone view a summary for free, and opening it saves a copy into the viewer's own list, sorted by an added-date so it doesn't disturb their own chronological order (marked "added via link"). **Flagged, not silently applied: this is in direct tension with `prd.md:98`'s Non-Goal "Sharing summaries between users — data is private; no share mechanism"**, also echoed in this roadmap's `## Parked`. Asked explicitly whether to amend the PRD or record the conflict — user chose to leave the PRD unchanged and track this as a deliberate, narrower exception (bounded-time, one-way, opt-in copy — not persistent multi-user access). See the S-12 Slice entry's Risk for the full framing and its Unknowns for what planning still needs to settle (sign-in requirement to consume, one-time vs. repeatable link use, revocation semantics). |
 | S-13       | error-monitoring          | Route the app's existing warn/error events to an error-monitoring receiver (Sentry) | done | Archived 2026-09-11 → `context/archive/2026-09-09-error-monitoring/`. |
+| S-14       | summary-watch-verdict     | Mark a summary as worth / not worth watching (clearable toggle) | yes | **Added 2026-09-14 (user).** Tri-state `worth_watching` (`null` → `true`/`false`, clicking the active option clears it). First user-initiated Update on a persisted summary — closes the CRUD gap flagged by the 10xBuilder MVP check. Care point: **column-scoped** `grant update (worth_watching)`, never table-wide, or the single-writer guarantee on paid `content` is lost; a probe test pins it. See §S-14. |
 
 ## Open Roadmap Questions
 
