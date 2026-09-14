@@ -422,10 +422,10 @@ Write down the scoped exception to the "no paid keys in CI" and "no LLM judge in
 
 #### Automated
 
-- [x] 3.1 Workflow and action lint clean with actionlint
-- [x] 3.2 No `${{ github.event.* }}` / `${{ inputs.* }}` inside any `run:` block
-- [x] 3.3 `ANTHROPIC_API_KEY` referenced exactly once across `.github/`
-- [x] 3.4 Package tests still pass
+- [x] 3.1 Workflow and action lint clean with actionlint — e01d4f2
+- [x] 3.2 No `${{ github.event.* }}` / `${{ inputs.* }}` inside any `run:` block — e01d4f2
+- [x] 3.3 `ANTHROPIC_API_KEY` referenced exactly once across `.github/` — e01d4f2
+- [x] 3.4 Package tests still pass — e01d4f2
 
 #### Manual
 
