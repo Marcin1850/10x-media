@@ -1,69 +1,55 @@
 import { describe, expect, it } from "vitest";
-import { z } from "zod";
 
-import { ReviewOutput, reviewOutputJsonSchema } from "./schema.js";
+import { CRITERIA, ReviewOutput, reviewOutputJsonSchema } from "./schema.js";
+import { finding, reviewOutput, scoresOf } from "./test-fixtures.js";
 
-const finding = {
-  file: "src/range.ts",
-  line: 12,
-  severity: "major",
-  title: "Off-by-one upper bound",
-  explanation: "The loop includes the end index.",
-  failureScenario: "range(0, 3) returns [0, 1, 2, 3] instead of [0, 1, 2]",
-};
-
-const withSeverity = (severity: string) => ({ ...finding, severity });
-
+// Oracle: plan.md Phase 1 §1 — five required criteria, integer scores 1..10, criterion-tagged findings, no verdict.
 describe("ReviewOutput", () => {
   it.each([
-    ["an approve with no findings", { verdict: "approve", summary: "Looks correct.", findings: [] }],
-    [
-      "a finding without a line number",
-      { verdict: "request_changes", summary: "One issue.", findings: [{ ...finding, line: undefined }] },
-    ],
-    [
-      "a comment with only minor and nit findings",
-      { verdict: "comment", summary: "Small things.", findings: [withSeverity("minor"), withSeverity("nit")] },
-    ],
-    [
-      "request_changes when one critical finding sits among nits",
-      { verdict: "request_changes", summary: "Blocker.", findings: [withSeverity("nit"), withSeverity("critical")] },
-    ],
+    ["a review with no findings", reviewOutput({ findings: [] })],
+    ["a finding without a line number", reviewOutput({ findings: [{ ...finding, line: undefined }] })],
+    ["the score bounds themselves (1 and 10)", reviewOutput({ scores: scoresOf([1, 10, 1, 10, 5]) })],
   ])("accepts %s", (_label, report) => {
     expect(ReviewOutput.safeParse(report).success).toBe(true);
   });
 
   it.each([
-    ["an unknown severity", { ...finding, severity: "blocker" }],
-    ["a finding missing failureScenario", { ...finding, failureScenario: undefined }],
-    ["a non-integer line", { ...finding, line: 12.5 }],
-  ])("rejects %s", (_label, badFinding) => {
-    const report = { verdict: "request_changes", summary: "Issue.", findings: [badFinding] };
+    ["a score of 0", { ...reviewOutput(), scores: scoresOf([0, 7, 7, 7, 7]) }],
+    ["a score of 11", { ...reviewOutput(), scores: scoresOf([7, 7, 7, 7, 11]) }],
+    ["a non-integer score", { ...reviewOutput(), scores: scoresOf([7, 5.5, 7, 7, 7]) }],
+    [
+      "a missing criterion key",
+      { ...reviewOutput(), scores: (({ security: _dropped, ...rest }) => rest)(scoresOf([7, 7, 7, 7, 7])) },
+    ],
+    ["a finding without criterion", { ...reviewOutput(), findings: [{ ...finding, criterion: undefined }] }],
+    ["a finding with an unknown criterion", { ...reviewOutput(), findings: [{ ...finding, criterion: "style" }] }],
+    ["an unknown severity", { ...reviewOutput(), findings: [{ ...finding, severity: "blocker" }] }],
+    [
+      "a finding missing failureScenario",
+      { ...reviewOutput(), findings: [{ ...finding, failureScenario: undefined }] },
+    ],
+    ["a non-integer line", { ...reviewOutput(), findings: [{ ...finding, line: 12.5 }] }],
+  ])("rejects %s", (_label, report) => {
     expect(ReviewOutput.safeParse(report).success).toBe(false);
-  });
-
-  // Oracle: SYSTEM_PROMPT — "request_changes" if any finding is critical or major, "comment" if only minor
-  // or nit findings, "approve" if none.
-  it.each([
-    ["approve with a critical finding", "approve", [withSeverity("critical")]],
-    ["comment with a major finding", "comment", [withSeverity("major")]],
-    ["request_changes with only a minor finding", "request_changes", [withSeverity("minor")]],
-    ["comment with no findings", "comment", []],
-    ["request_changes with no findings", "request_changes", []],
-  ])("rejects a contradictory verdict: %s", (_label, verdict, findings) => {
-    const parsed = ReviewOutput.safeParse({ verdict, summary: "…", findings });
-    expect(parsed.success).toBe(false);
-    expect(parsed.error?.issues.map((issue) => issue.path)).toEqual([["verdict"]]);
   });
 });
 
 describe("reviewOutputJsonSchema", () => {
-  it("is an object schema that requires verdict and findings", () => {
-    expect(reviewOutputJsonSchema.type).toBe("object");
-    expect(reviewOutputJsonSchema.required).toEqual(expect.arrayContaining(["verdict", "findings"]));
+  type ObjectSchema = { required?: string[]; properties: Record<string, unknown> };
+  const root = reviewOutputJsonSchema as unknown as ObjectSchema;
+  const scores = root.properties.scores as ObjectSchema;
+
+  it("requires summary, scores and findings, and has no verdict", () => {
+    expect(root.required).toEqual(expect.arrayContaining(["summary", "scores", "findings"]));
+    expect(root.properties).not.toHaveProperty("verdict");
   });
 
-  it("is unchanged by the verdict refinement (the SDK receives plain Draft-07)", () => {
-    expect(reviewOutputJsonSchema).toEqual(z.toJSONSchema(ReviewOutput, { target: "draft-7" }));
+  it("requires all five criteria", () => {
+    expect([...(scores.required ?? [])].sort()).toEqual([...CRITERIA].sort());
+  });
+
+  it.each(CRITERIA)("carries integer bounds 1..10 for %s, so the SDK retry enforces them", (criterion) => {
+    const score = (scores.properties[criterion] as ObjectSchema).properties.score;
+    expect(score).toMatchObject({ type: "integer", minimum: 1, maximum: 10 });
   });
 });

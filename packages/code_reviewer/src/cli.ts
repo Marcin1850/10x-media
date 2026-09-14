@@ -2,6 +2,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 
 import { loadConfig } from "./config.js";
+import { decideResult } from "./decision.js";
 import { checkDiffFile, checkDiffText } from "./diff-input.js";
 import { verifyLockdown } from "./lockdown.js";
 import { runReview } from "./review.js";
@@ -38,7 +39,14 @@ async function main(): Promise<number> {
   }
 
   console.log(`Reviewing ${config.diffPath}${config.model ? ` with model override ${config.model}` : ""}…`);
-  const run = await runReview({ diff, model: config.model });
+  const run = await runReview({
+    diff,
+    title: "",
+    body: "",
+    model: config.model,
+    maxTurns: config.maxTurns,
+    maxBudgetUsd: config.maxBudgetUsd,
+  });
 
   const lockdown = verifyLockdown(run);
   if (lockdown.ok) {
@@ -76,6 +84,7 @@ async function main(): Promise<number> {
 
   const report = {
     ...run.output,
+    ...decideResult(run.output),
     meta: {
       model: lockdown.init.model,
       costUsd: run.meta.costUsd,

@@ -1,7 +1,7 @@
 ---
 change_id: ci-cd-code-review
 title: First CI/CD workflow for automated PR code reviews using packages/code_reviewer
-status: planned
+status: implementing
 created: 2026-09-14
 updated: 2026-09-14
 archived_at: null

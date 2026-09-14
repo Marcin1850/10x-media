@@ -1,8 +1,18 @@
 export type Config =
-  | { ok: true; diffPath: string; model: string | undefined; outDir: string }
+  | {
+      ok: true;
+      diffPath: string;
+      model: string | undefined;
+      outDir: string;
+      maxTurns: number;
+      maxBudgetUsd: number | undefined;
+    }
   | { ok: false; message: string };
 
 const OUT_DIR = "output";
+
+/** A tool-less review is one model turn plus structured-output retries; 3 was fully used on a 15-line fixture. */
+export const DEFAULT_MAX_TURNS = 5;
 
 /**
  * Validates the CLI input before anything costs money. Pure: reads nothing from disk or `process`;
@@ -23,6 +33,19 @@ export function loadConfig(argv: string[], env: Record<string, string | undefine
     };
   }
 
+  // An invalid limit is a config error, never silently defaulted: a typo must not lift a spend cap.
+  const turnsRaw = env.REVIEW_MAX_TURNS?.trim();
+  const maxTurns = turnsRaw ? Number(turnsRaw) : DEFAULT_MAX_TURNS;
+  if (!Number.isInteger(maxTurns) || maxTurns < 1) {
+    return { ok: false, message: `REVIEW_MAX_TURNS must be a positive integer, got "${turnsRaw}".` };
+  }
+
+  const budgetRaw = env.REVIEW_MAX_BUDGET_USD?.trim();
+  const maxBudgetUsd = budgetRaw ? Number(budgetRaw) : undefined;
+  if (maxBudgetUsd !== undefined && !(Number.isFinite(maxBudgetUsd) && maxBudgetUsd > 0)) {
+    return { ok: false, message: `REVIEW_MAX_BUDGET_USD must be a positive number, got "${budgetRaw}".` };
+  }
+
   const model = env.REVIEW_MODEL?.trim() || undefined;
-  return { ok: true, diffPath, model, outDir: OUT_DIR };
+  return { ok: true, diffPath, model, outDir: OUT_DIR, maxTurns, maxBudgetUsd };
 }

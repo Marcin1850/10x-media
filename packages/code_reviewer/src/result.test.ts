@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { interpretResult, type ResultInput } from "./result.js";
+import { reviewOutput } from "./test-fixtures.js";
 
 // Hand-built from the SDK's documented result message shape (docs/messages-and-errors.md), not from result.ts.
 const common = {
@@ -11,20 +12,7 @@ const common = {
   num_turns: 1,
 } as const;
 
-const validOutput = {
-  verdict: "request_changes",
-  summary: "One bug.",
-  findings: [
-    {
-      file: "src/range.ts",
-      line: 3,
-      severity: "major",
-      title: "Off-by-one",
-      explanation: "Uses <= instead of <.",
-      failureScenario: "range(0, 3) yields 4 items",
-    },
-  ],
-};
+const validOutput = reviewOutput();
 
 const expectedMeta = { costUsd: 0.0123, durationMs: 4200, sessionId: "session-abc", numTurns: 1 };
 
@@ -42,7 +30,10 @@ describe("interpretResult", () => {
   });
 
   it.each([
-    ["schema-violating structured_output", success({ structured_output: { verdict: "lgtm", findings: [] } })],
+    [
+      "schema-violating structured_output",
+      success({ structured_output: { ...validOutput, scores: { correctness: { score: 11, rationale: "" } } } }),
+    ],
     ["no structured_output", success({})],
   ])("returns invalid-output for a success with %s", (_label, message) => {
     const outcome = interpretResult(message);
@@ -51,7 +42,7 @@ describe("interpretResult", () => {
     expect(outcome.meta).toEqual(expectedMeta);
   });
 
-  it.each(["error_max_turns", "error_max_structured_output_retries"] as const)(
+  it.each(["error_max_turns", "error_max_budget_usd", "error_max_structured_output_retries"] as const)(
     "returns agent-error carrying subtype and cost for %s",
     (subtype) => {
       const outcome = interpretResult({

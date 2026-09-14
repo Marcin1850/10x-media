@@ -394,9 +394,9 @@ Write down the scoped exception to the "no paid keys in CI" and "no LLM judge in
 
 #### Automated
 
-- [ ] 1.1 Package unit tests pass: `cd packages/code_reviewer && npm test`
-- [ ] 1.2 Package typecheck passes: `cd packages/code_reviewer && npm run typecheck`
-- [ ] 1.3 Root gates unaffected: `npm run lint` and `npm run typecheck` (root)
+- [x] 1.1 Package unit tests pass: `cd packages/code_reviewer && npm test`
+- [x] 1.2 Package typecheck passes: `cd packages/code_reviewer && npm run typecheck`
+- [x] 1.3 Root gates unaffected: `npm run lint` and `npm run typecheck` (root)
 
 #### Manual
 

@@ -5,9 +5,6 @@ import { buildReviewPrompt, SYSTEM_PROMPT } from "./prompt.js";
 import { interpretResult, type ReviewOutcome } from "./result.js";
 import { reviewOutputJsonSchema } from "./schema.js";
 
-/** Small on purpose: a tool-less review is one model turn plus room for structured-output retries. */
-const MAX_TURNS = 3;
-
 /** `init` stays partial here: whether it proves the lockdown is decided by `verifyLockdown`, not by the stream. */
 export type ReviewRun =
   | (ReviewOutcome & Partial<SessionInit>)
@@ -21,13 +18,28 @@ export type ReviewRun =
  * it arrives, the throw is caught, and the outcome is decided from what was captured — never from the
  * loop merely ending.
  */
-export async function runReview({ diff, model }: { diff: string; model?: string }): Promise<ReviewRun> {
+export async function runReview({
+  diff,
+  title,
+  body,
+  model,
+  maxTurns,
+  maxBudgetUsd,
+}: {
+  diff: string;
+  title: string;
+  body: string;
+  model?: string;
+  maxTurns: number;
+  /** Unset → no spend cap. Hitting it ends the run as `error_max_budget_usd`, an `agent-error`. */
+  maxBudgetUsd?: number;
+}): Promise<ReviewRun> {
   let init: SessionInit | undefined;
   let outcome: ReviewOutcome | undefined;
 
   try {
     for await (const message of query({
-      prompt: buildReviewPrompt(diff),
+      prompt: buildReviewPrompt({ diff, title, body }),
       options: {
         systemPrompt: SYSTEM_PROMPT,
         // `tools: []` removes the built-in tools; `allowedTools` would only auto-approve and remove nothing.
@@ -36,7 +48,8 @@ export async function runReview({ diff, model }: { diff: string; model?: string 
         // No user/project/local settings: no ~/.claude rules, no repo CLAUDE.md, hooks, or skills.
         settingSources: [],
         outputFormat: { type: "json_schema", schema: reviewOutputJsonSchema },
-        maxTurns: MAX_TURNS,
+        maxTurns,
+        ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
         ...(model ? { model } : {}),
         // Deliberately no `env`: it replaces the subprocess environment instead of merging into it.
       },
