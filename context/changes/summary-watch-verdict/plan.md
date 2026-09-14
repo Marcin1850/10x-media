@@ -298,11 +298,11 @@ Additive and nullable, so existing rows read as unmarked and there is no backfil
 
 #### Automated
 
-- [x] 3.1 Typecheck passes: `npm run typecheck`
-- [x] 3.2 Astro typecheck passes: `npm run typecheck:astro`
-- [x] 3.3 Lint passes: `npm run lint`
-- [x] 3.4 Unit suite passes: `npm test`
-- [x] 3.5 Build succeeds: `npm run build`
+- [x] 3.1 Typecheck passes: `npm run typecheck` — 4859840
+- [x] 3.2 Astro typecheck passes: `npm run typecheck:astro` — 4859840
+- [x] 3.3 Lint passes: `npm run lint` — 4859840
+- [x] 3.4 Unit suite passes: `npm test` — 4859840
+- [x] 3.5 Build succeeds: `npm run build` — 4859840
 
 #### Manual
 
