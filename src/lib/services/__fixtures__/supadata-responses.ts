@@ -146,7 +146,7 @@ export function supadataMetadataOk(
 
 /**
  * `GET /v1/me`, well-formed — `{ organizationId, plan, maxCredits, usedCredits }`
- * (`supadata-account-limits.md`, read via `readVendorBudget`, `supadata-budget.ts:351-370`). Carries
+ * (`supadata-account-limits.md`, read via `readVendorBudget` in `supadata-budget.ts`). Carries
  * no `x-billable-requests` header, matching the vendor's own documented free-endpoint status.
  */
 export function supadataMeOk(
@@ -157,7 +157,7 @@ export function supadataMeOk(
 }
 
 /**
- * `GET /v1/me` in every shape `readVendorBudget` must fail open on (`supadata-budget.ts:327-370`),
+ * `GET /v1/me` in every shape `readVendorBudget` must fail open on (`readVendorBudget` in `supadata-budget.ts`),
  * never a vendor measurement — these are the code's own defensive contract, not an observed response:
  *
  * - `"negative"` — `usedCredits: -1`. `isCreditFigure` rejects it; a negative figure would invent

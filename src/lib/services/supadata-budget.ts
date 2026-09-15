@@ -334,8 +334,32 @@ function isCreditFigure(value: unknown): value is number {
 }
 
 /**
- * `GET /v1/me`, bounded and narrowed. Returns null on ANY failure — transport rejection, our own
- * deadline, a non-2xx status, a non-JSON body or a shape we do not recognise.
+ * What `readVendorBudget` resolved to. A failure carries WHICH failure it was, not just that there was
+ * one: this string becomes the `untracked` event's `reason`, and an operator looking at that event
+ * acts differently on each class — wait out a timeout or a 5xx, rotate the key on a 401, update the
+ * narrowing on a changed shape. A single "failed" string made all of them look identical.
+ *
+ * **Never the response body or a figure's value.** The reason names the status, the error class or the
+ * offending field, and stops there — the body is vendor-controlled text of unbounded size.
+ */
+type VendorBudgetReading = { ok: true; maxCredits: number; usedCredits: number } | { ok: false; failure: string };
+
+/**
+ * Describes a rejected `fetch` or body read. `AbortSignal.timeout` rejects with a `TimeoutError`
+ * DOMException — on the request AND on a body read it outlives — so that one is named for what it is.
+ */
+function describeRejection(stage: "request" | "body read", cause: unknown): string {
+  if (cause instanceof Error && cause.name === "TimeoutError") {
+    return `GET /v1/me timed out after ${BUDGET_READ_TIMEOUT_MS} ms (${stage})`;
+  }
+  const detail = cause instanceof Error ? `${cause.name}: ${cause.message}` : "non-Error rejection";
+  return `GET /v1/me ${stage} failed: ${detail}`;
+}
+
+/**
+ * `GET /v1/me`, bounded and narrowed. Fails on ANY of: transport rejection, our own deadline, a
+ * non-2xx status, a non-JSON body or a shape we do not recognise — and says which (see
+ * `VendorBudgetReading`).
  *
  * The narrowing is not defensive tidiness: a vendor that changes the shape of `usedCredits`/`maxCredits`
  * must produce a REPORTED failure, not `NaN` arithmetic that silently computes a remaining balance
@@ -348,25 +372,42 @@ function isCreditFigure(value: unknown): value is number {
  * what the vendor reported, in a value whose entire purpose is to be authoritative. Rejecting them
  * routes through the same fail-open path as an unreachable `/v1/me`, which is reported, not swallowed.
  */
-async function readVendorBudget(apiKey: string): Promise<{ maxCredits: number; usedCredits: number } | null> {
+async function readVendorBudget(apiKey: string): Promise<VendorBudgetReading> {
+  let response: Response;
   try {
-    const response = await fetch(`${SUPADATA_BASE_URL}/me`, {
+    response = await fetch(`${SUPADATA_BASE_URL}/me`, {
       headers: { "x-api-key": apiKey, "Content-Type": "application/json" },
       signal: AbortSignal.timeout(BUDGET_READ_TIMEOUT_MS),
     });
-
-    if (!response.ok) return null;
-
-    const body = (await response.json()) as unknown;
-    if (typeof body !== "object" || body === null) return null;
-    const { maxCredits, usedCredits } = body as { maxCredits?: unknown; usedCredits?: unknown };
-    if (!isCreditFigure(maxCredits)) return null;
-    if (!isCreditFigure(usedCredits)) return null;
-
-    return { maxCredits, usedCredits };
-  } catch {
-    return null;
+  } catch (cause) {
+    return { ok: false, failure: describeRejection("request", cause) };
   }
+
+  if (!response.ok) return { ok: false, failure: `GET /v1/me returned HTTP ${response.status}` };
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch (cause) {
+    // A body that is not JSON surfaces as a SyntaxError; anything else here is the body read itself.
+    if (cause instanceof SyntaxError) {
+      return { ok: false, failure: `GET /v1/me returned a non-JSON body (HTTP ${response.status})` };
+    }
+    return { ok: false, failure: describeRejection("body read", cause) };
+  }
+
+  if (typeof body !== "object" || body === null) {
+    return { ok: false, failure: "GET /v1/me returned an unrecognised body: not a JSON object" };
+  }
+  const { maxCredits, usedCredits } = body as { maxCredits?: unknown; usedCredits?: unknown };
+  if (!isCreditFigure(maxCredits)) {
+    return { ok: false, failure: "GET /v1/me returned an unrecognised body: maxCredits is not a nonnegative integer" };
+  }
+  if (!isCreditFigure(usedCredits)) {
+    return { ok: false, failure: "GET /v1/me returned an unrecognised body: usedCredits is not a nonnegative integer" };
+  }
+
+  return { ok: true, maxCredits, usedCredits };
 }
 
 /**
@@ -465,10 +506,10 @@ export async function reserveBudget(
   // breaker degradation into a `limit-exceeded` on the request the user is waiting for.
   let failure: string | null = null;
 
-  if (reading === null) {
+  if (!reading.ok) {
     // The claim is deliberately left to EXPIRE rather than cleared: clearing it here would send the
     // next request straight back into a refresh that is currently failing, once per request.
-    failure = "GET /v1/me failed, timed out, or returned an unusable body";
+    failure = reading.failure;
   } else {
     // No timestamp travels with the reading. The boundary is the claim's own `refresh_claimed_at`,
     // taken from PostgreSQL's clock just before this round trip started — see `saveVendorBudget`.
