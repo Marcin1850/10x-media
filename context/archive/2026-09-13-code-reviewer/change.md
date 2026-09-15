@@ -1,10 +1,10 @@
 ---
 change_id: code-reviewer
 title: First version of a Claude Agent SDK code-review agent as a separate package
-status: impl_reviewed
+status: archived
 created: 2026-09-13
-updated: 2026-09-14
-archived_at: null
+updated: 2026-09-15
+archived_at: 2026-09-15T21:17:43Z
 ---
 
 ## Notes
