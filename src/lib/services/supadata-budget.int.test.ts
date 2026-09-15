@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BUDGET_STOP_RESERVE,
   METADATA_BUDGET_CREDITS,
   reserveBudget,
   TRANSCRIPT_BUDGET_CREDITS,
 } from "@/lib/services/supadata-budget";
+import { expectPromotedEvent, recordReportedEvents } from "@/lib/services/__fixtures__/reporting-recorder";
 import { stubFailing, stubRejecting, stubReturning } from "@/lib/services/__fixtures__/supabase-stub";
 import { supadataMeOk, supadataMeUnusable, supadataTranscriptOk } from "@/lib/services/__fixtures__/supadata-responses";
 import {
@@ -120,38 +121,74 @@ describe("reserveBudget — every fail-open path proceeds with NO reservation (r
     expect(result.outcome).toBe("untracked");
   });
 
-  const meFailures: [string, () => Response][] = [
-    ["a non-2xx status", () => supadataMeUnusable("not-ok")],
-    ["a non-JSON body", () => supadataMeUnusable("non-json")],
-    ["a negative usedCredits", () => supadataMeUnusable("negative")],
-    ["a fractional maxCredits", () => supadataMeUnusable("fractional")],
-    ["a missing usedCredits", () => supadataMeUnusable("missing")],
-  ];
-
-  it.each(meFailures)("fails open when the claimed refresh's /v1/me returns %s", async (_label, meResponse) => {
-    const stub = stubReturning([reserveRow({ outcome: "refresh_required", refresh_claim_id: "claim-1" })]);
-    stubSupadataFetch({ me: meResponse });
-
-    const result = await reserveBudget(stub.client, API_KEY, TRANSCRIPT_BUDGET_CREDITS);
-
-    expect(result.outcome).toBe("untracked");
-  });
-
-  it("fails open when /v1/me itself fails in transport (a timeout or network error)", async () => {
-    const stub = stubReturning([reserveRow({ outcome: "refresh_required", refresh_claim_id: "claim-1" })]);
-    stubSupadataFetch({
-      me: () => {
+  /**
+   * Every way `/v1/me` can fail, each with the REASON an operator reads off the `untracked` event.
+   * Oracle: `VendorBudgetReading`'s contract — the reason names the failure class (timeout, transport,
+   * HTTP status, non-JSON, which field is malformed), because each is acted on differently. The
+   * patterns are the class, not the exact wording; each row catches a different collapse back into one
+   * generic string.
+   */
+  const meFailures: [label: string, me: () => Response, reason: RegExp][] = [
+    ["a non-2xx status", () => supadataMeUnusable("not-ok"), /HTTP 503/],
+    ["a non-JSON body", () => supadataMeUnusable("non-json"), /non-JSON body/],
+    ["a negative usedCredits", () => supadataMeUnusable("negative"), /usedCredits is not a nonnegative integer/],
+    ["a fractional maxCredits", () => supadataMeUnusable("fractional"), /maxCredits is not a nonnegative integer/],
+    ["a missing usedCredits", () => supadataMeUnusable("missing"), /usedCredits is not a nonnegative integer/],
+    [
+      "our own deadline (AbortSignal.timeout)",
+      () => {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      },
+      /timed out after \d+ ms/,
+    ],
+    [
+      "a transport error",
+      () => {
         throw new TypeError("fetch failed");
       },
+      /request failed: TypeError: fetch failed/,
+    ],
+  ];
+
+  it.each(meFailures)(
+    "fails open, naming the cause, when the claimed refresh's /v1/me hits %s",
+    async (_label, meResponse, reason) => {
+      const stub = stubReturning([reserveRow({ outcome: "refresh_required", refresh_claim_id: "claim-1" })]);
+      stubSupadataFetch({ me: meResponse });
+
+      const result = await reserveBudget(stub.client, API_KEY, TRANSCRIPT_BUDGET_CREDITS);
+
+      expect(result).toMatchObject({ outcome: "untracked", reason: expect.stringMatching(reason) as unknown });
+    },
+  );
+
+  describe("the reason reaches the operator's event, not just the return value", () => {
+    const events = recordReportedEvents();
+
+    beforeEach(() => {
+      vi.spyOn(console, "error").mockImplementation(() => undefined);
     });
 
-    const result = await reserveBudget(stub.client, API_KEY, TRANSCRIPT_BUDGET_CREDITS);
+    it("carries the HTTP status in the [supadata-budget] untracked payload", async () => {
+      const stub = stubReturning([reserveRow({ outcome: "refresh_required", refresh_claim_id: "claim-1" })]);
+      stubSupadataFetch({ me: () => supadataMeUnusable("not-ok") });
 
-    expect(result.outcome).toBe("untracked");
+      await reserveBudget(stub.client, API_KEY, TRANSCRIPT_BUDGET_CREDITS);
+
+      // Field set unchanged — this change alters a value, never the payload's shape.
+      expectPromotedEvent(events, {
+        key: "[supadata-budget]",
+        severity: "untracked",
+        fields: ["threshold", "maxCredits", "usedCredits", "outstanding", "readingAgeSeconds", "reason"],
+        withheld: [API_KEY, "internal-error"],
+      });
+      const payload = events[0].context.payload as { reason: string };
+      expect(payload.reason).toMatch(/HTTP 503/);
+    });
   });
 
   /**
-   * The reading came back fine; STORING it is what went wrong (`supadata-budget.ts:477-486`). Both
+   * The reading came back fine; STORING it is what went wrong (`reserveBudget`'s `saveVendorBudget` branch). Both
    * arms fail open with no second reserve — a refresh is spent once per call, never retried into a
    * loop. `claim-lost` is deliberately NOT a failure of the stored state (a successor already saved a
    * reading at least as fresh); it still ends the call, because this caller has burned its one refresh.
@@ -181,7 +218,7 @@ describe("reserveBudget — every fail-open path proceeds with NO reservation (r
   });
 
   /**
-   * The second reserve pass ran but did not terminate (`supadata-budget.ts:499-509`). Its `default`
+   * The second reserve pass ran but did not terminate (`reserveBudget`'s second-pass `switch`). Its `default`
    * arm is the guard against accidental recursion: re-entering the refresh from here would fetch
    * `/v1/me` again, once per pass, against a vendor that is already unhappy. Each row is a distinct
    * regression — remove the arm and one of them recurses, remove the fail-open and one of them refuses
